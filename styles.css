@@ -1,0 +1,1569 @@
+/* ==========================================================================
+   RECTIFICADORA RENACER (JOB 8:7) — SISTEMA INTEGRAL DE PRODUCCIÓN Y CONTROL
+   styles.css — Identidad Visual Industrial Premium (Azul Motor #182254 + Oro #F5DF00)
+   ========================================================================== */
+
+:root {
+  /* Paleta Oficial Rectificadora Renacer */
+  --renacer-navy:       #182254;
+  --renacer-navy-dark:  #0f1638;
+  --renacer-navy-light: #24347a;
+  --renacer-gold:       #f5df00;
+  --renacer-gold-warm:  #eab308;
+  --renacer-gold-soft:  rgba(245, 223, 0, 0.16);
+
+  /* Tema Claro (Por defecto en escritorio / recepción) */
+  --bg-main:            #f1f5f9;
+  --bg-elevated:        #ffffff;
+  --bg-card:            #ffffff;
+  --bg-subtle:          #f8fafc;
+  --text-main:          #0f172a;
+  --text-secondary:     #334155;
+  --text-muted:         #64748b;
+  --border-color:       #cbd5e1;
+  --border-subtle:      #e2e8f0;
+
+  /* Estados Semánticos */
+  --status-diag:        #6366f1;
+  --status-wait:        #d97706;
+  --status-exec:        #0284c7;
+  --status-qc:          #8b5cf6;
+  --status-done:        #16a34a;
+  --status-danger:      #dc2626;
+
+  /* Sombras y Radios */
+  --shadow-sm:          0 2px 6px rgba(15, 23, 42, 0.06);
+  --shadow-md:          0 8px 24px rgba(15, 23, 42, 0.10);
+  --shadow-lg:          0 16px 40px rgba(15, 23, 42, 0.18);
+  --radius-sm:          10px;
+  --radius-md:          16px;
+  --radius-lg:          22px;
+}
+
+[data-theme="dark"] {
+  --bg-main:            #0b1120;
+  --bg-elevated:        #131c31;
+  --bg-card:            #162038;
+  --bg-subtle:          #1e293b;
+  --text-main:          #f8fafc;
+  --text-secondary:     #e2e8f0;
+  --text-muted:         #94a3b8;
+  --border-color:       #2dd4bf22;
+  --border-subtle:      #263554;
+  --shadow-sm:          0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-md:          0 10px 28px rgba(0, 0, 0, 0.55);
+  --shadow-lg:          0 20px 48px rgba(0, 0, 0, 0.75);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.hidden {
+  display: none !important;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* ==========================================================================
+   PANTALLA DE LOGIN — RECTIFICADORA RENACER (JOB 8:7)
+   ========================================================================== */
+.unlock-screen {
+  position: relative;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 18px 40px;
+  background: radial-gradient(circle at 20% 15%, #253682 0%, #162052 45%, #0a0f29 100%);
+  color: #ffffff;
+  overflow-x: hidden;
+}
+
+.login-bg-decor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.login-bg-circle {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(50px);
+}
+
+.login-bg-circle--1 {
+  width: 420px;
+  height: 420px;
+  background: rgba(245, 223, 0, 0.14);
+  top: -120px;
+  right: -100px;
+}
+
+.login-bg-circle--2 {
+  width: 360px;
+  height: 360px;
+  background: rgba(56, 189, 248, 0.12);
+  bottom: -100px;
+  left: -100px;
+}
+
+.login-container {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 920px;
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 28px;
+  align-items: center;
+  background: rgba(15, 22, 56, 0.78);
+  border: 1px solid rgba(245, 223, 0, 0.28);
+  border-radius: 26px;
+  padding: 32px;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+}
+
+@media (max-width: 820px) {
+  .login-container {
+    grid-template-columns: 1fr;
+    padding: 22px 18px;
+  }
+}
+
+.login-brand-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.login-logo-wrapper {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.login-logo {
+  width: 148px;
+  height: 148px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 4px solid var(--renacer-gold);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 0 8px rgba(245, 223, 0, 0.15);
+  background: var(--renacer-navy);
+}
+
+.login-biblical-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--renacer-gold);
+  color: #0f1638;
+  font-weight: 900;
+  font-size: 11px;
+  letter-spacing: 1.8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  margin-top: -14px;
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.login-brand-sub {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2.5px;
+  color: var(--renacer-gold);
+  text-transform: uppercase;
+  margin-top: 12px;
+}
+
+.login-brand-name {
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+  line-height: 1.05;
+  color: #ffffff;
+  margin-top: 4px;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.login-brand-tag {
+  font-size: 13px;
+  color: #cbd5e1;
+  margin-top: 6px;
+  max-width: 320px;
+  line-height: 1.4;
+}
+
+/* Acceso rápido de perfiles para la demostración / taller */
+.quick-profiles-box {
+  margin-top: 18px;
+  width: 100%;
+  text-align: left;
+}
+
+.quick-profiles-title {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--renacer-gold);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-profiles-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@media (max-width: 480px) {
+  .quick-profiles-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.profile-quick-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.18s ease;
+}
+
+.profile-quick-card:hover {
+  background: rgba(245, 223, 0, 0.16);
+  border-color: var(--renacer-gold);
+  transform: translateY(-2px);
+}
+
+.profile-quick-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.profile-quick-info strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.profile-quick-info span {
+  display: block;
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.unlock-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 22px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.unlock-form label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #e2e8f0;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.unlock-form input,
+.unlock-form select {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(15, 23, 42, 0.85);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  outline: none;
+}
+
+.unlock-form input:focus,
+.unlock-form select:focus {
+  border-color: var(--renacer-gold);
+  box-shadow: 0 0 0 3px rgba(245, 223, 0, 0.25);
+}
+
+.login-submit-btn {
+  margin-top: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #f5df00 0%, #eab308 100%);
+  color: #0f1638;
+  font-weight: 900;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(245, 223, 0, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.login-submit-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(245, 223, 0, 0.5);
+}
+
+/* ==========================================================================
+   HEADER PRINCIPAL STICKY — RECTIFICADORA RENACER
+   ========================================================================== */
+.renacer-main-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  background: linear-gradient(90deg, #141d47 0%, #1d2963 60%, #141d47 100%);
+  border-bottom: 3px solid var(--renacer-gold);
+  color: #ffffff;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.renacer-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+
+.renacer-brand-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--renacer-gold);
+  object-fit: cover;
+  background: #0f1638;
+}
+
+.renacer-brand-title {
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.renacer-brand-title .job-pill {
+  font-size: 10px;
+  background: var(--renacer-gold);
+  color: #0f1638;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-weight: 900;
+}
+
+.renacer-brand-sub {
+  font-size: 11px;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+.renacer-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.header-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 800;
+  border: none;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.header-action-btn--gold {
+  background: var(--renacer-gold);
+  color: #0f1638;
+  box-shadow: 0 3px 12px rgba(245, 223, 0, 0.35);
+}
+
+.header-action-btn--gold:hover {
+  background: #fef08a;
+  transform: translateY(-1px);
+}
+
+.header-action-btn--enrique {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  border: 1px solid rgba(245, 223, 0, 0.5);
+}
+
+.header-action-btn--enrique:hover {
+  background: rgba(245, 223, 0, 0.22);
+}
+
+.control-btn-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+.control-btn-circle:hover {
+  background: rgba(245, 223, 0, 0.2);
+  border-color: var(--renacer-gold);
+}
+
+.bell-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 2px solid #141d47;
+}
+
+.user-role-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(245, 223, 0, 0.45);
+  color: #ffffff;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.user-role-pill .role-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
+}
+
+/* ==========================================================================
+   BARRA DE NAVEGACIÓN DE FASES Y MÓDULOS
+   ========================================================================== */
+.renacer-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.renacer-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.renacer-tab-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-main);
+}
+
+.renacer-tab-btn.active {
+  background: var(--renacer-navy);
+  color: #ffffff;
+  border-color: var(--renacer-gold);
+  box-shadow: 0 4px 12px rgba(24, 34, 84, 0.25);
+}
+
+[data-theme="dark"] .renacer-tab-btn.active {
+  background: linear-gradient(135deg, #24347a 0%, #182254 100%);
+  color: var(--renacer-gold);
+  border-color: var(--renacer-gold);
+}
+
+.tab-count-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.18);
+  color: inherit;
+}
+
+.renacer-tab-btn.active .tab-count-badge {
+  background: var(--renacer-gold);
+  color: #0f1638;
+}
+
+/* ==========================================================================
+   CONTENEDOR PRINCIPAL Y FLUJO VISUAL DE LA FASE 1
+   ========================================================================== */
+.main-workspace {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 20px 18px 96px;
+}
+
+/* Banner de Flujo de Estados de la Fase 1 */
+.phase-stepper-banner {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 980px) {
+  .phase-stepper-banner {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 540px) {
+  .phase-stepper-banner {
+    grid-template-columns: 1fr;
+  }
+}
+
+.phase-step-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 2px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  box-shadow: var(--shadow-sm);
+}
+
+.phase-step-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.phase-step-card.active-filter {
+  border-color: var(--renacer-navy);
+  background: linear-gradient(135deg, rgba(24, 34, 84, 0.08), rgba(245, 223, 0, 0.10));
+}
+
+[data-theme="dark"] .phase-step-card.active-filter {
+  border-color: var(--renacer-gold);
+  background: rgba(245, 223, 0, 0.08);
+}
+
+.phase-step-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.phase-step-num {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.phase-step-info h4 {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+  line-height: 1.2;
+}
+
+.phase-step-info p {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.phase-step-count {
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--text-main);
+}
+
+/* ==========================================================================
+   MODO PRÁCTICO JEFE DE TALLER (SR. ENRIQUE) — BOTONES GIGANTES
+   ========================================================================== */
+.enrique-hero-box {
+  background: linear-gradient(135deg, #182254 0%, #0f1638 100%);
+  color: #ffffff;
+  border: 2px solid var(--renacer-gold);
+  border-radius: 22px;
+  padding: 22px 24px;
+  margin-bottom: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  box-shadow: var(--shadow-md);
+}
+
+.enrique-giant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.giant-action-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 24px 22px;
+  border-radius: 22px;
+  background: var(--bg-card);
+  border: 2px solid var(--border-subtle);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow-md);
+  min-height: 165px;
+  position: relative;
+  overflow: hidden;
+}
+
+.giant-action-tile:hover {
+  transform: translateY(-4px);
+  border-color: var(--renacer-gold-warm);
+  box-shadow: var(--shadow-lg);
+}
+
+.giant-tile-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  margin-bottom: 14px;
+}
+
+.giant-tile-title {
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--text-main);
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.giant-tile-desc {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.giant-tile-badge {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  font-size: 15px;
+  font-weight: 900;
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+
+/* ==========================================================================
+   TARJETAS DE ORDEN ESTILO TELEGRAM (FOTO ARRIBA + DATOS ABAJO)
+   ========================================================================== */
+.orders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(355px, 1fr));
+  gap: 20px;
+}
+
+@media (max-width: 420px) {
+  .orders-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.renacer-order-card {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 20px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.renacer-order-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+}
+
+.renacer-order-card.priority-high {
+  border: 2px solid #ef4444;
+  box-shadow: 0 8px 26px rgba(239, 68, 68, 0.16);
+}
+
+/* Cabecera Fotográfica Estilo Telegram */
+.order-card-photo-header {
+  position: relative;
+  height: 195px;
+  background: #0f172a;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.order-card-photo-header img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s ease;
+}
+
+.order-card-photo-header:hover img {
+  transform: scale(1.04);
+}
+
+.photo-header-overlay-top {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  z-index: 2;
+}
+
+.troquel-badge-lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--renacer-gold);
+  color: #0f1638;
+  font-family: 'Inter', monospace;
+  font-weight: 900;
+  font-size: 14px;
+  padding: 5px 12px;
+  border-radius: 10px;
+  border: 2px solid #0f1638;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
+  letter-spacing: 0.5px;
+}
+
+.priority-fire-badge {
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 10px;
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.5);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.photo-header-overlay-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 26px 12px 10px;
+  background: linear-gradient(to top, rgba(10, 15, 36, 0.94) 0%, rgba(10, 15, 36, 0.55) 65%, transparent 100%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gallery-counter-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.gallery-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  backdrop-filter: blur(6px);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.gallery-pill--spares {
+  background: rgba(245, 223, 0, 0.25);
+  color: #fef08a;
+  border: 1px solid rgba(245, 223, 0, 0.45);
+}
+
+/* Cuerpo de la Tarjeta de Orden */
+.order-card-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+.order-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.state-badge {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.state-badge--diag { background: rgba(99, 102, 241, 0.15); color: #4f46e5; }
+.state-badge--wait { background: rgba(217, 119, 6, 0.16); color: #b45309; }
+.state-badge--exec { background: rgba(2, 132, 199, 0.16); color: #0369a1; }
+.state-badge--qc   { background: rgba(139, 92, 246, 0.16); color: #6d28d9; }
+.state-badge--done { background: rgba(22, 163, 74, 0.16); color: #15803d; }
+
+[data-theme="dark"] .state-badge--diag { color: #a5b4fc; }
+[data-theme="dark"] .state-badge--wait { color: #fcd34d; }
+[data-theme="dark"] .state-badge--exec { color: #7dd3fc; }
+[data-theme="dark"] .state-badge--qc   { color: #c4b5fd; }
+[data-theme="dark"] .state-badge--done { color: #86efac; }
+
+/* Sub-estado dentro de Asignación (Empezado / Pausado / Terminado) */
+.substate-tag {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.substate-tag--pendiente { background: rgba(100, 116, 139, 0.16); color: var(--text-secondary); }
+.substate-tag--empezado  { background: rgba(14, 165, 233, 0.18); color: #0284c7; border: 1px solid rgba(14, 165, 233, 0.4); }
+.substate-tag--pausado   { background: rgba(245, 158, 11, 0.20); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.45); }
+.substate-tag--terminado { background: rgba(34, 197, 94, 0.18); color: #16a34a; border: 1px solid rgba(34, 197, 94, 0.4); }
+
+[data-theme="dark"] .substate-tag--empezado  { color: #38bdf8; }
+[data-theme="dark"] .substate-tag--pausado   { color: #fbbf24; }
+[data-theme="dark"] .substate-tag--terminado { color: #4ade80; }
+
+.order-motor-title {
+  font-size: 16px;
+  font-weight: 900;
+  color: var(--text-main);
+  line-height: 1.25;
+}
+
+.order-client-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Bloque Financiero en la Tarjeta */
+.order-finance-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  text-align: center;
+}
+
+.finance-cell span {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.finance-cell strong {
+  font-size: 14px;
+  font-weight: 900;
+  color: var(--text-main);
+}
+
+/* Lista de Subtareas y Técnicos en la Tarjeta */
+.subtasks-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subtask-mini-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  font-size: 12px;
+  border-left: 3px solid var(--renacer-navy);
+}
+
+.subtask-mini-item.done {
+  border-left-color: #16a34a;
+  background: rgba(22, 163, 74, 0.07);
+}
+
+.order-card-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   BOTONES Y CONTROLES GENERALES
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border-radius: 11px;
+  font-size: 12.5px;
+  font-weight: 800;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+
+.btn--primary {
+  background: var(--renacer-navy);
+  color: #ffffff;
+}
+.btn--primary:hover {
+  background: var(--renacer-navy-light);
+}
+
+.btn--gold {
+  background: var(--renacer-gold);
+  color: #0f1638;
+  border-color: #eab308;
+}
+.btn--gold:hover {
+  background: #fde047;
+}
+
+.btn--success {
+  background: #16a34a;
+  color: #ffffff;
+}
+.btn--success:hover {
+  background: #15803d;
+}
+
+.btn--warning {
+  background: #d97706;
+  color: #ffffff;
+}
+
+.btn--danger {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.btn--ghost {
+  background: var(--bg-card);
+  color: var(--text-main);
+  border-color: var(--border-color);
+}
+.btn--ghost:hover {
+  border-color: var(--renacer-navy);
+}
+
+.btn--lg {
+  padding: 13px 20px;
+  font-size: 14px;
+  border-radius: 14px;
+}
+
+/* ==========================================================================
+   MODALES Y FORMULARIOS INTERACTIVOS (PASO 1, 2, 3, CRM, QC)
+   ========================================================================== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(10, 15, 36, 0.76);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.modal-box {
+  background: var(--bg-card);
+  color: var(--text-main);
+  width: 100%;
+  max-width: 860px;
+  max-height: 92dvh;
+  border-radius: 24px;
+  border: 2px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalFadeIn 0.18s ease-out;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  padding: 18px 22px;
+  background: linear-gradient(90deg, #182254, #24347a);
+  color: #ffffff;
+  border-bottom: 3px solid var(--renacer-gold);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-header h3 {
+  font-size: 18px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-close-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  font-size: 18px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-body {
+  padding: 22px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.modal-footer {
+  padding: 14px 22px;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Secciones de Formulario */
+.form-section-card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.form-section-title {
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--renacer-navy);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+[data-theme="dark"] .form-section-title {
+  color: var(--renacer-gold);
+}
+
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .form-grid-2, .form-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field-group label {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-secondary);
+}
+
+.field-group input,
+.field-group select,
+.field-group textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.field-group input:focus,
+.field-group select:focus,
+.field-group textarea:focus {
+  outline: none;
+  border-color: var(--renacer-navy);
+  box-shadow: 0 0 0 3px rgba(24, 34, 84, 0.15);
+}
+
+/* Destacado Especial para Código de Troquel */
+.troquel-input-highlight {
+  background: rgba(245, 223, 0, 0.14) !important;
+  border: 2px solid #eab308 !important;
+  font-weight: 900 !important;
+  font-size: 18px !important;
+  letter-spacing: 1px;
+}
+
+/* Galerías de Fotos (Estado de Pieza y Repuestos del Cliente) */
+.photo-dropzone {
+  border: 2px dashed var(--border-color);
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.photo-dropzone:hover {
+  border-color: var(--renacer-gold-warm);
+  background: rgba(245, 223, 0, 0.05);
+}
+
+.photo-thumbs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(95px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.photo-thumb-item {
+  position: relative;
+  height: 86px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1.5px solid var(--border-color);
+}
+
+.photo-thumb-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-thumb-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(220, 38, 38, 0.9);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* Selector de las 3 Opciones de Condición Financiera (Paso 2) */
+.financial-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 680px) {
+  .financial-options-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fin-option-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 2px solid var(--border-color);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 0.16s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fin-option-card.selected {
+  border-color: var(--renacer-navy);
+  background: rgba(24, 34, 84, 0.06);
+  box-shadow: 0 6px 18px rgba(24, 34, 84, 0.12);
+}
+
+[data-theme="dark"] .fin-option-card.selected {
+  border-color: var(--renacer-gold);
+  background: rgba(245, 223, 0, 0.1);
+}
+
+/* Hilo de Bitácora / Mini-CRM por Orden */
+.crm-chat-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--bg-main);
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+}
+
+.crm-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+  align-self: flex-start;
+}
+
+.crm-bubble.mine {
+  align-self: flex-end;
+  background: rgba(24, 34, 84, 0.1);
+  border-color: rgba(24, 34, 84, 0.25);
+}
+
+[data-theme="dark"] .crm-bubble.mine {
+  background: rgba(245, 223, 0, 0.12);
+  border-color: rgba(245, 223, 0, 0.3);
+}
+
+.crm-bubble-meta {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* Barra Inferior Mobile */
+.mobile-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 95;
+  background: var(--bg-elevated);
+  border-top: 2px solid var(--renacer-gold);
+  display: none;
+  justify-content: space-around;
+  padding: 6px 8px env(safe-area-inset-bottom, 8px);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.15);
+}
+
+@media (max-width: 860px) {
+  .mobile-bottom-nav {
+    display: flex;
+  }
+}
+
+.bottom-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.bottom-nav-item i {
+  font-size: 17px;
+}
+
+.bottom-nav-item.active {
+  color: var(--renacer-navy);
+  background: rgba(245, 223, 0, 0.22);
+}
+
+[data-theme="dark"] .bottom-nav-item.active {
+  color: var(--renacer-gold);
+}
+
+/* Toast Notification */
+.renacer-toast {
+  position: fixed;
+  bottom: 82px;
+  right: 20px;
+  z-index: 500;
+  background: #182254;
+  color: #ffffff;
+  border-left: 5px solid var(--renacer-gold);
+  padding: 13px 18px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+  box-shadow: var(--shadow-lg);
+  transition: all 0.25s ease;
+}
+
+
+/* ==========================================================================
+   ESTILOS ADICIONALES FASE 2: 6 ESTADOS, CUENTAS POR COBRAR Y CHAT INTEGRADO
+   ========================================================================== */
+.phase-stepper-banner-6 {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 1180px) {
+  .phase-stepper-banner-6 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 680px) {
+  .phase-stepper-banner-6 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 440px) {
+  .phase-stepper-banner-6 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.state-badge--term {
+  background: rgba(14, 165, 233, 0.16);
+  color: #0369a1;
+}
+[data-theme="dark"] .state-badge--term {
+  color: #7dd3fc;
+}
+
+/* Tabla Estilo Excel Dinámica de Cuentas por Cobrar (Agrupada por Cliente/Mecánico) */
+.ar-excel-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-card);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1.5px solid var(--border-subtle);
+  font-size: 13.5px;
+}
+
+.ar-excel-table thead th {
+  background: linear-gradient(90deg, #fde047, #facc15);
+  color: #0f1638;
+  font-weight: 900;
+  text-align: left;
+  padding: 11px 14px;
+  border-bottom: 2px solid #ca8a04;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ar-excel-table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-main);
+}
+
+.ar-client-group-row td {
+  background: rgba(24, 34, 84, 0.06);
+  font-weight: 900;
+  font-size: 14px;
+  color: var(--renacer-navy);
+  border-top: 1.5px solid #d97706;
+}
+
+[data-theme="dark"] .ar-client-group-row td {
+  background: rgba(245, 223, 0, 0.10);
+  color: var(--renacer-gold);
+}
+
+.ar-total-general-row td {
+  background: linear-gradient(90deg, #fde047, #facc15);
+  color: #0f1638 !important;
+  font-weight: 900;
+  font-size: 16px;
+  padding: 13px 14px;
+  border-top: 2px solid #b45309;
+}
+
+/* Preview de Bitácora y Chat Integrado dentro de la tarjeta de orden */
+.inline-chat-box {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inline-chat-messages {
+  max-height: 110px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+}
+
+.inline-chat-item {
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border-left: 3px solid var(--renacer-navy);
+}

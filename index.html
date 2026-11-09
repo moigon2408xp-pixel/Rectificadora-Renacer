@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#182254" />
+  <meta name="description" content="Sistema Integral de Recepción, Diagnóstico, Presupuesto, Asignación por Subtareas, Control de Calidad y Comisiones — Rectificadora Renacer (Job 8:7)." />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="./logo_renacer.png" />
+  <link rel="apple-touch-icon" href="./logo_renacer.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <link rel="stylesheet" href="./styles.css" />
+  <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- ==================== PANTALLA DE ACCESO ==================== -->
+    <section id="login-view" class="unlock-screen">
+      <div class="login-bg-decor" aria-hidden="true">
+        <div class="login-bg-circle login-bg-circle--1"></div>
+        <div class="login-bg-circle login-bg-circle--2"></div>
+      </div>
+
+      <div class="login-container">
+        <!-- Columna Izquierda: Identidad de Marca Rectificadora Renacer -->
+        <div class="login-brand-col">
+          <div class="login-logo-wrapper">
+            <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="login-logo" />
+          </div>
+          <span class="login-biblical-badge"><i class="fas fa-book-open"></i> JOB 8:7</span>
+          <p class="login-brand-sub">Sistema Integral de Control Mecánico</p>
+          <h1 class="login-brand-name">RECTIFICADORA RENACER</h1>
+          <p class="login-brand-tag">
+            Recepción por Troquel · Diagnóstico y Presupuesto Dinámico · Doble Galería Fotográfica · Asignación de Subtareas y Comisiones
+          </p>
+
+          <!-- Tarjetas de Acceso Instantáneo por Rol (Ideal para Taller y Demostración en Vivo) -->
+          <div class="quick-profiles-box">
+            <div class="quick-profiles-title">
+              <i class="fas fa-bolt"></i> Acceso Rápido por Perfil Operativo (1 Clic):
+            </div>
+            <div class="quick-profiles-grid">
+              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-MOISES')" style="grid-column: 1 / -1; border-color:rgba(245,223,0,0.55); background:rgba(245,223,0,0.14);">
+                <div class="profile-quick-icon" style="background:rgba(245,223,0,0.28); color:#f5df00;">
+                  <i class="fas fa-user-shield"></i>
+                </div>
+                <div class="profile-quick-info">
+                  <strong>Moisés González (Admin)</strong>
+                  <span>Administrador General · Acceso Total a Pruebas y Módulos (Fase 1 y 2)</span>
+                </div>
+              </button>
+
+              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-JESUS')">
+                <div class="profile-quick-icon" style="background:rgba(245,223,0,0.22); color:#f5df00;">
+                  <i class="fas fa-user-gear"></i>
+                </div>
+                <div class="profile-quick-info">
+                  <strong>Jesús Andrade</strong>
+                  <span>Jefe de Taller · Gestión, QC y Finanzas</span>
+                </div>
+              </button>
+
+              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-ENRIQUE')">
+                <div class="profile-quick-icon" style="background:rgba(56,189,248,0.22); color:#38bdf8;">
+                  <i class="fas fa-user-tie"></i>
+                </div>
+                <div class="profile-quick-info">
+                  <strong>Sr. Enrique Andrade</strong>
+                  <span>Jefe de Taller · Modo Fácil y Cobranzas</span>
+                </div>
+              </button>
+
+              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-RECEPCION')">
+                <div class="profile-quick-icon" style="background:rgba(168,85,247,0.22); color:#c084fc;">
+                  <i class="fas fa-clipboard-check"></i>
+                </div>
+                <div class="profile-quick-info">
+                  <strong>Recepción Taller</strong>
+                  <span>Teléfono Fijo · Ingreso y Abonos</span>
+                </div>
+              </button>
+
+              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-HEIBER')">
+                <div class="profile-quick-icon" style="background:rgba(34,197,94,0.22); color:#4ade80;">
+                  <i class="fas fa-wrench"></i>
+                </div>
+                <div class="profile-quick-info">
+                  <strong>Heiber (Técnico)</strong>
+                  <span>Panel Móvil · Mis Trabajos y Fotos</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Columna Derecha: Formulario de Ingreso Manual -->
+        <div>
+          <form id="login-form" class="unlock-form" onsubmit="handleManualLogin(event)">
+            <div style="margin-bottom:4px;">
+              <h2 style="font-size:20px; font-weight:900; color:#ffffff;">Iniciar Sesión en Taller</h2>
+              <p style="font-size:12.5px; color:#cbd5e1; margin-top:2px;">
+                Selecciona tu usuario o ingresa tu PIN personal de trabajo.
+              </p>
+            </div>
+
+            <label for="login-user-select">Usuario del Sistema</label>
+            <select id="login-user-select" required></select>
+
+            <label for="login-pin-input">PIN de Acceso</label>
+            <input
+              id="login-pin-input"
+              type="password"
+              inputmode="numeric"
+              placeholder="Ingresa tu PIN (ej. 123456)"
+              value="123456"
+              required
+            />
+
+            <button type="submit" class="login-submit-btn">
+              <i class="fas fa-sign-in-alt"></i> Entrar al Sistema Renacer
+            </button>
+
+            <div style="display:flex; gap:8px; margin-top:6px;">
+              <button type="button" class="btn btn--ghost" style="flex:1; background:rgba(255,255,255,0.08); color:#fff; border-color:rgba(255,255,255,0.18); font-size:11.5px;" onclick="triggerPwaInstall()">
+                <i class="fas fa-download"></i> Instalar App (Teléfono/PC)
+              </button>
+              <button type="button" class="btn btn--ghost" style="background:rgba(255,255,255,0.08); color:#fde047; border-color:rgba(245,223,0,0.3); font-size:11.5px;" onclick="resetDemoDatabase()" title="Restaurar datos de ejemplo originales">
+                <i class="fas fa-redo"></i> Demo Inicial
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== ÁREA DE TRABAJO PRINCIPAL ==================== -->
+    <section id="workspace" class="hidden">
+      <!-- HEADER STICKY INDUSTRIAL -->
+      <header class="renacer-main-header">
+        <a class="renacer-header-brand" onclick="navigateTab('default')">
+          <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="renacer-brand-logo" />
+          <div>
+            <div class="renacer-brand-title">
+              RECTIFICADORA RENACER
+              <span class="job-pill">JOB 8:7</span>
+            </div>
+            <div class="renacer-brand-sub" id="header-subtitle-role">
+              Control de Ingreso, Troquel, Presupuesto y Asignación
+            </div>
+          </div>
+        </a>
+
+        <!-- Buscador Rápido por Troquel / Cédula / Cliente -->
+        <div style="flex:1; max-width:340px; min-width:190px; position:relative;">
+          <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:#94a3b8; font-size:13px;"></i>
+          <input
+            type="search"
+            id="global-search-input"
+            placeholder="Buscar Troquel (#5017), Cédula/RIF o Cliente..."
+            oninput="handleGlobalSearch(this.value)"
+            style="width:100%; padding:8px 12px 8px 34px; border-radius:999px; border:1px solid rgba(245,223,0,0.4); background:rgba(15,23,42,0.75); color:#ffffff; font-size:12.5px; font-weight:600; outline:none;"
+          />
+        </div>
+
+        <div class="renacer-header-controls">
+          <button type="button" id="btn-header-new-order" class="header-action-btn header-action-btn--gold" onclick="openNewOrderModal()">
+            <i class="fas fa-plus-circle"></i>
+            <span>Nueva Recepción (Paso 1)</span>
+          </button>
+
+          <button type="button" id="btn-header-enrique-mode" class="header-action-btn header-action-btn--enrique" onclick="navigateTab('enrique_hub')" title="Menú Visual de Botones Gigantes para Jefe de Taller">
+            <i class="fas fa-th-large"></i>
+            <span>Modo Fácil Jefe Taller</span>
+          </button>
+
+          <button type="button" class="control-btn-circle" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
+            <i class="fas fa-moon" id="theme-icon"></i>
+          </button>
+
+          <!-- Selector Rápido de Rol Activo (Cambio en Vivo) -->
+          <div class="user-role-pill" onclick="openSwitchUserModal()" title="Clic para cambiar de usuario / vista en vivo">
+            <span class="role-dot"></span>
+            <i class="fas fa-user-shield"></i>
+            <span id="active-user-label">Jesús Andrade</span>
+            <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
+          </div>
+
+          <button type="button" class="control-btn-circle" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Salir a pantalla de inicio">
+            <i class="fas fa-power-off"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- BARRA DE PESTAÑAS DINÁMICA SEGÚN ROL -->
+      <nav id="renacer-tabs-bar" class="renacer-tabs-bar"></nav>
+
+      <!-- CONTENIDO DE LA PANTALLA ACTIVA -->
+      <main id="screen" class="main-workspace" aria-live="polite"></main>
+
+      <!-- NAVEGACIÓN INFERIOR MÓVIL -->
+      <nav id="mobile-bottom-nav" class="mobile-bottom-nav"></nav>
+    </section>
+
+    <!-- CONTENEDOR DE MODALES Y NOTIFICACIONES -->
+    <div id="modal-root"></div>
+    <div id="toast" class="renacer-toast hidden" role="status"></div>
+
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
+

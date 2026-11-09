@@ -1,0 +1,26 @@
+{
+  "name": "Rectificadora Renacer — Sistema de Producción y Control",
+  "short_name": "Renacer Taller",
+  "description": "Sistema integral de recepción, diagnóstico, presupuesto, asignación por subtareas, control de calidad y comisiones para Rectificadora Renacer (Job 8:7).",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#182254",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
