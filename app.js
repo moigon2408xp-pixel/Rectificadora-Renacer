@@ -13,28 +13,29 @@
  * ============================================================================
  */
 
-const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V2";
-const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V2";
-let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || "";
+const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V4";
+const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V4";
+const DEFAULT_GAS_API_URL = "https://script.google.com/macros/s/AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA/exec";
+let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || DEFAULT_GAS_API_URL;
+if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA")) {
+  GAS_API_URL = DEFAULT_GAS_API_URL;
+  localStorage.setItem("RENACER_GAS_API_URL", DEFAULT_GAS_API_URL);
+}
+let lastCloudSyncTime = "Conectado";
+let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-/* ---------- Generador de Imágenes SVG Ilustrativas para Demo Realista ---------- */
-function makeSvgPhoto(title, subtitle, bg1, bg2, accent, iconText) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+/* ---------- Placeholder Visual Limpio (Sin texto de relleno superpuesto) ---------- */
+function makeSvgPhoto(_title, _subtitle, bg1 = "#182254", bg2 = "#0f172a", accent = "#f5df00") {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
     <defs>
       <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
         <stop offset="0%" stop-color="${bg1}"/>
         <stop offset="100%" stop-color="${bg2}"/>
       </linearGradient>
     </defs>
-    <rect width="640" height="400" fill="url(#g)"/>
-    <circle cx="540" cy="80" r="110" fill="${accent}" opacity="0.12"/>
-    <circle cx="90" cy="340" r="130" fill="${accent}" opacity="0.08"/>
-    <rect x="28" y="24" width="584" height="352" rx="18" fill="none" stroke="${accent}" stroke-width="2" stroke-opacity="0.4"/>
-    <text x="48" y="95" font-family="Arial, sans-serif" font-size="44" font-weight="bold" fill="${accent}">${iconText}</text>
-    <text x="48" y="165" font-family="Arial, sans-serif" font-size="28" font-weight="900" fill="#ffffff">${title}</text>
-    <text x="48" y="205" font-family="Arial, sans-serif" font-size="18" font-weight="600" fill="#cbd5e1">${subtitle}</text>
-    <rect x="48" y="305" width="310" height="38" rx="8" fill="${accent}"/>
-    <text x="62" y="330" font-family="Arial, sans-serif" font-size="15" font-weight="900" fill="#0f1638">RECTIFICADORA RENACER · JOB 8:7</text>
+    <rect width="640" height="360" fill="url(#g)"/>
+    <circle cx="320" cy="180" r="64" fill="none" stroke="${accent}" stroke-width="2" stroke-opacity="0.25"/>
+    <circle cx="320" cy="180" r="28" fill="none" stroke="${accent}" stroke-width="2" stroke-opacity="0.35"/>
   </svg>`;
   return "data:image/svg+xml;utf8," + encodeURIComponent(svg);
 }
@@ -222,7 +223,7 @@ function getInitialDatabase() {
           marca: "Toyota",
           modelo: "Corolla 1.8",
           serial: "1ZZ-4412",
-          observaciones: "Recién ingresada en recepción. Trae toma de agua montada y 4 bujías puestas."
+          observaciones: "Recién ingresada en recepción para diagnóstico y cepillado."
         },
         galeria_fotos_pieza: [DEMO_PHOTOS.bloqueFiesta],
         galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosFiesta],
@@ -259,7 +260,7 @@ function getInitialDatabase() {
           marca: "Runner",
           modelo: "Toyota 4Runner V6 4.0",
           serial: "1GR-774821",
-          observaciones: "Viene con sus árboles de levas y taquetes completos. En espera por respuesta / aprobación del cliente."
+          observaciones: "Servicio de rectificación de asientos y plano."
         },
         galeria_fotos_pieza: [DEMO_PHOTOS.camaraRunner],
         galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorolla],
@@ -296,7 +297,7 @@ function getInitialDatabase() {
           marca: "Chevrolet",
           modelo: "Corsa 1.6 8V",
           serial: "GM-90400187",
-          observaciones: "El mecánico sacó 1 bujía (cilindro 1) y dejó las otras 3 bujías puestas. Trae sensor de temperatura montado."
+          observaciones: "Lavado químico, cepillado de plano y cambio de guías."
         },
         galeria_fotos_pieza: [DEMO_PHOTOS.camaraCorsa],
         galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorsa],
@@ -636,7 +637,7 @@ function getInitialDatabase() {
         autor_nombre: "Recepción Taller",
         autor_rol: "Recepción",
         tipo_evento: "ingreso",
-        mensaje: "Orden recibida. Se troqueló con el código #5017. OJO: El mecánico dejó 3 bujías puestas y sacó 1 sola.",
+        mensaje: "Orden recibida y troquelada (#5017).",
         foto_adjunta_url: "",
         fecha_hora: "2026-11-09 08:32"
       },
@@ -648,21 +649,9 @@ function getInitialDatabase() {
         autor_nombre: "Sr. Enrique Andrade",
         autor_rol: "Jefe de Taller",
         tipo_evento: "asignacion",
-        mensaje: "Cliente pagó 100% por Pago Móvil (Prioridad Alta). Asigné Lavado a Jeison y Aplanado + Guías a Heiber.",
+        mensaje: "Pago 100% verificado. Subtareas asignadas a Jeison y Heiber.",
         foto_adjunta_url: "",
         fecha_hora: "2026-11-09 08:45"
-      },
-      {
-        id_mensaje: "MSG-03",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        autor_id: "USR-JEISON",
-        autor_nombre: "Jeison",
-        autor_rol: "Técnico",
-        tipo_evento: "avance",
-        mensaje: "Lavado químico listo Sr. Enrique. Ya se la pasé a la mesa de Heiber con su caja de válvulas y guías completas.",
-        foto_adjunta_url: DEMO_PHOTOS.evidenciaTerminado,
-        fecha_hora: "2026-11-09 09:36"
       },
       {
         id_mensaje: "MSG-04",
@@ -672,21 +661,9 @@ function getInitialDatabase() {
         autor_nombre: "Heiber",
         autor_rol: "Técnico",
         tipo_evento: "calibracion",
-        mensaje: "Jesús, aquí dejo el registro de calibración de la Hilux #1507: Admisión 0.20mm / Escape 0.30mm. Enviada a Terminado para revisión.",
-        foto_adjunta_url: DEMO_PHOTOS.camaraHilux,
+        mensaje: "Calibración Hilux #1507 lista. Enviada a Terminado.",
+        foto_adjunta_url: "",
         fecha_hora: "2026-11-09 11:18"
-      },
-      {
-        id_mensaje: "MSG-05",
-        orden_id: "ORD-1005",
-        codigo_troquel: "1509",
-        autor_id: "USR-HEIBER",
-        autor_nombre: "Heiber",
-        autor_rol: "Técnico",
-        tipo_evento: "terminado",
-        mensaje: "Cámara de Astra #1509 finalizada y enviada a Control de Calidad.",
-        foto_adjunta_url: DEMO_PHOTOS.camaraAstra,
-        fecha_hora: "2026-11-08 17:30"
       }
     ],
     finanzas: [
@@ -842,6 +819,456 @@ function normalizeDatabaseSchema(d) {
   return d;
 }
 
+function safeJsonParse(val, fallback) {
+  if (val === undefined || val === null || val === "") return fallback;
+  if (typeof val === "object") return val;
+  try {
+    return JSON.parse(val);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/* Convierte el estado en memoria al esquema exacto de las 8 pestañas de Google Sheets (Code.gs) */
+function prepareSheetsPayload(sourceDb) {
+  const d = normalizeDatabaseSchema(sourceDb || db);
+  const nowStr = new Date().toISOString().slice(0, 19).replace("T", " ");
+
+  const clientes = (d.clientes || []).map((c) => ({
+    id_cliente: c.id_cliente || "",
+    documento_identidad: c.documento_identidad || "",
+    nombre_completo: c.nombre_completo || "",
+    telefono: c.telefono || "",
+    direccion: c.direccion || "",
+    tipo_cliente: c.es_taller_aliado ? "Taller Aliado (Crédito Autorizado)" : c.tipo_cliente || "Particular",
+    fecha_registro: c.fecha_registro || nowStr.slice(0, 10),
+    notas: c.notas || ""
+  }));
+
+  const ordenes = (d.ordenes || []).map((o) => {
+    const motorPayload = {
+      ...(o.datos_motor || {}),
+      factura_bloqueada: Boolean(o.factura_bloqueada),
+      devuelto_calidad: Boolean(o.devuelto_calidad),
+      motivo_rechazo_qc: o.motivo_rechazo_qc || "",
+      excepcion_taller_aliado: Boolean(o.excepcion_taller_aliado)
+    };
+    return {
+      id_orden: o.id_orden || "",
+      cliente_id: o.cliente_id || "",
+      documento_cliente: o.documento_cliente || "",
+      nombre_cliente: o.nombre_cliente || "",
+      telefono_cliente: o.telefono_cliente || "",
+      codigo_troquel: String(o.codigo_troquel || ""),
+      datos_motor_json: JSON.stringify(motorPayload),
+      galeria_fotos_pieza_json: JSON.stringify(o.galeria_fotos_pieza || []),
+      galeria_fotos_repuestos_json: JSON.stringify(o.galeria_fotos_repuestos || []),
+      estado_actual: o.estado_actual || "diagnostico_presupuesto",
+      subestado_ejecucion: o.subestado_ejecucion || "pendiente",
+      tipo_condicion_pago: o.tipo_condicion_pago || "pendiente_definir",
+      monto_total: Number(o.monto_total) || 0,
+      monto_abonado: Number(o.monto_abonado) || 0,
+      saldo_pendiente: Number(o.saldo_pendiente) || 0,
+      metodo_pago: o.metodo_pago || "n/a",
+      comprobante_pago_foto: o.comprobante_pago_foto || "",
+      prioridad_alta: Boolean(o.prioridad_alta),
+      fecha_ingreso: o.fecha_ingreso || nowStr.slice(0, 16),
+      fecha_inicio_produccion: o.fecha_inicio_produccion || "",
+      fecha_fin_produccion: o.fecha_fin_produccion || "",
+      tiempo_neto_minutos: Number(o.tiempo_neto_minutos) || 0,
+      fecha_entrega: o.fecha_entrega || "",
+      qc_aprobado: Boolean(o.qc_aprobado || o.estado_actual === "entregado"),
+      qc_checklist_json: JSON.stringify({
+        factura_bloqueada: Boolean(o.factura_bloqueada),
+        devuelto_calidad: Boolean(o.devuelto_calidad),
+        motivo_rechazo_qc: o.motivo_rechazo_qc || ""
+      }),
+      foto_entrega_final: o.foto_entrega_final || "",
+      ultima_actualizacion: nowStr
+    };
+  });
+
+  const subtareas = (d.subtareas || []).map((s) => {
+    const parentOrd = (d.ordenes || []).find((o) => o.id_orden === s.orden_id);
+    return {
+      id_subtarea: s.id_subtarea || "",
+      orden_id: s.orden_id || "",
+      codigo_troquel: String(s.codigo_troquel || (parentOrd ? parentOrd.codigo_troquel : "")),
+      descripcion_servicio: s.descripcion_servicio || "",
+      tecnico_id: s.tecnico_id || "",
+      nombre_tecnico: s.nombre_tecnico || "Sin asignar",
+      monto_servicio: Number(s.monto_servicio) || 0,
+      comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
+      estado_subtarea: s.estado_subtarea || "pendiente",
+      fecha_inicio: s.fecha_inicio || "",
+      fecha_fin: s.fecha_fin || s.fecha_terminado || "",
+      tiempo_neto_min: Number(s.minutos_acumulados ?? s.tiempo_neto_min ?? 0),
+      foto_evidencia_terminado: s.foto_terminado_url || s.foto_evidencia_terminado || "",
+      checklist_salida_json: JSON.stringify(s.checklist_salida || {}),
+      comision_pagada: Boolean(s.comision_pagada),
+      id_liquidacion: s.id_liquidacion || ""
+    };
+  });
+
+  const bitacora = (d.bitacora || []).map((b) => ({
+    id_mensaje: b.id_mensaje || "",
+    orden_id: b.orden_id || "",
+    codigo_troquel: String(b.codigo_troquel || ""),
+    autor_id: b.autor_id || "",
+    autor_nombre: b.autor_nombre || "",
+    autor_rol: b.autor_rol || "",
+    tipo_evento: b.tipo_evento || "comentario",
+    mensaje: b.mensaje || "",
+    foto_adjunta_url: b.foto_adjunta_url || "",
+    fecha_hora: b.fecha_hora || nowStr.slice(0, 16)
+  }));
+
+  const usuarios = (d.usuarios || []).map((u) => ({
+    id_usuario: u.id_usuario || "",
+    nombre: u.nombre || "",
+    rol: u.rol || "tecnico",
+    especialidad: u.especialidad || "",
+    pin: String(u.pin || "123456"),
+    telefono: u.telefono || "",
+    activo: u.activo !== false,
+    modalidad_horario: u.modalidad_horario || "Jornada Completa",
+    fecha_ingreso: u.fecha_ingreso || "2026-01-01"
+  }));
+
+  const catalogo = (d.catalogo_servicios || d.catalogo || []).map((c) => ({
+    id_servicio: c.id_cat || c.id_servicio || "",
+    categoria_pieza: c.categoria_pieza || "Cámara / Motor",
+    descripcion_servicio: c.nombre || c.descripcion_servicio || "",
+    precio_sugerido_usd: Number(c.precio_sugerido ?? c.precio_sugerido_usd ?? 0),
+    comision_tecnico_usd: Number(c.comision_sugerida ?? c.comision_tecnico_usd ?? 0),
+    activo: c.activo !== false
+  }));
+
+  const finanzas = (d.finanzas_movimientos || d.finanzas || []).map((m) => ({
+    id_movimiento: m.id_mov || m.id_movimiento || "",
+    fecha_hora: m.fecha || m.fecha_hora || nowStr.slice(0, 10),
+    tipo_movimiento: String(m.tipo || m.tipo_movimiento || "ingreso").toUpperCase(),
+    categoria_cuenta: m.categoria || m.categoria_cuenta || "General",
+    concepto: m.concepto || "",
+    orden_id: m.orden_id || "-",
+    codigo_troquel: String(m.codigo_troquel || "-"),
+    monto_usd: Number(m.monto ?? m.monto_usd ?? 0),
+    metodo_pago: m.metodo || m.metodo_pago || "efectivo",
+    referencia: m.referencia || "",
+    comprobante_foto: m.comprobante_foto || "",
+    registrado_por: m.registrado_por || (currentUser ? currentUser.nombre : "Sistema")
+  }));
+
+  const asistencia = (d.asistencias || d.asistencia || []).map((a) => ({
+    id_asistencia: a.id_asist || a.id_asistencia || "",
+    fecha: String(a.fecha || nowStr.slice(0, 10)).slice(0, 10),
+    usuario_id: a.usuario_id || "",
+    nombre_usuario: a.nombre || a.nombre_usuario || "",
+    turno_modalidad: a.observacion || a.turno_modalidad || "Jornada Completa",
+    hora_registro: a.hora_entrada || a.hora_registro || "08:00 AM",
+    observacion: a.estado || a.observacion || "Presente"
+  }));
+
+  return {
+    clientes,
+    ordenes,
+    subtareas,
+    bitacora,
+    usuarios,
+    catalogo,
+    finanzas,
+    asistencia
+  };
+}
+
+/* Convierte los registros leídos desde Google Sheets (sync_all) de vuelta al modelo rico de la PWA */
+function hydrateDatabaseFromSheets(cloudData) {
+  const base = normalizeDatabaseSchema(getInitialDatabase());
+  if (!cloudData || typeof cloudData !== "object") return base;
+
+  const roleLabels = {
+    admin: "Administrador del Sistema",
+    jefe_taller: "Jefe de Taller",
+    recepcion: "Recepción e Ingreso",
+    tecnico: "Técnico Rectificador"
+  };
+
+  const usuarios = Array.isArray(cloudData.usuarios) && cloudData.usuarios.length
+    ? cloudData.usuarios.map((u) => ({
+        id_usuario: String(u.id_usuario || ""),
+        nombre: String(u.nombre || ""),
+        rol: String(u.rol || "tecnico"),
+        rol_label: roleLabels[u.rol] || "Jefe de Taller",
+        especialidad: String(u.especialidad || ""),
+        pin: String(u.pin || "123456"),
+        telefono: String(u.telefono || ""),
+        activo: u.activo === true || String(u.activo).toLowerCase() === "true",
+        modalidad_horario: String(u.modalidad_horario || "Jornada Completa")
+      }))
+    : base.usuarios;
+
+  const clientes = Array.isArray(cloudData.clientes) && cloudData.clientes.length
+    ? cloudData.clientes.map((c) => ({
+        id_cliente: String(c.id_cliente || ""),
+        documento_identidad: String(c.documento_identidad || ""),
+        nombre_completo: String(c.nombre_completo || ""),
+        telefono: String(c.telefono || ""),
+        direccion: String(c.direccion || ""),
+        tipo_cliente: String(c.tipo_cliente || "Particular"),
+        es_taller_aliado: String(c.tipo_cliente || "").toLowerCase().includes("aliado")
+      }))
+    : base.clientes;
+
+  const ordenes = Array.isArray(cloudData.ordenes) && cloudData.ordenes.length
+    ? cloudData.ordenes.map((o) => {
+        const motorObj = safeJsonParse(o.datos_motor_json || o.datos_motor, {
+          tipo_pieza: "Cámara / Culata",
+          marca: "Motor",
+          modelo: "",
+          serial: "S/N",
+          observaciones: ""
+        });
+        const qcMeta = safeJsonParse(o.qc_checklist_json, {});
+        const fotosPieza = safeJsonParse(o.galeria_fotos_pieza_json || o.galeria_fotos_pieza, [DEMO_PHOTOS.camaraCorsa]);
+        const fotosRep = safeJsonParse(o.galeria_fotos_repuestos_json || o.galeria_fotos_repuestos, []);
+        const isEntregado = String(o.estado_actual || "") === "entregado";
+
+        return {
+          id_orden: String(o.id_orden || ""),
+          cliente_id: String(o.cliente_id || ""),
+          documento_cliente: String(o.documento_cliente || ""),
+          nombre_cliente: String(o.nombre_cliente || ""),
+          telefono_cliente: String(o.telefono_cliente || ""),
+          codigo_troquel: String(o.codigo_troquel || ""),
+          datos_motor: {
+            tipo_pieza: motorObj.tipo_pieza || "Cámara / Culata",
+            marca: motorObj.marca || "",
+            modelo: motorObj.modelo || "",
+            serial: motorObj.serial || "S/N",
+            observaciones: motorObj.observaciones || ""
+          },
+          galeria_fotos_pieza: Array.isArray(fotosPieza) && fotosPieza.length ? fotosPieza : [DEMO_PHOTOS.camaraCorsa],
+          galeria_fotos_repuestos: Array.isArray(fotosRep) ? fotosRep : [],
+          estado_actual: String(o.estado_actual || "diagnostico_presupuesto"),
+          subestado_ejecucion: String(o.subestado_ejecucion || "pendiente"),
+          tipo_condicion_pago: String(o.tipo_condicion_pago || "pendiente_definir"),
+          excepcion_taller_aliado: Boolean(motorObj.excepcion_taller_aliado),
+          monto_total: Number(o.monto_total) || 0,
+          monto_abonado: Number(o.monto_abonado) || 0,
+          saldo_pendiente: Number(o.saldo_pendiente) || 0,
+          metodo_pago: String(o.metodo_pago || "n/a"),
+          comprobante_pago_foto: String(o.comprobante_pago_foto || ""),
+          prioridad_alta: o.prioridad_alta === true || String(o.prioridad_alta).toLowerCase() === "true",
+          factura_bloqueada: Boolean(isEntregado || motorObj.factura_bloqueada || qcMeta.factura_bloqueada),
+          devuelto_calidad: Boolean(motorObj.devuelto_calidad || qcMeta.devuelto_calidad),
+          motivo_rechazo_qc: String(motorObj.motivo_rechazo_qc || qcMeta.motivo_rechazo_qc || ""),
+          fecha_ingreso: String(o.fecha_ingreso || "").slice(0, 16).replace("T", " "),
+          tiempo_neto_minutos: Number(o.tiempo_neto_minutos) || 0,
+          qc_aprobado: o.qc_aprobado === true || String(o.qc_aprobado).toLowerCase() === "true" || isEntregado
+        };
+      })
+    : base.ordenes;
+
+  const subtareas = Array.isArray(cloudData.subtareas) && cloudData.subtareas.length
+    ? cloudData.subtareas.map((s) => ({
+        id_subtarea: String(s.id_subtarea || ""),
+        orden_id: String(s.orden_id || ""),
+        codigo_troquel: String(s.codigo_troquel || ""),
+        descripcion_servicio: String(s.descripcion_servicio || ""),
+        tecnico_id: String(s.tecnico_id || "") || null,
+        nombre_tecnico: String(s.nombre_tecnico || "Sin asignar"),
+        monto_servicio: Number(s.monto_servicio) || 0,
+        comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
+        estado_subtarea: String(s.estado_subtarea || "pendiente"),
+        minutos_acumulados: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
+        tiempo_neto_min: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
+        foto_terminado_url: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
+        foto_evidencia_terminado: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
+        comision_pagada: s.comision_pagada === true || String(s.comision_pagada).toLowerCase() === "true"
+      }))
+    : base.subtareas;
+
+  const bitacora = Array.isArray(cloudData.bitacora) && cloudData.bitacora.length
+    ? cloudData.bitacora.map((b) => ({
+        id_mensaje: String(b.id_mensaje || ""),
+        orden_id: String(b.orden_id || ""),
+        codigo_troquel: String(b.codigo_troquel || ""),
+        autor_id: String(b.autor_id || ""),
+        autor_nombre: String(b.autor_nombre || ""),
+        autor_rol: String(b.autor_rol || ""),
+        tipo_evento: String(b.tipo_evento || "comentario"),
+        mensaje: String(b.mensaje || ""),
+        foto_adjunta_url: String(b.foto_adjunta_url || ""),
+        fecha_hora: String(b.fecha_hora || "").slice(0, 16).replace("T", " ")
+      }))
+    : base.bitacora;
+
+  const catalogo = Array.isArray(cloudData.catalogo) && cloudData.catalogo.length
+    ? cloudData.catalogo
+    : base.catalogo;
+
+  const finanzas = Array.isArray(cloudData.finanzas) && cloudData.finanzas.length
+    ? cloudData.finanzas
+    : base.finanzas;
+
+  const asistencia = Array.isArray(cloudData.asistencia) && cloudData.asistencia.length
+    ? cloudData.asistencia
+    : base.asistencia;
+
+  return normalizeDatabaseSchema({
+    ...base,
+    usuarios,
+    clientes,
+    ordenes,
+    subtareas,
+    bitacora,
+    catalogo,
+    catalogo_servicios: undefined,
+    finanzas,
+    finanzas_movimientos: undefined,
+    asistencia,
+    asistencias: undefined
+  });
+}
+
+function updateCloudSyncBadge(state, detailText) {
+  cloudSyncStatus = state;
+  if (detailText) lastCloudSyncTime = detailText;
+  const badgeEl = document.getElementById("cloud-sync-badge-label");
+  const iconEl = document.getElementById("cloud-sync-badge-icon");
+  const btnEl = document.getElementById("btn-header-cloud-sync");
+  if (!badgeEl || !iconEl || !btnEl) return;
+
+  if (state === "syncing") {
+    iconEl.className = "fas fa-sync fa-spin";
+    badgeEl.textContent = "Sincronizando Sheets...";
+    btnEl.style.borderColor = "rgba(245,196,0,0.6)";
+  } else if (state === "error") {
+    iconEl.className = "fas fa-exclamation-triangle";
+    badgeEl.textContent = "Modo Local (Offline)";
+    btnEl.style.borderColor = "rgba(239,68,68,0.6)";
+  } else {
+    iconEl.className = "fas fa-cloud-check";
+    badgeEl.textContent = "Sheets Conectado";
+    btnEl.style.borderColor = "rgba(34,197,94,0.65)";
+  }
+}
+
+async function pushToGoogleSheets(silent = true) {
+  if (!GAS_API_URL) return false;
+  updateCloudSyncBadge("syncing");
+  try {
+    const payload = prepareSheetsPayload(db);
+    const res = await fetch(GAS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "push_state", payload })
+    });
+    const json = await res.json();
+    if (json && json.success) {
+      const stamp = (json.data && json.data.savedAt) || new Date().toLocaleTimeString();
+      updateCloudSyncBadge("online", stamp);
+      if (!silent) showToast(`✅ Datos guardados en Google Sheets (${stamp})`);
+      return true;
+    }
+    throw new Error((json && json.error) || "Respuesta no válida de Sheets");
+  } catch (err) {
+    console.warn("Aviso al sincronizar hacia Google Sheets:", err);
+    updateCloudSyncBadge("error");
+    if (!silent) showToast("No se pudo conectar con Google Sheets. Guardado en memoria local.", "error");
+    return false;
+  }
+}
+
+async function syncFromGoogleSheets(silent = false) {
+  if (!GAS_API_URL) return false;
+  updateCloudSyncBadge("syncing");
+  try {
+    const res = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
+    const json = await res.json();
+    if (json && json.success && json.data) {
+      const cloudOrders = json.data.ordenes || [];
+      if (cloudOrders.length > 0) {
+        db = hydrateDatabaseFromSheets(json.data);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+        populateLoginSelect();
+        if (currentUser) {
+          const updatedMe = db.usuarios.find((u) => u.id_usuario === currentUser.id_usuario);
+          if (updatedMe) currentUser = updatedMe;
+          renderApp();
+        }
+        updateCloudSyncBadge("online", json.data.serverTime || new Date().toLocaleTimeString());
+        if (!silent) showToast(`☁️ Sincronizado desde Google Sheets (${cloudOrders.length} órdenes activas).`);
+        return true;
+      } else {
+        // Si la hoja de Google Sheets está vacía en el primer uso, enviamos la base inicial automáticamente
+        await pushToGoogleSheets(silent);
+        return true;
+      }
+    }
+    throw new Error((json && json.error) || "Error al leer Google Sheets");
+  } catch (err) {
+    console.warn("Aviso al leer desde Google Sheets:", err);
+    updateCloudSyncBadge("error");
+    if (!silent) showToast("Trabajando con base local (sin respuesta de Google Sheets).", "error");
+    return false;
+  }
+}
+
+function openCloudSyncModal() {
+  openModal({
+    title: "Conexión Directa con Google Sheets (Tiempo Real)",
+    icon: "fa-cloud",
+    wide: true,
+    body: `
+      <div style="background:rgba(22,163,74,0.1); border:1.5px solid rgba(22,163,74,0.4); border-radius:12px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <div>
+          <div style="font-size:13.5px; font-weight:900; color:#15803d;">
+            <i class="fas fa-check-circle"></i> Vinculado Directamente al Google Apps Script Oficial de Rectificadora Renacer
+          </div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+            Última sincronización con Google Sheets: <strong>${lastCloudSyncTime}</strong>
+          </div>
+        </div>
+        <span class="state-badge state-badge--done">${cloudSyncStatus === "online" ? "🟢 CONECTADO" : cloudSyncStatus === "syncing" ? "🔄 SINCRONIZANDO" : "🟡 LOCAL"}</span>
+      </div>
+
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>URL del Web App de Google Apps Script (Vinculada por Defecto)</label>
+        <input
+          type="url"
+          id="input-gas-url"
+          value="${GAS_API_URL}"
+          style="font-family:'JetBrains Mono',monospace; font-size:12px;"
+        />
+      </div>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+        <button type="button" class="btn btn--primary btn--lg" style="justify-content:center;" onclick="syncFromGoogleSheets(false); closeModal();">
+          <i class="fas fa-cloud-download-alt"></i> ⬇️ Traer Datos desde Google Sheets
+        </button>
+        <button type="button" class="btn btn--gold btn--lg" style="justify-content:center;" onclick="pushToGoogleSheets(false); closeModal();">
+          <i class="fas fa-cloud-upload-alt"></i> ⬆️ Guardar Todo en Google Sheets Ahora
+        </button>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>
+      <button type="button" class="btn btn--success" onclick="saveCustomGasUrl()">
+        <i class="fas fa-save"></i> Actualizar URL y Reconectar
+      </button>
+    `
+  });
+}
+
+function saveCustomGasUrl() {
+  const val = (document.getElementById("input-gas-url")?.value || "").trim() || DEFAULT_GAS_API_URL;
+  GAS_API_URL = val;
+  localStorage.setItem("RENACER_GAS_API_URL", val);
+  closeModal();
+  syncFromGoogleSheets(false);
+}
+
 function loadDatabase() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -859,14 +1286,7 @@ function loadDatabase() {
 
 function saveDatabase() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-  if (GAS_API_URL) {
-    fetch(GAS_API_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "push_state", payload: db })
-    }).catch(() => {});
-  }
+  pushToGoogleSheets(true);
 }
 
 function resetDemoDatabase() {
@@ -974,10 +1394,8 @@ function loginSuccess(user) {
     }
   }
 
-  // Seleccionar pestaña inicial ideal según el usuario/perfil
-  if (user.id_usuario === "USR-ENRIQUE") {
-    currentTab = "enrique_hub";
-  } else if (user.rol === "tecnico") {
+  // Seleccionar pestaña inicial según el rol
+  if (user.rol === "tecnico") {
     currentTab = "worker_panel";
   } else {
     currentTab = "pipeline";
@@ -986,7 +1404,7 @@ function loginSuccess(user) {
   document.getElementById("login-view").classList.add("hidden");
   document.getElementById("workspace").classList.remove("hidden");
   renderApp();
-  showToast(`Sesión activa: ${user.nombre} (${user.rol_label})`);
+  showToast(`Sesión iniciada: ${user.nombre}`);
 }
 
 function logout() {
@@ -1011,12 +1429,12 @@ function openSwitchUserModal() {
           ? "fa-clipboard-check"
           : "fa-wrench";
       return `
-        <button type="button" class="btn ${isCurrent ? "btn--gold" : "btn--ghost"}" style="width:100%; justify-content:space-between; padding:14px 16px; margin-bottom:8px;" onclick="closeModal(); quickLoginAs('${u.id_usuario}')">
+        <button type="button" class="btn ${isCurrent ? "btn--gold" : "btn--ghost"}" style="width:100%; justify-content:space-between; padding:12px 16px; margin-bottom:8px;" onclick="closeModal(); quickLoginAs('${u.id_usuario}')">
           <span style="display:flex; align-items:center; gap:10px; text-align:left;">
             <i class="fas ${iconCls}"></i>
             <span>
-              <strong style="display:block; font-size:14px;">${u.nombre} — ${u.rol_label}</strong>
-              <small style="opacity:0.8; font-weight:600;">${u.especialidad}</small>
+              <strong style="display:block; font-size:14px;">${u.nombre}</strong>
+              <small style="opacity:0.8; font-weight:600;">${u.rol_label}</small>
             </span>
           </span>
           ${isCurrent ? '<span class="state-badge state-badge--done">ACTIVO</span>' : '<i class="fas fa-arrow-right"></i>'}
@@ -1026,63 +1444,47 @@ function openSwitchUserModal() {
     .join("");
 
   openModal({
-    title: "Cambiar de Perfil / Vista en Vivo",
-    icon: "fa-users-cog",
-    body: `
-      <p style="font-size:13.5px; color:var(--text-muted); margin-bottom:10px;">
-        Alterna en 1 clic entre tu perfil de <strong>Administrador (Moisés González)</strong>, los <strong>Jefes de Taller (Jesús Andrade y Sr. Enrique)</strong>, <strong>Recepción</strong> o los <strong>Técnicos</strong>:
-      </p>
-      <div>${buttonsHtml}</div>
-    `,
+    title: "Cambiar de Usuario",
+    icon: "fa-users",
+    body: `<div>${buttonsHtml}</div>`,
     footer: `<button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>`
   });
 }
 
-/* ---------- Definición de Pestañas según Rol (Incluyendo los 6 Estados de Fase 2 y Cuentas por Cobrar) ---------- */
+/* ---------- Pestañas Limpias por Rol (Sin mezclar vistas de otros perfiles) ---------- */
 function getTabsForRole(role) {
-  const countDiag = db.ordenes.filter((o) => o.estado_actual === "diagnostico_presupuesto").length;
-  const countWait = db.ordenes.filter((o) => o.estado_actual === "esperando_aprobacion_abono").length;
-  const countExec = db.ordenes.filter((o) => o.estado_actual === "asignacion_ejecucion").length;
-  const countTerm = db.ordenes.filter((o) => o.estado_actual === "terminado").length;
-  const countQC   = db.ordenes.filter((o) => o.estado_actual === "control_calidad").length;
-  const countAR   = db.ordenes.filter((o) => Number(o.saldo_pendiente) > 0).length;
+  const countAR = db.ordenes.filter((o) => Number(o.saldo_pendiente) > 0).length;
 
   if (role === "tecnico") {
     const myTasks = db.subtareas.filter((s) => s.tecnico_id === currentUser.id_usuario && s.estado_subtarea !== "terminado").length;
     return [
-      { id: "worker_panel", label: "Mis Trabajos Asignados", icon: "fa-hammer", badge: myTasks },
-      { id: "worker_earnings", label: "Mis Ganancias Semanales", icon: "fa-wallet" },
-      { id: "attendance", label: "Mi Asistencia y Turno", icon: "fa-calendar-check" }
+      { id: "worker_panel", label: "Mis Trabajos", icon: "fa-hammer", badge: myTasks },
+      { id: "worker_earnings", label: "Mis Comisiones", icon: "fa-wallet" },
+      { id: "attendance", label: "Mi Asistencia", icon: "fa-calendar-check" }
     ];
   }
 
   if (role === "recepcion") {
     return [
-      { id: "pipeline", label: "Tablero 6 Estados (Kanban)", icon: "fa-columns", badge: db.ordenes.length },
-      { id: "step1_reception", label: "1. Diagnóstico / Presupuesto", icon: "fa-clipboard-list", badge: countDiag },
-      { id: "step2_approval", label: "2. Esperando Aprobación", icon: "fa-hand-holding-usd", badge: countWait },
-      { id: "accounts_receivable", label: "Cuentas por Cobrar (Resto)", icon: "fa-file-invoice-dollar", badge: countAR },
+      { id: "pipeline", label: "Tablero de Órdenes", icon: "fa-columns", badge: db.ordenes.length },
+      { id: "accounts_receivable", label: "Cuentas por Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
       { id: "clients_catalog", label: "Clientes y Precios", icon: "fa-address-book" }
     ];
   }
 
-  // Para Administrador (Moisés González) y Jefes de Taller (Jesús Andrade y Sr. Enrique)
+  // Administrador (Moisés) y Jefes de Taller (Jesús y Sr. Enrique): 5 módulos claros sin duplicados
   return [
-    { id: "pipeline", label: "Tablero Kanban (6 Estados)", icon: "fa-columns", badge: db.ordenes.length },
-    { id: "enrique_hub", label: "Modo Fácil Jefe de Taller", icon: "fa-th-large" },
-    { id: "accounts_receivable", label: "Cuentas por Cobrar (Resto)", icon: "fa-file-invoice-dollar", badge: countAR },
-    { id: "step3_assignment", label: "3. Asignación y Ejecución", icon: "fa-tasks", badge: countExec },
-    { id: "quality_control", label: "4 y 5. Terminado / Calidad", icon: "fa-shield-alt", badge: countTerm + countQC },
-    { id: "worker_panel", label: "Vista Móvil Técnicos", icon: "fa-mobile-alt" },
+    { id: "pipeline", label: "Tablero de Órdenes", icon: "fa-columns", badge: db.ordenes.length },
+    { id: "accounts_receivable", label: "Cuentas por Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
     { id: "commissions_hr", label: "Comisiones y Personal", icon: "fa-user-check" },
-    { id: "finances_ledger", label: "Libro Diario / Caja", icon: "fa-chart-pie" },
+    { id: "finances_ledger", label: "Libro Diario (Caja)", icon: "fa-chart-pie" },
     { id: "clients_catalog", label: "Clientes y Catálogo", icon: "fa-cogs" }
   ];
 }
 
 function navigateTab(tabId) {
   if (tabId === "default") {
-    tabId = currentUser && currentUser.id_usuario === "USR-ENRIQUE" ? "enrique_hub" : currentUser && currentUser.rol === "tecnico" ? "worker_panel" : "pipeline";
+    tabId = currentUser && currentUser.rol === "tecnico" ? "worker_panel" : "pipeline";
   }
   currentTab = tabId;
   renderApp();
@@ -1101,17 +1503,13 @@ function handleGlobalSearch(val) {
 function renderApp() {
   if (!currentUser) return;
 
-  document.getElementById("active-user-label").textContent = `${currentUser.nombre} (${currentUser.rol_label})`;
-  document.getElementById("header-subtitle-role").textContent = `${currentUser.rol_label} · ${currentUser.especialidad}`;
+  document.getElementById("active-user-label").textContent = currentUser.nombre;
+  document.getElementById("header-subtitle-role").textContent = currentUser.rol_label;
 
   const btnNewOrder = document.getElementById("btn-header-new-order");
-  const btnEnriqueMode = document.getElementById("btn-header-enrique-mode");
-  if (currentUser.rol === "tecnico") {
-    btnNewOrder.classList.add("hidden");
-    btnEnriqueMode.classList.add("hidden");
-  } else {
-    btnNewOrder.classList.remove("hidden");
-    btnEnriqueMode.classList.remove("hidden");
+  if (btnNewOrder) {
+    if (currentUser.rol === "tecnico") btnNewOrder.classList.add("hidden");
+    else btnNewOrder.classList.remove("hidden");
   }
 
   const tabs = getTabsForRole(currentUser.rol);
@@ -1129,13 +1527,12 @@ function renderApp() {
     .join("");
 
   const mobileNav = document.getElementById("mobile-bottom-nav");
-  const mobileTabs = tabs.slice(0, 5);
-  mobileNav.innerHTML = mobileTabs
+  mobileNav.innerHTML = tabs
     .map(
       (t) => `
       <button type="button" class="bottom-nav-item ${currentTab === t.id ? "active" : ""}" onclick="navigateTab('${t.id}')">
         <i class="fas ${t.icon}"></i>
-        <span>${t.label.replace(/^Paso \d:\s*|^\d\.\s*/i, "").slice(0, 12)}</span>
+        <span>${t.label.slice(0, 12)}</span>
       </button>
     `
     )
@@ -1364,34 +1761,34 @@ function renderPipelineScreen(forcedState) {
     `;
 
   return `
-    <!-- Flujo Visual de los 6 Estados de la Fase 2 -->
-    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 18px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+    <!-- Barra Superior Limpia del Tablero -->
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
       <div>
-        <div style="font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:1px; color:var(--renacer-navy);">
-          <i class="fas fa-project-diagram"></i> WORKFLOW / KANBAN OFICIAL DE 6 ESTADOS — FASE 1 Y FASE 2
-        </div>
-        <h2 style="font-size:16.5px; font-weight:900; margin-top:4px; line-height:1.35;">
-          [1. Diagnóstico / Presupuesto] ➔ [2. Esperando Aprobación] ➔ [3. Asignación y Ejecución] ➔ [4. Terminado] ➔ [5. Control de Calidad] ➔ [6. Entregado]
+        <h2 style="font-size:19px; font-weight:900; color:var(--text-main);">
+          Flujo Operativo del Taller
         </h2>
+        <p style="font-size:12.5px; color:var(--text-muted);">
+          Filtra las órdenes por etapa o selecciona una orden para gestionar su presupuesto, asignación o control de calidad.
+        </p>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button type="button" class="btn ${activeFilter === "all" ? "btn--primary" : "btn--ghost"}" onclick="setPhaseFilter('all')">
-          Ver Todas (${counts.all})
+          Todas (${counts.all})
         </button>
         <button type="button" class="btn btn--gold" onclick="openNewOrderModal()">
-          <i class="fas fa-plus"></i> Nueva Recepción (Estado 1)
+          <i class="fas fa-plus"></i> Nueva Orden
         </button>
       </div>
     </div>
 
-    <!-- Las 6 Tarjetas de Filtro de Estado (Workflow Fase 2) -->
+    <!-- Las 6 Etapas del Taller -->
     <div class="phase-stepper-banner-6">
       <div class="phase-step-card ${activeFilter === "diagnostico_presupuesto" ? "active-filter" : ""}" onclick="setPhaseFilter('diagnostico_presupuesto')">
         <div class="phase-step-left">
-          <div class="phase-step-num" style="background:rgba(99,102,241,0.16); color:#4f46e5;">1</div>
+          <div class="phase-step-num" style="background:rgba(99,102,241,0.16); color:#6366f1;">1</div>
           <div class="phase-step-info">
-            <h4>Diagnóstico / Presupuesto</h4>
-            <p>Ingreso, Fotos y Repuestos</p>
+            <h4>Diagnóstico</h4>
+            <p>Presupuesto inicial</p>
           </div>
         </div>
         <div class="phase-step-count">${counts.diagnostico_presupuesto}</div>
@@ -1399,10 +1796,10 @@ function renderPipelineScreen(forcedState) {
 
       <div class="phase-step-card ${activeFilter === "esperando_aprobacion_abono" ? "active-filter" : ""}" onclick="setPhaseFilter('esperando_aprobacion_abono')">
         <div class="phase-step-left">
-          <div class="phase-step-num" style="background:rgba(217,119,6,0.16); color:#d97706;">2</div>
+          <div class="phase-step-num" style="background:rgba(217,119,6,0.16); color:#f59e0b;">2</div>
           <div class="phase-step-info">
-            <h4>Esperando Aprobación</h4>
-            <p>Abono 50% o Taller Aliado</p>
+            <h4>Aprobación</h4>
+            <p>Abono o Crédito</p>
           </div>
         </div>
         <div class="phase-step-count">${counts.esperando_aprobacion_abono}</div>
@@ -1410,10 +1807,10 @@ function renderPipelineScreen(forcedState) {
 
       <div class="phase-step-card ${activeFilter === "asignacion_ejecucion" ? "active-filter" : ""}" onclick="setPhaseFilter('asignacion_ejecucion')">
         <div class="phase-step-left">
-          <div class="phase-step-num" style="background:rgba(2,132,199,0.16); color:#0284c7;">3</div>
+          <div class="phase-step-num" style="background:rgba(2,132,199,0.16); color:#38bdf8;">3</div>
           <div class="phase-step-info">
-            <h4>Asignación y Ejecución</h4>
-            <p>En Mesa Técnica Activa</p>
+            <h4>En Ejecución</h4>
+            <p>Trabajo en mesa</p>
           </div>
         </div>
         <div class="phase-step-count">${counts.asignacion_ejecucion}</div>
@@ -1421,10 +1818,10 @@ function renderPipelineScreen(forcedState) {
 
       <div class="phase-step-card ${activeFilter === "terminado" ? "active-filter" : ""}" onclick="setPhaseFilter('terminado')">
         <div class="phase-step-left">
-          <div class="phase-step-num" style="background:rgba(14,165,233,0.18); color:#0369a1;">4</div>
+          <div class="phase-step-num" style="background:rgba(14,165,233,0.18); color:#0ea5e9;">4</div>
           <div class="phase-step-info">
             <h4>Terminado</h4>
-            <p>Finalizado por Técnico</p>
+            <p>Listo para revisión</p>
           </div>
         </div>
         <div class="phase-step-count">${counts.terminado}</div>
@@ -1432,10 +1829,10 @@ function renderPipelineScreen(forcedState) {
 
       <div class="phase-step-card ${activeFilter === "control_calidad" ? "active-filter" : ""}" onclick="setPhaseFilter('control_calidad')">
         <div class="phase-step-left">
-          <div class="phase-step-num" style="background:rgba(139,92,246,0.16); color:#6d28d9;">5</div>
+          <div class="phase-step-num" style="background:rgba(139,92,246,0.16); color:#a78bfa;">5</div>
           <div class="phase-step-info">
-            <h4>Control de Calidad</h4>
-            <p>Tolerancia y Acabado</p>
+            <h4>Calidad</h4>
+            <p>Aprobar o devolver</p>
           </div>
         </div>
         <div class="phase-step-count">${counts.control_calidad}</div>
@@ -1443,10 +1840,10 @@ function renderPipelineScreen(forcedState) {
 
       <div class="phase-step-card ${activeFilter === "entregado" ? "active-filter" : ""}" onclick="setPhaseFilter('entregado')">
         <div class="phase-step-left">
-          <div class="phase-step-num" style="background:rgba(22,163,74,0.16); color:#16a34a;">6</div>
+          <div class="phase-step-num" style="background:rgba(22,163,74,0.16); color:#22c55e;">6</div>
           <div class="phase-step-info">
             <h4>Entregado</h4>
-            <p>Cierre y Factura Bloqueada</p>
+            <p>Factura cerrada</p>
           </div>
         </div>
         <div class="phase-step-count">${counts.entregado}</div>
@@ -1465,45 +1862,33 @@ function setPhaseFilter(filter) {
   renderApp();
 }
 
-/* ---------- 3. TARJETA DE ORDEN COMPLETA (FASE 1 + FASE 2) ---------- */
+/* ---------- 3. TARJETA DE ORDEN LIMPIA Y COMPACTA ---------- */
 function renderOrderCardTelegramStyle(order) {
-  const coverPhoto = (order.galeria_fotos_pieza && order.galeria_fotos_pieza[0]) || DEMO_PHOTOS.camaraCorsa;
   const countFotosPieza = (order.galeria_fotos_pieza || []).length;
   const countFotosRepuestos = (order.galeria_fotos_repuestos || []).length;
   const subtasks = db.subtareas.filter((s) => s.orden_id === order.id_orden);
   const chatMessages = db.bitacora.filter((m) => m.orden_id === order.id_orden);
-  const lastTwoMsgs = chatMessages.slice(-2);
 
   const isEntregado = order.estado_actual === "entregado" || Boolean(order.factura_bloqueada);
   const canManage = currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
 
   const stateMap = {
-    diagnostico_presupuesto: { label: "1. Diagnóstico / Presupuesto", cls: "state-badge--diag", icon: "fa-stethoscope" },
+    diagnostico_presupuesto: { label: "1. Diagnóstico", cls: "state-badge--diag", icon: "fa-stethoscope" },
     esperando_aprobacion_abono: { label: "2. Esperando Aprobación", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
-    asignacion_ejecucion: { label: "3. Asignación y Ejecución", cls: "state-badge--exec", icon: "fa-cogs" },
-    terminado: { label: "4. Terminado (En Revisión)", cls: "state-badge--term", icon: "fa-flag-checkered" },
+    asignacion_ejecucion: { label: "3. En Ejecución", cls: "state-badge--exec", icon: "fa-cogs" },
+    terminado: { label: "4. Terminado", cls: "state-badge--term", icon: "fa-flag-checkered" },
     control_calidad: { label: "5. Control de Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
-    entregado: { label: "6. Entregado (Cerrado)", cls: "state-badge--done", icon: "fa-lock" }
+    entregado: { label: "6. Entregado", cls: "state-badge--done", icon: "fa-lock" }
   };
   const st = stateMap[order.estado_actual] || stateMap.diagnostico_presupuesto;
 
-  const substateMap = {
-    pendiente: { label: "⏳ Pendiente por Empezar", cls: "substate-tag--pendiente" },
-    empezado:  { label: "🔨 Empezado (En Mesa)", cls: "substate-tag--empezado" },
-    pausado:   { label: "⏸️ Pausado (Esperando Repuesto)", cls: "substate-tag--pausado" },
-    terminado: { label: "✅ Finalizado con Foto", cls: "substate-tag--terminado" }
-  };
-  const subSt = substateMap[order.subestado_ejecucion || "pendiente"] || substateMap.pendiente;
-
   const finBadgeMap = {
-    pago_total: `<span style="font-size:11px; font-weight:800; color:#15803d; background:rgba(22,163,74,0.14); padding:3px 8px; border-radius:6px;">🟢 PAGO TOTAL 100%</span>`,
-    abono: `<span style="font-size:11px; font-weight:800; color:#b45309; background:rgba(217,119,6,0.16); padding:3px 8px; border-radius:6px;">🟡 ABONO ($${order.monto_abonado})</span>`,
-    credito: `<span style="font-size:11px; font-weight:800; color:#0284c7; background:rgba(2,132,199,0.16); padding:3px 8px; border-radius:6px;">🔵 EXCEPCIÓN / TALLER ALIADO</span>`,
-    pendiente_definir: `<span style="font-size:11px; font-weight:800; color:#dc2626; background:rgba(220,38,38,0.12); padding:3px 8px; border-radius:6px;">🔒 ESPERANDO ABONO / EXCEPCIÓN</span>`
+    pago_total: `<span style="font-size:11px; font-weight:800; color:#22c55e; background:rgba(22,163,74,0.14); padding:3px 8px; border-radius:6px;">Pago Total 100%</span>`,
+    abono: `<span style="font-size:11px; font-weight:800; color:#f59e0b; background:rgba(217,119,6,0.16); padding:3px 8px; border-radius:6px;">Abono ($${order.monto_abonado})</span>`,
+    credito: `<span style="font-size:11px; font-weight:800; color:#38bdf8; background:rgba(2,132,199,0.16); padding:3px 8px; border-radius:6px;">Taller Aliado / Crédito</span>`,
+    pendiente_definir: `<span style="font-size:11px; font-weight:800; color:#f87171; background:rgba(220,38,38,0.12); padding:3px 8px; border-radius:6px;">Sin Abono</span>`
   };
   const finBadge = finBadgeMap[order.tipo_condicion_pago] || finBadgeMap.pendiente_definir;
-
-  const isInvisibleToWorkers = order.estado_actual === "diagnostico_presupuesto" || order.estado_actual === "esperando_aprobacion_abono";
 
   const subtasksListHtml = subtasks
     .map((s) => {
@@ -1513,7 +1898,7 @@ function renderOrderCardTelegramStyle(order) {
           <div style="flex:1;">
             <strong>${statusIcon} ${s.descripcion_servicio}</strong>
             <div style="font-size:11px; color:var(--text-muted);">
-              Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong> · Comisión: <strong style="color:#16a34a;">$${s.comision_base_tecnico}</strong>
+              Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong>
             </div>
           </div>
           <div style="font-weight:900; font-size:12.5px;">$${s.monto_servicio}</div>
@@ -1522,60 +1907,55 @@ function renderOrderCardTelegramStyle(order) {
     })
     .join("");
 
-  // Botones de acción principal según el estado (1 a 6)
+  // Botón de acción principal según el estado (1 a 6)
   let primaryActionBtn = "";
   if (order.estado_actual === "diagnostico_presupuesto") {
     primaryActionBtn = `
       <button type="button" class="btn btn--gold" onclick="openFinancialApprovalModal('${order.id_orden}')">
-        <i class="fas fa-hand-holding-usd"></i> Pasar a 2. Esperando Aprobación
+        <i class="fas fa-hand-holding-usd"></i> Registrar Pago / Abono
       </button>
     `;
   } else if (order.estado_actual === "esperando_aprobacion_abono") {
     if (order.tipo_condicion_pago === "pendiente_definir") {
       primaryActionBtn = `
         <button type="button" class="btn btn--warning" onclick="openFinancialApprovalModal('${order.id_orden}')">
-          <i class="fas fa-unlock"></i> Registrar Abono 50% o Excepción Aliado
+          <i class="fas fa-unlock"></i> Aprobar Abono / Crédito
         </button>
       `;
     } else if (canManage) {
       primaryActionBtn = `
         <button type="button" class="btn btn--primary" onclick="openSubtaskAssignmentModal('${order.id_orden}')">
-          <i class="fas fa-user-check"></i> Pasar a 3. Asignar Técnicos
+          <i class="fas fa-user-check"></i> Asignar Técnicos
         </button>
       `;
     } else {
-      primaryActionBtn = `<span style="font-size:11.5px; font-weight:700; color:var(--text-muted);">Esperando asignación de Jefe de Taller</span>`;
+      primaryActionBtn = `<span style="font-size:11.5px; font-weight:700; color:var(--text-muted);">Por asignar</span>`;
     }
   } else if (order.estado_actual === "asignacion_ejecucion") {
     primaryActionBtn = `
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--primary" onclick="openSubtaskAssignmentModal('${order.id_orden}')">
-          <i class="fas fa-tasks"></i> Asignar / Técnicos
+        <button type="button" class="btn btn--ghost" style="padding:7px 10px;" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Cambiar asignación de técnicos">
+          <i class="fas fa-user-Cog"></i> Técnicos
         </button>
-        <button type="button" class="btn btn--success" onclick="moveOrderToTerminado('${order.id_orden}')" title="Marcar orden como 4. Terminado y enviar a revisión">
-          <i class="fas fa-flag-checkered"></i> Pasar a 4. Terminado
+        <button type="button" class="btn btn--success" onclick="moveOrderToTerminado('${order.id_orden}')">
+          <i class="fas fa-check"></i> Marcar Terminado
         </button>
       </div>
     `;
   } else if (order.estado_actual === "terminado") {
     primaryActionBtn = `
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--primary" onclick="moveOrderToQualityControl('${order.id_orden}')">
-          <i class="fas fa-shield-alt"></i> Pasar a 5. Control de Calidad
-        </button>
-        <button type="button" class="btn btn--success" onclick="openQualityAndDeliveryModal('${order.id_orden}')">
-          <i class="fas fa-check-double"></i> Evaluar Calidad Ahora
-        </button>
-      </div>
+      <button type="button" class="btn btn--primary" onclick="moveOrderToQualityControl('${order.id_orden}')">
+        <i class="fas fa-shield-alt"></i> Pasar a Calidad
+      </button>
     `;
   } else if (order.estado_actual === "control_calidad") {
     primaryActionBtn = `
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--danger" onclick="promptRejectQualityControl('${order.id_orden}')" title="Opción B: Rechazar y Devolver al Técnico">
-          ❌ Rechazar y Devolver
+        <button type="button" class="btn btn--danger" style="padding:7px 10px;" onclick="promptRejectQualityControl('${order.id_orden}')">
+          ❌ Devolver
         </button>
-        <button type="button" class="btn btn--success" onclick="openQualityAndDeliveryModal('${order.id_orden}')" title="Opción A: Aprobar y Pasar a Entregado">
-          ✔️ Aprobar y Pasar a Entregado
+        <button type="button" class="btn btn--success" style="padding:7px 11px;" onclick="openQualityAndDeliveryModal('${order.id_orden}')">
+          ✔️ Aprobar y Entregar
         </button>
       </div>
     `;
@@ -1583,124 +1963,91 @@ function renderOrderCardTelegramStyle(order) {
     if (order.saldo_pendiente > 0) {
       primaryActionBtn = `
         <button type="button" class="btn btn--warning" onclick="openCollectReceivableModal('${order.id_orden}')">
-          <i class="fas fa-hand-holding-dollar"></i> Cobrar Resto ($${Number(order.saldo_pendiente).toFixed(2)})
+          <i class="fas fa-dollar-sign"></i> Cobrar Resto ($${Number(order.saldo_pendiente).toFixed(2)})
         </button>
       `;
     } else {
-      primaryActionBtn = `<span class="state-badge state-badge--done"><i class="fas fa-lock"></i> ENTREGADA Y PAGADA</span>`;
+      primaryActionBtn = `<span class="state-badge state-badge--done"><i class="fas fa-lock"></i> Cerrada</span>`;
     }
   }
 
   return `
     <article class="renacer-order-card ${order.prioridad_alta || order.devuelto_calidad ? "priority-high" : ""}">
-      <!-- CABECERA FOTOGRÁFICA ESTILO TELEGRAM -->
-      <div class="order-card-photo-header" onclick="openDualGalleryInspector('${order.id_orden}')" title="Clic para abrir las 2 Galerías: Fotos del Estado de la Pieza y Fotos de Repuestos del Cliente">
-        <img src="${coverPhoto}" alt="Pieza Troquel #${order.codigo_troquel}" />
-        <div class="photo-header-overlay-top">
+      <!-- CABECERA LIMPIA SIN TEXTO SUPERPUESTO -->
+      <div class="clean-card-top-bar">
+        <div style="display:flex; align-items:center; gap:8px;">
           <span class="troquel-badge-lg">
-            <i class="fas fa-hashtag"></i> TROQUEL ${order.codigo_troquel}
+            #${order.codigo_troquel}
           </span>
-          ${
-            order.devuelto_calidad
-              ? `<span class="priority-fire-badge"><i class="fas fa-exclamation-triangle"></i> DEVUELTO POR CALIDAD</span>`
-              : order.prioridad_alta
-              ? `<span class="priority-fire-badge"><i class="fas fa-fire"></i> PRIORIDAD ALTA (100%)</span>`
-              : `<span style="background:rgba(15,23,42,0.82); color:#fff; font-size:11px; font-weight:800; padding:4px 9px; border-radius:8px;">${order.id_orden}</span>`
-          }
+          <span style="color:#cbd5e1; font-size:12px; font-weight:800;">${order.id_orden}</span>
         </div>
-        <div class="photo-header-overlay-bottom">
-          <div class="gallery-counter-pills">
-            <span class="gallery-pill">
-              <i class="fas fa-camera"></i> ${countFotosPieza} foto(s) pieza
-            </span>
-            <span class="gallery-pill gallery-pill--spares">
-              <i class="fas fa-toolbox"></i> ${countFotosRepuestos} foto(s) repuestos
-            </span>
-          </div>
-          <span style="color:#fff; font-size:11px; font-weight:700; text-decoration:underline;">
-            Ver Galerías <i class="fas fa-expand"></i>
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${order.prioridad_alta ? `<span class="priority-fire-badge" title="Pago Total 100%">🔥 Prioridad</span>` : ""}
+          <span class="state-badge ${st.cls}">
+            <i class="fas ${st.icon}"></i> ${st.label}
           </span>
         </div>
       </div>
 
       <!-- CUERPO DE LA ORDEN -->
       <div class="order-card-body">
-        <div class="order-status-row">
-          <span class="state-badge ${st.cls}">
-            <i class="fas ${st.icon}"></i> ${st.label}
-          </span>
+        ${
+          order.devuelto_calidad && order.motivo_rechazo_qc
+            ? `<div style="background:rgba(220,38,38,0.12); border:1px solid #dc2626; color:#f87171; padding:8px 10px; border-radius:10px; font-size:12px; font-weight:700;">
+                ❌ <strong>Devuelto por Calidad:</strong> ${order.motivo_rechazo_qc}
+              </div>`
+            : ""
+        }
+
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px;">
+          <div>
+            <h3 class="order-motor-title">${order.datos_motor.marca} ${order.datos_motor.modelo}</h3>
+            <div style="font-size:12px; color:var(--text-muted); font-weight:600; margin-top:2px;">
+              ${order.datos_motor.tipo_pieza}
+            </div>
+          </div>
           ${finBadge}
         </div>
 
-        ${
-          order.devuelto_calidad && order.motivo_rechazo_qc
-            ? `<div style="background:rgba(220,38,38,0.12); border:1.5px solid #dc2626; color:#dc2626; padding:8px 10px; border-radius:10px; font-size:12px; font-weight:800;">
-                ❌ <strong>RECHAZADO EN CONTROL DE CALIDAD:</strong> ${order.motivo_rechazo_qc}
-              </div>`
-            : ""
-        }
-
-        ${
-          order.estado_actual === "asignacion_ejecucion"
-            ? `<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap;">
-                <span class="substate-tag ${subSt.cls}">${subSt.label}</span>
-                <span style="font-size:11.5px; font-weight:800; color:var(--text-muted);">
-                  <i class="fas fa-stopwatch"></i> Tiempo Neto: <strong>${formatMinutes(order.tiempo_neto_minutos)}</strong>
-                </span>
-              </div>`
-            : ""
-        }
-
-        ${
-          isInvisibleToWorkers
-            ? `<div style="font-size:11px; font-weight:700; color:#b45309; background:rgba(245,158,11,0.1); padding:6px 10px; border-radius:8px; border:1px dashed rgba(245,158,11,0.4);">
-                <i class="fas fa-eye-slash"></i> <strong>Oculta a Técnicos:</strong> Ningún técnico la ve hasta pasar a 3. Asignación y Ejecución.
-              </div>`
-            : ""
-        }
-
-        <div>
-          <h3 class="order-motor-title">${order.datos_motor.tipo_pieza} — ${order.datos_motor.marca} ${order.datos_motor.modelo}</h3>
-          <div class="order-client-line" style="margin-top:4px;">
-            <span><i class="fas fa-id-card"></i> <strong>${order.documento_cliente}</strong></span>
-            <span>·</span>
-            <span><i class="fas fa-user"></i> <strong>${order.nombre_cliente}</strong></span>
-            <span>·</span>
-            <a href="tel:${order.telefono_cliente}" style="color:var(--renacer-navy); font-weight:800; text-decoration:none;" title="Llamar al cliente">
-              <i class="fas fa-phone"></i> ${order.telefono_cliente}
-            </a>
-          </div>
+        <div class="order-client-line">
+          <span><i class="fas fa-user"></i> <strong>${order.nombre_cliente}</strong></span>
+          <span>·</span>
+          <span>${order.documento_cliente}</span>
+          <span>·</span>
+          <a href="tel:${order.telefono_cliente}" style="color:var(--text-secondary); font-weight:700; text-decoration:none;">
+            <i class="fas fa-phone"></i> ${order.telefono_cliente}
+          </a>
         </div>
 
-        <!-- Tira Financiera + Botón de Envío de Presupuesto por Texto WhatsApp -->
+        <!-- Resumen Financiero -->
         <div class="order-finance-strip">
           <div class="finance-cell">
-            <span>Total Factura</span>
+            <span>Total</span>
             <strong>$${Number(order.monto_total).toFixed(2)}</strong>
           </div>
           <div class="finance-cell">
             <span>Abonado</span>
-            <strong style="color:#16a34a;">$${Number(order.monto_abonado).toFixed(2)}</strong>
+            <strong style="color:#22c55e;">$${Number(order.monto_abonado).toFixed(2)}</strong>
           </div>
           <div class="finance-cell">
-            <span>Resto Pendiente</span>
-            <strong style="color:${order.saldo_pendiente > 0 ? "#dc2626" : "#16a34a"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
+            <span>Resto</span>
+            <strong style="color:${order.saldo_pendiente > 0 ? "#f87171" : "#22c55e"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
           </div>
         </div>
 
-        <!-- MÓDULO DE FACTURA DINÁMICA (PRESUPUESTO ABIERTO HASTA ANTES DE ENTREGADO) -->
+        <!-- Servicios / Factura Dinámica -->
         <div>
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
-            <span style="font-size:11px; font-weight:900; text-transform:uppercase; color:var(--text-muted);">
-              ${isEntregado ? "🔒 Factura Bloqueada (" + subtasks.length + " ítems)" : "🔓 Factura Dinámica Abierta (" + subtasks.length + " ítems)"}
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-muted);">
+              ${isEntregado ? "🔒 Factura Cerrada" : "Servicios (" + subtasks.length + ")"}
             </span>
             ${
               !isEntregado && canManage
-                ? `<div style="display:flex; gap:6px;">
-                    <button type="button" class="btn btn--gold" style="padding:4px 9px; font-size:11px; border-radius:8px;" onclick="openQuickExtraItemModal('${order.id_orden}')">
-                      <i class="fas fa-plus"></i> + Agregar Ítem Extra
+                ? `<div style="display:flex; gap:5px;">
+                    <button type="button" class="btn btn--gold" style="padding:3px 8px; font-size:11px; border-radius:7px;" onclick="openQuickExtraItemModal('${order.id_orden}')">
+                      + Ítem Extra
                     </button>
-                    <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; border-radius:8px;" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar precios o abonos">
+                    <button type="button" class="btn btn--ghost" style="padding:3px 7px; font-size:11px; border-radius:7px;" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar presupuesto">
                       <i class="fas fa-pen"></i>
                     </button>
                   </div>`
@@ -1711,56 +2058,19 @@ function renderOrderCardTelegramStyle(order) {
             ${subtasksListHtml}
           </div>
         </div>
-
-        <!-- BITÁCORA Y CHAT INTERNO INTEGRADO EN LA TARJETA (FASE 2 PUNTO 4) -->
-        <div class="inline-chat-box">
-          <div style="display:flex; align-items:center; justify-content:space-between;">
-            <span style="font-size:11px; font-weight:900; color:var(--renacer-navy);">
-              <i class="fas fa-comments"></i> Bitácora y Chat Interno (${chatMessages.length})
-            </span>
-            <button type="button" onclick="openOrderCrmModal('${order.id_orden}')" style="border:none; background:none; color:#0284c7; font-size:11px; font-weight:800; cursor:pointer;">
-              Abrir Chat Completo / Subir Foto <i class="fas fa-external-link-alt"></i>
-            </button>
-          </div>
-          <div class="inline-chat-messages">
-            ${
-              lastTwoMsgs.length
-                ? lastTwoMsgs
-                    .map(
-                      (m) => `
-                      <div class="inline-chat-item">
-                        <strong>${m.autor_nombre}:</strong> ${m.mensaje}
-                        ${m.foto_adjunta_url ? `<span style="color:#16a34a; font-weight:800; margin-left:4px;">[📸 Foto adjunta]</span>` : ""}
-                      </div>
-                    `
-                    )
-                    .join("")
-                : `<div style="color:var(--text-muted);">Sin novedades registradas aún.</div>`
-            }
-          </div>
-          <div style="display:flex; gap:6px;">
-            <input
-              type="text"
-              id="quick-chat-input-${order.id_orden}"
-              placeholder="Escribir novedad rápida al chat de la orden..."
-              style="flex:1; padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); font-size:12px; background:var(--bg-card); color:var(--text-main);"
-              onkeypress="if(event.key==='Enter') sendQuickInlineChatMessage('${order.id_orden}')"
-            />
-            <button type="button" class="btn btn--ghost" style="padding:6px 9px;" onclick="openOrderCrmModal('${order.id_orden}')" title="Adjuntar foto de anomalía">
-              <i class="fas fa-camera"></i>
-            </button>
-            <button type="button" class="btn btn--primary" style="padding:6px 10px; font-size:11.5px;" onclick="sendQuickInlineChatMessage('${order.id_orden}')">
-              Enviar
-            </button>
-          </div>
-        </div>
       </div>
 
-      <!-- PIE DE ACCIONES DE LA TARJETA -->
+      <!-- PIE DE ACCIONES LIMPIO -->
       <div class="order-card-footer">
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--ghost" style="border-color:#16a34a; color:#15803d;" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar texto con el presupuesto, Nro. de Orden y Troquel por WhatsApp al cliente">
-            <i class="fab fa-whatsapp"></i> Presupuesto WhatsApp
+          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px;" onclick="openDualGalleryInspector('${order.id_orden}')" title="Ver fotos de la pieza y repuestos">
+            <i class="fas fa-camera"></i> ${countFotosPieza + countFotosRepuestos}
+          </button>
+          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px;" onclick="openOrderCrmModal('${order.id_orden}')" title="Abrir bitácora y chat de la orden">
+            <i class="fas fa-comments"></i> ${chatMessages.length}
+          </button>
+          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar presupuesto por WhatsApp">
+            <i class="fab fa-whatsapp"></i>
           </button>
         </div>
         <div>
@@ -1886,8 +2196,8 @@ let tempNewOrderState = {
 function openNewOrderModal() {
   tempNewOrderState = {
     clienteEncontradoId: null,
-    galeriaPieza: [DEMO_PHOTOS.camaraCorsa],
-    galeriaRepuestos: [DEMO_PHOTOS.repuestosCliente],
+    galeriaPieza: [],
+    galeriaRepuestos: [],
     itemsPresupuesto: [
       { id_temp: "T1", descripcion: "Lavado Químico y Descarbonizado", monto: 20, comision: 6 },
       { id_temp: "T2", descripcion: "Aplanado / Cepillado de Superficie", monto: 35, comision: 12 }
@@ -3684,36 +3994,24 @@ function renderAccountsReceivableScreen() {
     : `<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">No hay saldos pendientes que coincidan con el filtro seleccionado.</td></tr>`;
 
   return `
-    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
-      <div>
-        <span style="font-size:11px; font-weight:900; color:#dc2626; text-transform:uppercase;">
-          RELACIÓN DE SALDOS PENDIENTES · CUENTAS POR COBRAR (SUMA DE RESTO)
-        </span>
-        <h2 style="font-size:21px; font-weight:900;">Control de Cuentas por Cobrar por Cliente, Troquel y Estado</h2>
-        <p style="font-size:13px; color:var(--text-muted);">
-          Filtra qué piezas están <strong>En espera por respuesta</strong>, <strong>En Taller</strong> o ya fueron <strong>Entregadas y están Por Cobrar</strong> (Talleres Aliados / Crédito), o filtra por un mecánico e intervalo de fechas.
-        </p>
-      </div>
-    </div>
-
     <!-- Tarjetas de Resumen Rápido (Clic para filtrar) -->
     <div class="kpi-strip">
-      <div class="kpi-card" style="cursor:pointer; border:${arFilterState === "all" ? "2px solid var(--renacer-navy)" : ""};" onclick="setArFilter('state', 'all')">
+      <div class="kpi-card ${arFilterState === "all" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'all')">
         <span class="kpi-label">Total General por Cobrar</span>
         <div class="kpi-value" style="color:#dc2626;">$${sumAllPending.toFixed(2)}</div>
         <span class="kpi-sub">${allPendingOrders.length} pieza(s) con saldo abierto</span>
       </div>
-      <div class="kpi-card" style="cursor:pointer; border:${arFilterState === "entregadas_por_cobrar" ? "2px solid #16a34a" : ""};" onclick="setArFilter('state', 'entregadas_por_cobrar')">
+      <div class="kpi-card ${arFilterState === "entregadas_por_cobrar" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'entregadas_por_cobrar')">
         <span class="kpi-label">📦 Entregadas y Por Cobrar</span>
         <div class="kpi-value" style="color:#b45309;">$${sumEntregadasPorCobrar.toFixed(2)}</div>
-        <span class="kpi-sub">Piezas ya retiradas a crédito</span>
+        <span class="kpi-sub">Piezas retiradas a crédito</span>
       </div>
-      <div class="kpi-card" style="cursor:pointer; border:${arFilterState === "en_espera_respuesta" ? "2px solid #d97706" : ""};" onclick="setArFilter('state', 'en_espera_respuesta')">
+      <div class="kpi-card ${arFilterState === "en_espera_respuesta" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'en_espera_respuesta')">
         <span class="kpi-label">⏳ En Espera por Respuesta</span>
         <div class="kpi-value" style="color:#d97706;">$${sumEnEsperaRespuesta.toFixed(2)}</div>
-        <span class="kpi-sub">Igual al filtro de tu Excel ($190.00)</span>
+        <span class="kpi-sub">Presupuestos por confirmar</span>
       </div>
-      <div class="kpi-card" style="cursor:pointer; border:${arFilterState === "en_taller" ? "2px solid #0284c7" : ""};" onclick="setArFilter('state', 'en_taller')">
+      <div class="kpi-card ${arFilterState === "en_taller" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'en_taller')">
         <span class="kpi-label">🔨 En Taller (Ejecución / QC)</span>
         <div class="kpi-value" style="color:#0284c7;">$${sumEnTaller.toFixed(2)}</div>
         <span class="kpi-sub">Resto por liquidar al entregar</span>
@@ -4107,26 +4405,24 @@ function renderWorkerPanelScreen() {
     `;
 
   return `
-    ${workerSelectorBar}
-
-    <div class="enrique-hero-box" style="margin-bottom:18px;">
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:16px 20px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px;">
       <div>
         <span style="background:var(--renacer-gold); color:#0f1638; font-weight:900; font-size:11px; padding:3px 10px; border-radius:99px;">
-          PANEL MÓVIL DEL TÉCNICO · ${workerObj.nombre.toUpperCase()}
+          MESA DE TRABAJO · ${workerObj.nombre.toUpperCase()}
         </span>
-        <h2 style="font-size:22px; font-weight:900; margin-top:6px;">Mis Trabajos Asignados y Reloj Neto</h2>
-        <p style="font-size:13px; color:#cbd5e1;">
-          Marca <strong>Empezado</strong> al iniciar en máquina, <strong>Pausado</strong> si esperas un repuesto, y <strong>Terminado</strong> subiendo la foto final para enviar la pieza a <strong>4. Terminado</strong>.
+        <h2 style="font-size:20px; font-weight:900; margin-top:6px;">Mis Trabajos Asignados</h2>
+        <p style="font-size:12.5px; color:var(--text-muted);">
+          Marca <strong>Empezado</strong> al iniciar en máquina, <strong>Pausado</strong> si esperas un repuesto, y <strong>Terminado</strong> al finalizar para enviar a revisión.
         </p>
       </div>
-      <div style="display:flex; gap:14px; flex-wrap:wrap;">
-        <div style="background:rgba(22,163,74,0.22); border:1px solid rgba(34,197,94,0.5); padding:10px 16px; border-radius:14px; text-align:right;">
-          <span style="font-size:10.5px; font-weight:800; color:#bbf7d0; display:block;">GANADO ESTA SEMANA (TERMINADOS)</span>
-          <strong style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:900; color:#4ade80;">$${earnedCompleted.toFixed(2)}</strong>
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <div style="background:rgba(22,163,74,0.12); border:1px solid rgba(34,197,94,0.35); padding:10px 16px; border-radius:12px; text-align:right;">
+          <span style="font-size:10px; font-weight:800; color:var(--text-muted); display:block;">GANADO ESTA SEMANA</span>
+          <strong style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#16a34a;">$${earnedCompleted.toFixed(2)}</strong>
         </div>
-        <div style="background:rgba(245,196,0,0.18); border:1px solid rgba(245,196,0,0.45); padding:10px 16px; border-radius:14px; text-align:right;">
-          <span style="font-size:10.5px; font-weight:800; color:#fde68a; display:block;">POR GANAR EN MESA</span>
-          <strong style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:900; color:var(--renacer-gold);">$${pendingToEarn.toFixed(2)}</strong>
+        <div style="background:rgba(245,196,0,0.12); border:1px solid rgba(245,196,0,0.35); padding:10px 16px; border-radius:12px; text-align:right;">
+          <span style="font-size:10px; font-weight:800; color:var(--text-muted); display:block;">POR GANAR EN MESA</span>
+          <strong style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#d97706;">$${pendingToEarn.toFixed(2)}</strong>
         </div>
       </div>
     </div>
@@ -5118,4 +5414,7 @@ window.addEventListener("DOMContentLoaded", () => {
       quickLoginAs(savedUserId);
     }
   }
+
+  // Sincronización automática directa con el Google Sheets vinculado
+  syncFromGoogleSheets(true);
 });
