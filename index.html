@@ -2,7 +2,7 @@
 <html lang="es" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#182254" />
   <meta name="description" content="Sistema Integral de Recepción, Diagnóstico, Presupuesto, Asignación por Subtareas, Control de Calidad y Comisiones — Rectificadora Renacer (Job 8:7)." />
   <link rel="manifest" href="./manifest.webmanifest" />
@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <link rel="stylesheet" href="./styles.css?v=6" />
+  <link rel="stylesheet" href="./styles.css?v=7" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -106,59 +106,65 @@
 
     <!-- ==================== ÁREA DE TRABAJO PRINCIPAL ==================== -->
     <section id="workspace" class="hidden">
-      <!-- HEADER STICKY INDUSTRIAL -->
+      <!-- HEADER STICKY INDUSTRIAL RESPONSIVO -->
       <header class="renacer-main-header">
-        <a class="renacer-header-brand" onclick="navigateTab('default')">
-          <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="renacer-brand-logo" />
-          <div>
-            <div class="renacer-brand-title">
-              RECTIFICADORA RENACER
-              <span class="job-pill">JOB 8:7</span>
+        <div class="renacer-header-top">
+          <a class="renacer-header-brand" onclick="navigateTab('default')">
+            <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="renacer-brand-logo" />
+            <div class="renacer-brand-text">
+              <div class="renacer-brand-title">
+                <span>RENACER</span>
+                <span class="job-pill">JOB 8:7</span>
+              </div>
+              <div class="renacer-brand-sub" id="header-subtitle-role">
+                Control de Ingreso, Troquel, Presupuesto y Asignación
+              </div>
             </div>
-            <div class="renacer-brand-sub" id="header-subtitle-role">
-              Control de Ingreso, Troquel, Presupuesto y Asignación
-            </div>
-          </div>
-        </a>
+          </a>
 
-        <!-- Buscador Rápido por Troquel / Cédula / Cliente -->
-        <div style="flex:1; max-width:340px; min-width:190px; position:relative;">
-          <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:#94a3b8; font-size:13px;"></i>
-          <input
-            type="search"
-            id="global-search-input"
-            placeholder="Buscar Troquel (#5017), Cédula/RIF o Cliente..."
-            oninput="handleGlobalSearch(this.value)"
-            style="width:100%; padding:8px 12px 8px 34px; border-radius:999px; border:1px solid rgba(245,223,0,0.4); background:rgba(15,23,42,0.75); color:#ffffff; font-size:12.5px; font-weight:600; outline:none;"
-          />
+          <!-- Selector Rápido de Usuario & Logout -->
+          <div class="renacer-header-user-zone">
+            <div class="user-role-pill" onclick="openSwitchUserModal()" title="Cambiar de usuario">
+              <span class="role-dot"></span>
+              <i class="fas fa-user"></i>
+              <span id="active-user-label">Jesús Andrade</span>
+              <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
+            </div>
+
+            <button type="button" class="control-btn-circle" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
+              <i class="fas fa-moon" id="theme-icon"></i>
+            </button>
+
+            <button type="button" class="control-btn-circle" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Cerrar sesión">
+              <i class="fas fa-power-off"></i>
+            </button>
+          </div>
         </div>
 
-        <div class="renacer-header-controls">
-          <button type="button" id="btn-header-new-order" class="header-action-btn header-action-btn--gold" onclick="openNewOrderModal()">
-            <i class="fas fa-plus-circle"></i>
-            <span>Nueva Orden</span>
-          </button>
-
-          <button type="button" id="btn-header-cloud-sync" class="header-action-btn" style="background:rgba(22,163,74,0.18); color:#86efac; border:1px solid rgba(34,197,94,0.55);" onclick="openCloudSyncModal()" title="Sincronización con Google Sheets">
-            <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
-            <span id="cloud-sync-badge-label">Sheets</span>
-          </button>
-
-          <button type="button" class="control-btn-circle" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
-            <i class="fas fa-moon" id="theme-icon"></i>
-          </button>
-
-          <!-- Selector Rápido de Usuario -->
-          <div class="user-role-pill" onclick="openSwitchUserModal()" title="Cambiar de usuario">
-            <span class="role-dot"></span>
-            <i class="fas fa-user"></i>
-            <span id="active-user-label">Jesús Andrade</span>
-            <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
+        <!-- Fila de Acciones y Buscador -->
+        <div class="renacer-header-actions-row">
+          <div class="renacer-header-search">
+            <i class="fas fa-search search-icon"></i>
+            <input
+              type="search"
+              id="global-search-input"
+              class="renacer-search-input"
+              placeholder="Buscar Troquel (#5017), Cédula/RIF o Cliente..."
+              oninput="handleGlobalSearch(this.value)"
+            />
           </div>
 
-          <button type="button" class="control-btn-circle" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Cerrar sesión">
-            <i class="fas fa-power-off"></i>
-          </button>
+          <div class="renacer-header-buttons">
+            <button type="button" id="btn-header-new-order" class="header-action-btn header-action-btn--gold" onclick="openNewOrderModal()">
+              <i class="fas fa-plus-circle"></i>
+              <span>Nueva Orden</span>
+            </button>
+
+            <button type="button" id="btn-header-cloud-sync" class="header-action-btn" style="background:rgba(22,163,74,0.18); color:#86efac; border:1px solid rgba(34,197,94,0.55);" onclick="openCloudSyncModal()" title="Sincronización con Google Sheets">
+              <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
+              <span id="cloud-sync-badge-label">Sheets</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -178,7 +184,7 @@
 
   </div>
 
-  <script src="./app.js?v=6"></script>
+  <script src="./app.js?v=7"></script>
 </body>
 </html>
 
