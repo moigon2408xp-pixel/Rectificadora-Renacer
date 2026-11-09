@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./styles.css?v=4" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -69,7 +69,7 @@
                 </div>
                 <div class="profile-quick-info">
                   <strong>Sr. Enrique Andrade</strong>
-                  <span>Jefe de Taller · Modo Fácil y Cobranzas</span>
+                  <span>Jefe de Taller · Control y Cobranzas</span>
                 </div>
               </button>
 
@@ -89,7 +89,7 @@
                 </div>
                 <div class="profile-quick-info">
                   <strong>Heiber (Técnico)</strong>
-                  <span>Panel Móvil · Mis Trabajos y Fotos</span>
+                  <span>Técnico Rectificador · Mis Trabajos y Fotos</span>
                 </div>
               </button>
             </div>
@@ -168,27 +168,27 @@
         <div class="renacer-header-controls">
           <button type="button" id="btn-header-new-order" class="header-action-btn header-action-btn--gold" onclick="openNewOrderModal()">
             <i class="fas fa-plus-circle"></i>
-            <span>Nueva Recepción (Paso 1)</span>
+            <span>Nueva Orden</span>
           </button>
 
-          <button type="button" id="btn-header-enrique-mode" class="header-action-btn header-action-btn--enrique" onclick="navigateTab('enrique_hub')" title="Menú Visual de Botones Gigantes para Jefe de Taller">
-            <i class="fas fa-th-large"></i>
-            <span>Modo Fácil Jefe Taller</span>
+          <button type="button" id="btn-header-cloud-sync" class="header-action-btn" style="background:rgba(22,163,74,0.18); color:#86efac; border:1px solid rgba(34,197,94,0.55);" onclick="openCloudSyncModal()" title="Sincronización con Google Sheets">
+            <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
+            <span id="cloud-sync-badge-label">Sheets</span>
           </button>
 
           <button type="button" class="control-btn-circle" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
             <i class="fas fa-moon" id="theme-icon"></i>
           </button>
 
-          <!-- Selector Rápido de Rol Activo (Cambio en Vivo) -->
-          <div class="user-role-pill" onclick="openSwitchUserModal()" title="Clic para cambiar de usuario / vista en vivo">
+          <!-- Selector Rápido de Usuario -->
+          <div class="user-role-pill" onclick="openSwitchUserModal()" title="Cambiar de usuario">
             <span class="role-dot"></span>
-            <i class="fas fa-user-shield"></i>
+            <i class="fas fa-user"></i>
             <span id="active-user-label">Jesús Andrade</span>
             <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
           </div>
 
-          <button type="button" class="control-btn-circle" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Salir a pantalla de inicio">
+          <button type="button" class="control-btn-circle" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Cerrar sesión">
             <i class="fas fa-power-off"></i>
           </button>
         </div>
@@ -210,7 +210,7 @@
 
   </div>
 
-  <script src="./app.js"></script>
+  <script src="./app.js?v=4"></script>
 </body>
 </html>
 
