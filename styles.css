@@ -120,6 +120,105 @@ body {
   left: -100px;
 }
 
+.login-card-clean {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 440px;
+  background: rgba(15, 22, 56, 0.88);
+  border: 1.5px solid rgba(245, 223, 0, 0.35);
+  border-radius: 26px;
+  padding: 34px 28px;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: modalFadeIn 0.25s ease-out;
+}
+
+.login-clean-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.login-clean-title {
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+  color: #ffffff;
+  margin-top: 10px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.login-clean-sub {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 700;
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.login-clean-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.login-input-wrap input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  background: rgba(15, 23, 42, 0.9);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  outline: none;
+  transition: all 0.16s ease;
+}
+
+.login-input-wrap input:focus {
+  border-color: var(--renacer-gold);
+  box-shadow: 0 0 0 3px rgba(245, 223, 0, 0.2);
+}
+
+.btn-clean-link {
+  background: none;
+  border: none;
+  color: var(--renacer-gold);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+}
+
+.btn-clean-link:hover {
+  text-decoration: underline;
+}
+
+.login-resume-banner {
+  background: rgba(245, 223, 0, 0.12);
+  border: 1px solid rgba(245, 223, 0, 0.4);
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
 .login-container {
   position: relative;
   z-index: 1;
