@@ -142,11 +142,11 @@ function getInitialDatabase() {
     usuarios: [
       {
         id_usuario: "USR-MOISES",
-        nombre: "Moisés González",
+        nombre: "Moises Gonzalez",
         rol: "admin",
         rol_label: "Administrador del Sistema",
-        especialidad: "Control Total, Auditoría, Finanzas y Pruebas de Flujo (Fases 1 y 2)",
-        pin: "123456",
+        especialidad: "Dirección General, Control Total y Auditoría del Taller",
+        pin: "240804",
         telefono: "0414-0000000",
         activo: true,
         modalidad_horario: "Acceso Total Administrador"
@@ -817,6 +817,21 @@ let tempNewOrder = {
 };
 
 function normalizeDatabaseSchema(d) {
+  if (!Array.isArray(d.usuarios) || d.usuarios.length === 0) {
+    d.usuarios = getInitialDatabase().usuarios;
+  } else {
+    // Asegurar usuario Moises Gonzalez con nombre sin acentos y PIN 240804
+    const moises = d.usuarios.find(
+      (u) => u.id_usuario === "USR-MOISES" || (u.nombre && u.nombre.toLowerCase().includes("moises"))
+    );
+    if (moises) {
+      moises.nombre = "Moises Gonzalez";
+      moises.pin = "240804";
+      moises.rol = "admin";
+      moises.rol_label = "Administrador del Sistema";
+    }
+  }
+
   if (!d.config_taller) {
     d.config_taller = {
       control_calidad_activo: !(d.config && d.config.qcStandbyMode),
@@ -1522,14 +1537,72 @@ function updateThemeIcon(theme) {
   }
 }
 
-/* ---------- Autenticación y Cambio Rápido de Perfiles ---------- */
+/* ---------- Autenticación Limpia y Manejo de Sesión ---------- */
+function normalizeLoginString(str) {
+  return String(str || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function populateLoginSelect() {
-  const sel = document.getElementById("login-user-select");
-  if (!sel) return;
-  sel.innerHTML = db.usuarios
-    .filter((u) => u.activo)
-    .map((u) => `<option value="${u.id_usuario}">${u.nombre} — ${u.rol_label}</option>`)
-    .join("");
+  const dl = document.getElementById("login-users-datalist");
+  if (dl && Array.isArray(db.usuarios)) {
+    dl.innerHTML = db.usuarios
+      .filter((u) => u.activo !== false)
+      .map((u) => `<option value="${u.nombre}">`)
+      .join("");
+  }
+
+  // Prellenar nombre con el usuario guardado o Moises Gonzalez por defecto
+  const userInput = document.getElementById("login-username-input");
+  if (userInput && !userInput.value) {
+    const remembered = localStorage.getItem("RENACER_REMEMBERED_USER") || "Moises Gonzalez";
+    userInput.value = remembered;
+  }
+
+  // Alerta de sesión anterior
+  const savedUserId = localStorage.getItem(SESSION_KEY);
+  const resumeBanner = document.getElementById("login-resume-banner");
+  const resumeName = document.getElementById("login-resume-name");
+  if (savedUserId && resumeBanner && resumeName) {
+    const u = db.usuarios.find((x) => x.id_usuario === savedUserId);
+    if (u) {
+      resumeName.textContent = u.nombre;
+      resumeBanner.classList.remove("hidden");
+    } else {
+      resumeBanner.classList.add("hidden");
+    }
+  } else if (resumeBanner) {
+    resumeBanner.classList.add("hidden");
+  }
+}
+
+function toggleLoginPinVisibility() {
+  const inp = document.getElementById("login-pin-input");
+  const icon = document.getElementById("login-pin-eye-icon");
+  const text = document.getElementById("login-pin-eye-text");
+  if (!inp) return;
+  if (inp.type === "password") {
+    inp.type = "text";
+    if (icon) icon.className = "fas fa-eye-slash";
+    if (text) text.textContent = "Ocultar";
+  } else {
+    inp.type = "password";
+    if (icon) icon.className = "fas fa-eye";
+    if (text) text.textContent = "Ver";
+  }
+}
+
+function resumePreviousSession() {
+  const savedUserId = localStorage.getItem(SESSION_KEY);
+  if (!savedUserId) return;
+  const user = db.usuarios.find((u) => u.id_usuario === savedUserId);
+  if (user) {
+    loginSuccess(user);
+  }
 }
 
 function quickLoginAs(userId) {
@@ -1539,15 +1612,57 @@ function quickLoginAs(userId) {
 }
 
 function handleManualLogin(e) {
-  e.preventDefault();
-  const userId = document.getElementById("login-user-select").value;
-  const pin = document.getElementById("login-pin-input").value.trim();
-  const user = db.usuarios.find((u) => u.id_usuario === userId);
-  if (!user) return;
-  if (user.pin && pin !== user.pin && pin !== "123456") {
-    Swal.fire("PIN Incorrecto", `Para pruebas rápidas usa el PIN ${user.pin} o toca una tarjeta de Acceso Rápido.`, "error");
+  if (e && e.preventDefault) e.preventDefault();
+  const rawInput = (document.getElementById("login-username-input")?.value || "").trim();
+  const normInput = normalizeLoginString(rawInput);
+  const pinInput = (document.getElementById("login-pin-input")?.value || "").trim();
+
+  if (!rawInput) {
+    showToast("Ingresa tu nombre de usuario (ej. Moises Gonzalez).", "error");
     return;
   }
+
+  // Buscar usuario de forma flexible (coincidencia exacta sin acentos, o por ID, o primer nombre)
+  let user = db.usuarios.find((u) => normalizeLoginString(u.nombre) === normInput);
+  if (!user) {
+    user = db.usuarios.find((u) => normalizeLoginString(u.id_usuario) === normInput);
+  }
+  if (!user && normInput.length >= 3) {
+    user = db.usuarios.find((u) => normalizeLoginString(u.nombre).startsWith(normInput));
+  }
+  if (!user && (normInput === "admin" || normInput === "administrador")) {
+    user = db.usuarios.find((u) => u.rol === "admin" || u.id_usuario === "USR-MOISES");
+  }
+
+  if (!user) {
+    Swal.fire({
+      title: "Usuario No Encontrado",
+      text: `No se encontró el usuario "${rawInput}". Ingresa tu nombre tal como está registrado (ej. Moises Gonzalez).`,
+      icon: "error",
+      confirmButtonColor: "#182254"
+    });
+    return;
+  }
+
+  // Validar PIN
+  const expectedPin = String(user.pin || "").trim();
+  const isMasterAdminPin = (pinInput === "240804");
+  if (expectedPin && pinInput !== expectedPin && !isMasterAdminPin && pinInput !== "123456") {
+    Swal.fire({
+      title: "PIN Incorrecto",
+      text: `La contraseña numérica no coincide para ${user.nombre}. Por favor verifica tu PIN.`,
+      icon: "error",
+      confirmButtonColor: "#182254"
+    });
+    return;
+  }
+
+  // Recordar usuario en este navegador
+  const rememberMe = document.getElementById("login-remember-me")?.checked;
+  if (rememberMe) {
+    localStorage.setItem("RENACER_REMEMBERED_USER", user.nombre);
+  }
+
   loginSuccess(user);
 }
 
@@ -1593,6 +1708,8 @@ function logout() {
   localStorage.removeItem(SESSION_KEY);
   document.getElementById("workspace").classList.add("hidden");
   document.getElementById("login-view").classList.remove("hidden");
+  const pinInp = document.getElementById("login-pin-input");
+  if (pinInp) pinInp.value = "";
   populateLoginSelect();
 }
 
@@ -5418,3 +5535,1647 @@ function openDualGalleryInspector(orderId) {
           ${piezaImgs}
         </div>
       </div>
+
+      <div class="form-section-box" style="border-color:rgba(245,196,0,0.6); background:rgba(245,196,0,0.04);">
+        <div class="form-section-title" style="color:#b45309;">
+          📷 Galería 2: Fotos de Repuestos Aportados por el Cliente (${(order.galeria_fotos_repuestos || []).length})
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+          Soporte visual exclusivo para que el técnico verifique en su mesa con qué guías, válvulas, sellos o empacaduras cuenta físicamente.
+        </p>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
+          ${repuestosImgs}
+        </div>
+      </div>
+
+      ${paymentProofHtml}
+    `,
+    footer: `<button type="button" class="btn btn--primary" onclick="closeModal()">Cerrar Visor</button>`
+  });
+}
+
+let tempCrmPhotoUrl = "";
+
+function openOrderCrmModal(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  tempCrmPhotoUrl = "";
+
+  const messages = db.bitacora.filter((m) => m.orden_id === orderId);
+
+  const feedHtml = messages.length
+    ? messages
+        .map(
+          (m) => `
+          <div class="crm-msg-bubble" style="${m.tipo_evento === "rechazo_calidad" ? "border-color:#dc2626; background:rgba(220,38,38,0.06);" : m.tipo_evento === "pausa_imprevisto" ? "border-color:#f59e0b; background:rgba(245,158,11,0.08);" : ""}">
+            <div class="crm-msg-meta">
+              <span><strong>${m.autor_nombre}</strong> (${m.autor_rol})</span>
+              <span>${formatDateHuman(m.fecha_hora, true)}</span>
+            </div>
+            <div class="crm-msg-text">${m.mensaje}</div>
+            ${m.foto_adjunta_url ? `<img src="${m.foto_adjunta_url}" class="crm-msg-photo" alt="Adjunto" />` : ""}
+          </div>
+        `
+        )
+        .join("")
+    : `<p style="font-size:13px; color:var(--text-muted);">Aún no hay comentarios en esta orden.</p>`;
+
+  openModal({
+    title: `Bitácora y Chat Interno en Tiempo Real — TROQUEL #${order.codigo_troquel}`,
+    icon: "fa-comments",
+    wide: true,
+    body: `
+      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
+        Canal directo en tiempo real entre Administración, Jefes de Taller y Técnicos para reportar novedades, pausas o anomalías sobre la pieza.
+      </div>
+      <div class="crm-chat-feed" id="crm-feed-box">${feedHtml}</div>
+
+      <div class="form-section-box" style="margin-top:14px; margin-bottom:0;">
+        <div class="form-field">
+          <label>Escribir Mensaje o Reportar Novedad en la Pieza</label>
+          <textarea id="crm-new-msg-text" rows="2" placeholder="Ej: Se detectó asiento de válvula fisurado en cilindro #3, adjunto foto para aprobación de ítem extra..."></textarea>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:10px;">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <label class="btn btn--ghost" style="cursor:pointer;">
+              <i class="fas fa-camera"></i> Adjuntar Foto
+              <input type="file" accept="image/*" style="display:none;" onchange="handleCrmPhotoSelect(event)" />
+            </label>
+            <span id="crm-photo-status" style="font-size:11.5px; font-weight:700; color:#16a34a;"></span>
+          </div>
+          <button type="button" class="btn btn--gold" onclick="sendCrmMessage('${order.id_orden}')">
+            <i class="fas fa-paper-plane"></i> Publicar en Bitácora
+          </button>
+        </div>
+      </div>
+    `,
+    footer: `<button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>`
+  });
+}
+
+async function handleCrmPhotoSelect(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  tempCrmPhotoUrl = await readFileAsCompressedDataUrl(file);
+  const st = document.getElementById("crm-photo-status");
+  if (st) st.textContent = "📸 Foto adjunta lista para enviar";
+}
+
+function sendCrmMessage(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  const txt = (document.getElementById("crm-new-msg-text")?.value || "").trim();
+  if (!txt && !tempCrmPhotoUrl) {
+    showToast("Escribe un comentario o adjunta una foto.", "error");
+    return;
+  }
+
+  db.bitacora.push({
+    id_mensaje: "MSG-" + Date.now(),
+    orden_id: order.id_orden,
+    codigo_troquel: order.codigo_troquel,
+    autor_id: currentUser.id_usuario,
+    autor_nombre: currentUser.nombre,
+    autor_rol: currentUser.rol_label,
+    tipo_evento: "comentario",
+    mensaje: txt || "Fotografía de inspección adjuntada a la bitácora.",
+    foto_adjunta_url: tempCrmPhotoUrl,
+    fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+  });
+
+  saveDatabase();
+  openOrderCrmModal(orderId);
+  renderScreen();
+  showToast("Comentario registrado en la bitácora de la orden.");
+}
+
+/* ============================================================================
+   GESTIÓN DE PERSONAL POR DESTAJO, FICHA DE TRABAJOS/TIEMPOS Y PERFILES/PIN
+   ============================================================================ */
+function renderCommissionsAndStaffScreen() {
+  const technicians = db.usuarios.filter((u) => u.rol === "tecnico");
+  const managementAndStaff = db.usuarios.filter((u) => u.rol !== "tecnico");
+
+  const techRowsHtml = technicians
+    .map((t) => {
+      const subs = db.subtareas.filter((s) => s.tecnico_id === t.id_usuario);
+      const completedUnpaid = subs.filter((s) => s.estado_subtarea === "terminado" && !s.comision_pagada);
+      const inProgress = subs.filter((s) => s.estado_subtarea !== "terminado");
+      const totalToPay = completedUnpaid.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+      const totalPending = inProgress.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+      const totalMinutes = subs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+
+      // Troqueles únicos trabajados por este técnico
+      const troquelesSet = new Set();
+      subs.forEach((s) => {
+        const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+        if (ord && ord.codigo_troquel) troquelesSet.add(`#${ord.codigo_troquel}`);
+      });
+      const troquelesBadges = Array.from(troquelesSet)
+        .map((tr) => `<span style="background:rgba(245,196,0,0.18); color:var(--text-main); border:1px solid rgba(245,196,0,0.5); padding:2px 7px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:800;">${tr}</span>`)
+        .join(" ");
+
+      const activeDaysCount = new Set(
+        db.asistencias
+          .filter((a) => a.usuario_id === t.id_usuario || a.nombre === t.nombre)
+          .map((a) => cleanDateISO(a.fecha))
+      ).size;
+
+      return `
+        <tr>
+          <td>
+            <div style="font-weight:900; font-size:14.5px;">${t.nombre}</div>
+            <div style="font-size:11.5px; color:var(--text-muted);">${t.especialidad} · 📞 ${t.telefono} · PIN: <code>${t.pin || "1234"}</code></div>
+          </td>
+          <td>
+            <span class="state-badge ${t.activo ? "state-badge--done" : "state-badge--wait"}">
+              ${t.activo ? "ACTIVO" : "INACTIVO"}
+            </span>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${activeDaysCount} día(s) activo(s)</div>
+          </td>
+          <td>
+            <div><strong>${completedUnpaid.length}</strong> terminadas · <strong>${inProgress.length}</strong> en mesa</div>
+            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas asignadas</span>'}</div>
+          </td>
+          <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">
+            ${formatMinutes(totalMinutes)}
+          </td>
+          <td>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#16a34a;">
+              $${totalToPay.toFixed(2)} <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
+            </div>
+            ${
+              totalPending > 0
+                ? `<div style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:#d97706;">+$${totalPending.toFixed(2)} en mesa</div>`
+                : ""
+            }
+          </td>
+          <td>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal('${t.id_usuario}')">
+                <i class="fas fa-clipboard-list"></i> Ficha / Trabajos y Tiempos
+              </button>
+              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${t.id_usuario}')" title="Editar nombre, especialidad, teléfono o PIN">
+                <i class="fas fa-edit"></i> Editar
+              </button>
+              ${
+                totalToPay > 0
+                  ? `<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="payTechnicianWeeklyCommission('${t.id_usuario}', ${totalToPay})">
+                      <i class="fas fa-hand-holding-usd"></i> Liquidar ($${totalToPay.toFixed(2)})
+                    </button>`
+                  : ""
+              }
+              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${t.id_usuario}')" title="Eliminar trabajador">
+                <i class="fas fa-trash-alt"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const adminRowsHtml = managementAndStaff
+    .map(
+      (u) => `
+      <tr>
+        <td><strong>${u.nombre}</strong></td>
+        <td><span class="state-badge state-badge--exec">${u.rol_label || u.rol}</span></td>
+        <td>${u.especialidad || "-"}</td>
+        <td>${u.telefono || "-"}</td>
+        <td><code>${u.pin || "1234"}</code></td>
+        <td>
+          <div style="display:flex; gap:6px;">
+            <button type="button" class="btn btn--ghost" style="padding:4px 10px; font-size:11.5px;" onclick="openEditWorkerModal('${u.id_usuario}')">
+              <i class="fas fa-edit"></i> Editar Perfil / PIN
+            </button>
+            ${
+              u.id_usuario !== currentUser.id_usuario
+                ? `<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${u.id_usuario}')"><i class="fas fa-trash-alt"></i></button>`
+                : ""
+            }
+          </div>
+        </td>
+      </tr>
+    `
+    )
+    .join("");
+
+  return `
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+      <div>
+        <span style="font-size:11px; font-weight:900; color:#16a34a; text-transform:uppercase;">
+          CONTROL DE PRODUCCIÓN POR DESTAJO, TIEMPOS POR PIEZA Y PERFILES
+        </span>
+        <h2 style="font-size:20px; font-weight:900;">Personal Técnico (Pago por Trabajo Realizado), Tiempos y Liquidación Semanal</h2>
+        <p style="font-size:13px; color:var(--text-muted);">
+          Los trabajadores operan por destajo (sin horario fijo de entrada/salida). Abre la <strong>Ficha / Trabajos y Tiempos</strong> de cualquier técnico para ver en qué Troqueles trabajó, cuánto tiempo tomó en cada pieza y ajustar sus comisiones manualmente.
+        </p>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--ghost" onclick="navigateTab('attendance')">
+          <i class="fas fa-calendar-check"></i> Días Activos y Proyectos
+        </button>
+        <button type="button" class="btn btn--gold" onclick="openAddWorkerModal()">
+          <i class="fas fa-user-plus"></i> + Agregar Trabajador / Perfil
+        </button>
+      </div>
+    </div>
+
+    <div class="data-table-wrapper" style="margin-bottom:22px;">
+      <table class="renacer-table">
+        <thead>
+          <tr>
+            <th>Técnico / Especialista</th>
+            <th>Estado y Días Activos</th>
+            <th>Piezas / Troqueles Trabajados</th>
+            <th>Tiempo Invertido</th>
+            <th>Comisión Acumulada</th>
+            <th>Ficha, Ajuste y Liquidación</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${techRowsHtml}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:14px 18px; margin-bottom:12px;">
+      <h3 style="font-size:16px; font-weight:900;"><i class="fas fa-user-shield"></i> Perfiles de Dirección, Jefes de Taller, Recepción y PINs de Seguridad</h3>
+    </div>
+    <div class="data-table-wrapper">
+      <table class="renacer-table">
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Rol en el Sistema</th>
+            <th>Cargo / Área</th>
+            <th>Teléfono</th>
+            <th>PIN de Acceso</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${adminRowsHtml}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* ---------- FICHA COMPLETA DEL TRABAJADOR (HISTORIAL DE PIEZAS, TIEMPOS Y AJUSTE DE COMISIÓN) ---------- */
+function openWorkerProfileModal(techId) {
+  const tech = db.usuarios.find((u) => u.id_usuario === techId);
+  if (!tech) return;
+
+  const subs = db.subtareas.filter((s) => s.tecnico_id === techId);
+  const totalMinutes = subs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+  const unpaidDone = subs
+    .filter((s) => s.estado_subtarea === "terminado" && !s.comision_pagada)
+    .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+  const paidDone = subs
+    .filter((s) => s.comision_pagada)
+    .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+
+  const workerDays = db.asistencias.filter((a) => a.usuario_id === techId || a.nombre === tech.nombre);
+
+  const subRowsHtml = subs.length
+    ? subs
+        .map((s) => {
+          const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+          return `
+            <tr>
+              <td>
+                <strong>TROQUEL #${ord ? ord.codigo_troquel : s.orden_id}</strong>
+                <div style="font-size:11px; color:var(--text-muted);">${ord ? `${ord.datos_motor.marca} ${ord.datos_motor.modelo}` : ""}</div>
+              </td>
+              <td>
+                <div style="font-weight:800;">${s.descripcion_servicio}</div>
+                <div style="font-size:11px; color:var(--text-muted);">Fecha: ${formatDateHuman(s.fecha_terminado || (ord && ord.fecha_ingreso), false)}</div>
+              </td>
+              <td>
+                <span class="state-badge ${s.estado_subtarea === "terminado" ? "state-badge--done" : s.estado_subtarea === "empezado" ? "state-badge--exec" : "state-badge--wait"}">
+                  ${s.estado_subtarea.toUpperCase()}
+                </span>
+                ${s.comision_pagada ? `<span class="state-badge state-badge--done" style="margin-left:4px;">PAGADA</span>` : ""}
+              </td>
+              <td>
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <input
+                    type="number"
+                    min="0"
+                    step="5"
+                    value="${Number(s.minutos_acumulados) || 0}"
+                    style="width:74px; padding:5px 7px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-family:'JetBrains Mono',monospace; font-weight:800;"
+                    onchange="updateSubtaskMinutesFromFicha('${s.id_subtarea}', this.value, '${tech.id_usuario}')"
+                  />
+                  <span style="font-size:11px; color:var(--text-muted);">min (${formatMinutes(s.minutos_acumulados)})</span>
+                </div>
+              </td>
+              <td>
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <span style="font-weight:900; color:#16a34a;">$</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value="${Number(s.comision_base_tecnico) || 0}"
+                    style="width:82px; padding:5px 7px; border-radius:8px; border:1.5px solid #16a34a; background:var(--bg-input); color:#16a34a; font-family:'JetBrains Mono',monospace; font-weight:900;"
+                    onchange="updateSubtaskCommissionFromFicha('${s.id_subtarea}', this.value, '${tech.id_usuario}')"
+                  />
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--text-muted);">Este técnico aún no tiene trabajos asignados.</td></tr>`;
+
+  const daysHtml = workerDays.length
+    ? workerDays
+        .map(
+          (d) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border-subtle); font-size:12.5px;">
+            <span><strong>📅 ${formatDateHuman(d.fecha, false)}</strong> — ${d.observacion || "Actividad en taller"}</span>
+            <span class="state-badge state-badge--done">${d.estado || "Activo"}</span>
+          </div>
+        `
+        )
+        .join("")
+    : `<div style="padding:10px; font-size:12px; color:var(--text-muted);">Sin días activos registrados todavía.</div>`;
+
+  openModal({
+    title: `📋 Ficha Técnica de Producción y Tiempos — ${tech.nombre}`,
+    icon: "fa-user-cog",
+    wide: true,
+    body: `
+      <div class="kpi-strip" style="margin-bottom:14px;">
+        <div class="kpi-card">
+          <span class="kpi-label">Trabajos Asignados</span>
+          <div class="kpi-value">${subs.length}</div>
+          <span class="kpi-sub">Piezas / Subtareas totales</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Tiempo Total en Piezas</span>
+          <div class="kpi-value" style="color:#0284c7;">${formatMinutes(totalMinutes)}</div>
+          <span class="kpi-sub">Suma de tiempo en máquinas</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Por Liquidar (Terminados)</span>
+          <div class="kpi-value" style="color:#16a34a;">$${unpaidDone.toFixed(2)}</div>
+          <span class="kpi-sub">Editable en la tabla inferior</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Histórico Ya Pagado</span>
+          <div class="kpi-value" style="color:var(--text-muted);">$${paidDone.toFixed(2)}</div>
+          <span class="kpi-sub">${workerDays.length} día(s) activo(s)</span>
+        </div>
+      </div>
+
+      <div class="form-section-box">
+        <div class="form-section-title">
+          <i class="fas fa-tools"></i> Desglose de Proyectos (#Troquel), Tiempo Invertido y Ajuste Flexible de Comisión
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+          Puedes editar directamente los <strong>minutos invertidos</strong> o el <strong>monto de comisión ($)</strong> de cualquier trabajo; el cambio se guarda automáticamente.
+        </p>
+        <div class="data-table-wrapper">
+          <table class="renacer-table">
+            <thead>
+              <tr>
+                <th>Troquel / Motor</th>
+                <th>Servicio / Fecha</th>
+                <th>Estado</th>
+                <th>Tiempo Invertido (Editable)</th>
+                <th>Comisión Destajo (Editable)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${subRowsHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="form-section-box" style="margin-bottom:0;">
+        <div class="form-section-title"><i class="fas fa-calendar-alt"></i> Fechas Activas y Proyectos Trabajados</div>
+        <div style="max-height:150px; overflow-y:auto;">
+          ${daysHtml}
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="openEditWorkerModal('${tech.id_usuario}')">
+        <i class="fas fa-user-edit"></i> Editar Datos / PIN de ${tech.nombre}
+      </button>
+      ${
+        unpaidDone > 0
+          ? `<button type="button" class="btn btn--success btn--lg" onclick="payTechnicianWeeklyCommission('${tech.id_usuario}', ${unpaidDone}); closeModal();">
+              <i class="fas fa-hand-holding-usd"></i> Liquidar Comisiones Terminadas ($${unpaidDone.toFixed(2)})
+            </button>`
+          : ""
+      }
+      <button type="button" class="btn btn--primary" onclick="closeModal()">Cerrar Ficha</button>
+    `
+  });
+}
+
+function updateSubtaskMinutesFromFicha(subtaskId, newMinutes, techId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+  sub.minutos_acumulados = Math.max(0, Number(newMinutes) || 0);
+  const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
+  if (ord) {
+    ord.tiempo_neto_minutos = db.subtareas
+      .filter((s) => s.orden_id === ord.id_orden)
+      .reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+  }
+  saveDatabase();
+  renderScreen();
+  openWorkerProfileModal(techId);
+  showToast(`Tiempo invertido actualizado a ${formatMinutes(sub.minutos_acumulados)}.`);
+}
+
+function updateSubtaskCommissionFromFicha(subtaskId, newComm, techId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+  sub.comision_base_tecnico = Math.max(0, Number(newComm) || 0);
+  saveDatabase();
+  renderScreen();
+  openWorkerProfileModal(techId);
+  showToast(`Comisión actualizada a $${sub.comision_base_tecnico.toFixed(2)}.`);
+}
+
+function payTechnicianWeeklyCommission(techId, amount) {
+  const tech = db.usuarios.find((u) => u.id_usuario === techId);
+  if (!tech) return;
+
+  db.subtareas.forEach((s) => {
+    if (s.tecnico_id === techId && s.estado_subtarea === "terminado" && !s.comision_pagada) {
+      s.comision_pagada = true;
+    }
+  });
+
+  db.finanzas_movimientos.unshift({
+    id_mov: "MOV-" + Date.now(),
+    fecha: new Date().toISOString().slice(0, 10),
+    tipo: "egreso",
+    categoria: "Pago de Nómina / Comisiones",
+    concepto: `Liquidación de comisiones por destajo a ${tech.nombre}`,
+    monto: Number(amount),
+    metodo: "pago_movil",
+    orden_id: "NOMINA"
+  });
+
+  saveDatabase();
+  renderApp();
+  showToast(`Comisión semanal de $${Number(amount).toFixed(2)} pagada a ${tech.nombre} y cargada al Libro Diario.`);
+}
+
+function toggleWorkerActiveStatus(techId) {
+  const tech = db.usuarios.find((u) => u.id_usuario === techId);
+  if (!tech) return;
+  tech.activo = !tech.activo;
+  saveDatabase();
+  renderApp();
+  showToast(`Estado de ${tech.nombre} actualizado.`);
+}
+
+function openAddWorkerModal() {
+  openModal({
+    title: "Registrar Nuevo Trabajador o Perfil en el Taller",
+    icon: "fa-user-plus",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Nombre Completo *</label>
+          <input type="text" id="new-worker-name" placeholder="Ej: Miguel Ángel Pérez" required />
+        </div>
+        <div class="form-field">
+          <label>Especialidad / Cargo en Rectificadora *</label>
+          <input type="text" id="new-worker-spec" placeholder="Ej: Rectificación de Cámaras y Cigüeñales" required />
+        </div>
+        <div class="form-field">
+          <label>Teléfono / WhatsApp *</label>
+          <input type="text" id="new-worker-phone" placeholder="0414-XXXXXXX" required />
+        </div>
+        <div class="form-field">
+          <label>Rol en el Sistema</label>
+          <select id="new-worker-role">
+            <option value="tecnico">Técnico / Operador (Pago por Destajo)</option>
+            <option value="jefe_taller">Jefe de Taller / Supervisor</option>
+            <option value="recepcion">Recepción / Atención al Cliente</option>
+            <option value="admin">Administrador del Sistema</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>PIN de Acceso (4 dígitos)</label>
+          <input type="text" id="new-worker-pin" value="1234" maxlength="8" />
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewWorker()">
+        <i class="fas fa-save"></i> Guardar Trabajador / Perfil
+      </button>
+    `
+  });
+}
+
+function saveNewWorker() {
+  const name = (document.getElementById("new-worker-name")?.value || "").trim();
+  const spec = (document.getElementById("new-worker-spec")?.value || "").trim();
+  const phone = (document.getElementById("new-worker-phone")?.value || "").trim();
+  const role = document.getElementById("new-worker-role")?.value || "tecnico";
+  const pin = (document.getElementById("new-worker-pin")?.value || "1234").trim();
+
+  if (!name || !spec) {
+    showToast("Completa el nombre y la especialidad del trabajador.", "error");
+    return;
+  }
+
+  const roleLabels = {
+    tecnico: "Técnico de Rectificación",
+    recepcion: "Recepción y Presupuesto",
+    jefe_taller: "Jefe de Taller",
+    admin: "Administrador del Sistema"
+  };
+
+  db.usuarios.push({
+    id_usuario: "USR-" + Date.now().toString().slice(-4),
+    nombre: name,
+    rol: role,
+    rol_label: roleLabels[role] || "Técnico",
+    especialidad: spec,
+    telefono: phone || "0414-0000000",
+    pin: pin || "1234",
+    activo: true
+  });
+
+  saveDatabase();
+  populateLoginSelect();
+  closeModal();
+  renderApp();
+  showToast(`Perfil ${name} agregado al equipo de Rectificadora Renacer.`);
+}
+
+function openEditWorkerModal(userId) {
+  const u = db.usuarios.find((x) => x.id_usuario === userId);
+  if (!u) return;
+
+  openModal({
+    title: `✏️ Editar Perfil y PIN — ${u.nombre}`,
+    icon: "fa-user-edit",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Nombre Completo *</label>
+          <input type="text" id="edit-worker-name" value="${u.nombre}" required />
+        </div>
+        <div class="form-field">
+          <label>Especialidad / Cargo *</label>
+          <input type="text" id="edit-worker-spec" value="${u.especialidad || ""}" required />
+        </div>
+        <div class="form-field">
+          <label>Teléfono / WhatsApp</label>
+          <input type="text" id="edit-worker-phone" value="${u.telefono || ""}" />
+        </div>
+        <div class="form-field">
+          <label>Rol en el Sistema</label>
+          <select id="edit-worker-role">
+            <option value="tecnico" ${u.rol === "tecnico" ? "selected" : ""}>Técnico / Operador (Destajo)</option>
+            <option value="jefe_taller" ${u.rol === "jefe_taller" ? "selected" : ""}>Jefe de Taller / Supervisor</option>
+            <option value="recepcion" ${u.rol === "recepcion" ? "selected" : ""}>Recepción y Presupuesto</option>
+            <option value="admin" ${u.rol === "admin" ? "selected" : ""}>Administrador del Sistema</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>PIN de Seguridad</label>
+          <input type="text" id="edit-worker-pin" value="${u.pin || "1234"}" maxlength="8" />
+        </div>
+        <div class="form-field">
+          <label>Estado en el Taller</label>
+          <select id="edit-worker-active">
+            <option value="true" ${u.activo !== false ? "selected" : ""}>Activo en Taller</option>
+            <option value="false" ${u.activo === false ? "selected" : ""}>Inactivo / Permiso</option>
+          </select>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveEditedWorker('${u.id_usuario}')">
+        <i class="fas fa-save"></i> Guardar Cambios
+      </button>
+    `
+  });
+}
+
+function saveEditedWorker(userId) {
+  const u = db.usuarios.find((x) => x.id_usuario === userId);
+  if (!u) return;
+
+  const name = (document.getElementById("edit-worker-name")?.value || "").trim();
+  const spec = (document.getElementById("edit-worker-spec")?.value || "").trim();
+  const phone = (document.getElementById("edit-worker-phone")?.value || "").trim();
+  const role = document.getElementById("edit-worker-role")?.value || u.rol;
+  const pin = (document.getElementById("edit-worker-pin")?.value || "1234").trim();
+  const active = document.getElementById("edit-worker-active")?.value === "true";
+
+  if (!name) {
+    showToast("El nombre no puede estar vacío.", "error");
+    return;
+  }
+
+  const roleLabels = {
+    tecnico: "Técnico de Rectificación",
+    recepcion: "Recepción y Presupuesto",
+    jefe_taller: "Jefe de Taller",
+    admin: "Administrador del Sistema"
+  };
+
+  u.nombre = name;
+  u.especialidad = spec;
+  u.telefono = phone;
+  u.rol = role;
+  u.rol_label = roleLabels[role] || u.rol_label;
+  u.pin = pin;
+  u.activo = active;
+
+  // Actualizar nombre en subtareas asignadas a este usuario
+  db.subtareas.forEach((s) => {
+    if (s.tecnico_id === userId) {
+      s.nombre_tecnico = name;
+    }
+  });
+
+  saveDatabase();
+  populateLoginSelect();
+  closeModal();
+  renderApp();
+  showToast(`Perfil de ${name} actualizado correctamente.`);
+}
+
+function deleteWorker(userId) {
+  const u = db.usuarios.find((x) => x.id_usuario === userId);
+  if (!u) return;
+  if (u.id_usuario === currentUser.id_usuario) {
+    showToast("No puedes eliminar el perfil con el que tienes sesión activa.", "error");
+    return;
+  }
+  if (!confirm(`¿Seguro que deseas eliminar el perfil de "${u.nombre}"?`)) return;
+  db.usuarios = db.usuarios.filter((x) => x.id_usuario !== userId);
+  saveDatabase();
+  populateLoginSelect();
+  renderApp();
+  showToast(`Perfil ${u.nombre} eliminado.`);
+}
+
+/* ---------- DÍAS ACTIVOS Y PROYECTOS TRABAJADOS (SIN HORARIO FIJO DE ENTRADA/SALIDA) ---------- */
+function renderAttendanceScreen() {
+  const rowsHtml = db.asistencias.length
+    ? db.asistencias
+        .map((a) => {
+          const workerSubs = db.subtareas.filter(
+            (s) => s.tecnico_id === a.usuario_id || s.nombre_tecnico === a.nombre
+          );
+          const totalWorkerMins = workerSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+          const troqueles = Array.from(
+            new Set(
+              workerSubs.map((s) => {
+                const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+                return ord ? `#${ord.codigo_troquel} (${ord.datos_motor.marca})` : s.orden_id;
+              })
+            )
+          ).join(", ");
+
+          return `
+            <tr>
+              <td><strong>📅 ${formatDateHuman(a.fecha, false)}</strong></td>
+              <td><strong>${a.nombre}</strong></td>
+              <td>
+                <div style="font-weight:800; color:var(--text-main);">${troqueles || "Actividad general en planta"}</div>
+                <div style="font-size:11.5px; color:var(--text-muted);">${a.observacion || "Trabajo por destajo en piezas asignadas"}</div>
+              </td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">
+                ${totalWorkerMins > 0 ? formatMinutes(totalWorkerMins) : "Por destajo"}
+              </td>
+              <td><span class="state-badge state-badge--done">${(a.estado || "ACTIVO").toUpperCase()}</span></td>
+              <td style="text-align:right;">
+                <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteAttendanceRecord('${a.id_asist}')" title="Eliminar registro">
+                  <i class="fas fa-trash-alt"></i>
+                </button>
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `<tr><td colspan="6" style="text-align:center; padding:26px; color:var(--text-muted);">No hay registros de días activos. Se registran automáticamente cuando un técnico inicia un trabajo o usando el botón superior.</td></tr>`;
+
+  return `
+    <div style="background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
+          MODALIDAD DE TALLER POR DESTAJO · SIN HORARIO FIJO DE ENTRADA/SALIDA
+        </span>
+        <h2 style="font-size:20px; font-weight:900;">📅 Días Activos, Fechas de Trabajo y Proyectos (#Troquel) por Trabajador</h2>
+        <p style="font-size:13px; color:var(--text-muted);">
+          Como los técnicos cobran por trabajo realizado y no por hora de llegada, aquí se registran qué fechas estuvieron activos en el taller, en qué piezas (#Troquel) trabajaron y cuánto tiempo invirtieron.
+        </p>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--ghost" onclick="navigateTab('commissions')">
+          <i class="fas fa-arrow-left"></i> Volver a Personal y Fichas
+        </button>
+        <button type="button" class="btn btn--gold" onclick="openAddActiveDayModal()">
+          <i class="fas fa-calendar-plus"></i> + Registrar Día Activo / Proyecto
+        </button>
+      </div>
+    </div>
+
+    <div class="data-table-wrapper">
+      <table class="renacer-table">
+        <thead>
+          <tr>
+            <th>Fecha Activa</th>
+            <th>Trabajador</th>
+            <th>Proyectos / Troqueles Trabajados y Detalle</th>
+            <th>Tiempo Acumulado en Piezas</th>
+            <th>Estado</th>
+            <th style="text-align:right;">Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function openAddActiveDayModal() {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const workerOpts = db.usuarios
+    .map((u) => `<option value="${u.id_usuario}">${u.nombre} (${u.rol_label || u.rol})</option>`)
+    .join("");
+
+  openModal({
+    title: "Registrar Día Activo y Proyecto Trabajado",
+    icon: "fa-calendar-check",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Trabajador *</label>
+          <select id="act-day-worker">${workerOpts}</select>
+        </div>
+        <div class="form-field">
+          <label>Fecha de Actividad *</label>
+          <input type="date" id="act-day-date" value="${todayIso}" />
+        </div>
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label>Proyectos / Troqueles Trabajados o Nota del Día *</label>
+        <input type="text" id="act-day-note" placeholder="Ej: Trabajó en Troquel #5017 (Aplanado) y apoyo en lavado químico" />
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveActiveDayRecord()">Guardar Día Activo</button>
+    `
+  });
+}
+
+function saveActiveDayRecord() {
+  const userId = document.getElementById("act-day-worker")?.value;
+  const userObj = db.usuarios.find((u) => u.id_usuario === userId) || currentUser;
+  const dateVal = document.getElementById("act-day-date")?.value || new Date().toISOString().slice(0, 10);
+  const noteVal = (document.getElementById("act-day-note")?.value || "").trim() || "Activo en proyectos de rectificación";
+
+  db.asistencias.unshift({
+    id_asist: "ASI-" + Date.now(),
+    usuario_id: userObj.id_usuario,
+    nombre: userObj.nombre,
+    fecha: dateVal,
+    hora_entrada: "Destajo",
+    hora_salida: "Por Pieza",
+    estado: "Activo en Taller",
+    observacion: noteVal
+  });
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Día activo registrado para ${userObj.nombre} (${formatDateHuman(dateVal, false)}).`);
+}
+
+function deleteAttendanceRecord(asistId) {
+  db.asistencias = db.asistencias.filter((a) => a.id_asist !== asistId);
+  saveDatabase();
+  renderApp();
+  showToast("Registro eliminado.");
+}
+
+/* ============================================================================
+   LIBRO DIARIO DE INGRESOS, GASTOS, HISTORIAL POR CLIENTE Y FLUJO DE CAJA
+   ============================================================================ */
+let ledgerClientFilter = "all";
+
+function renderFinancesLedgerScreen() {
+  const ingresos = db.finanzas_movimientos
+    .filter((m) => m.tipo === "ingreso")
+    .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+
+  const egresos = db.finanzas_movimientos
+    .filter((m) => m.tipo === "egreso")
+    .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+
+  const utilidadNeta = ingresos - egresos;
+  const cuentasPorCobrar = db.ordenes.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
+
+  let filteredMovs = db.finanzas_movimientos.slice();
+  if (ledgerClientFilter !== "all") {
+    const clientObj = db.clientes.find((c) => c.id_cliente === ledgerClientFilter);
+    const clientOrderIds = new Set(
+      db.ordenes.filter((o) => o.cliente_id === ledgerClientFilter).map((o) => o.id_orden)
+    );
+    filteredMovs = filteredMovs.filter((m) => {
+      if (clientOrderIds.has(m.orden_id)) return true;
+      if (clientObj && String(m.concepto || "").toLowerCase().includes((clientObj.nombre_completo || "").toLowerCase())) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  const clientFilterOptions =
+    `<option value="all">Todos los Movimientos de Caja (${db.finanzas_movimientos.length})</option>` +
+    db.clientes
+      .map(
+        (c) =>
+          `<option value="${c.id_cliente}" ${ledgerClientFilter === c.id_cliente ? "selected" : ""}>👤 Historial de Pagos: ${c.nombre_completo} (${c.documento_identidad})</option>`
+      )
+      .join("");
+
+  const movRowsHtml = filteredMovs.length
+    ? filteredMovs
+        .map(
+          (m) => `
+          <tr>
+            <td><strong>${formatDateHuman(m.fecha, false)}</strong></td>
+            <td>
+              <span class="state-badge ${m.tipo === "ingreso" ? "state-badge--done" : "state-badge--wait"}">
+                ${m.tipo === "ingreso" ? "⬆️ INGRESO" : "⬇️ EGRESO / GASTO"}
+              </span>
+            </td>
+            <td><strong>${m.categoria}</strong></td>
+            <td>${m.concepto}</td>
+            <td>${(m.metodo || "efectivo").toUpperCase()}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:${m.tipo === "ingreso" ? "#16a34a" : "#dc2626"};">
+              ${m.tipo === "ingreso" ? "+" : "-"}$${Number(m.monto).toFixed(2)}
+            </td>
+            <td style="text-align:right;">
+              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteFinanceMovement('${m.id_mov}')" title="Eliminar movimiento">
+                <i class="fas fa-trash-alt"></i>
+              </button>
+            </td>
+          </tr>
+        `
+        )
+        .join("")
+    : `<tr><td colspan="7" style="text-align:center; padding:26px; color:var(--text-muted);">No hay movimientos registrados para este filtro.</td></tr>`;
+
+  return `
+    <div class="kpi-strip">
+      <div class="kpi-card">
+        <span class="kpi-label">Ingresos Cobrados en Caja</span>
+        <div class="kpi-value" style="color:#16a34a;">$${ingresos.toFixed(2)}</div>
+        <span class="kpi-sub">Pagos Totales 100% + Abonos recibidos</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Gastos y Comisiones Pagadas</span>
+        <div class="kpi-value" style="color:#dc2626;">$${egresos.toFixed(2)}</div>
+        <span class="kpi-sub">Insumos, nómina, servicios y repuestos</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-label">Disponibilidad Neta en Caja</span>
+        <div class="kpi-value" style="color:var(--renacer-navy);">$${utilidadNeta.toFixed(2)}</div>
+        <span class="kpi-sub">Balance real (Ingresos - Egresos)</span>
+      </div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="navigateTab('accounts_receivable')">
+        <span class="kpi-label">Cuentas por Cobrar (Resto)</span>
+        <div class="kpi-value" style="color:#d97706;">$${cuentasPorCobrar.toFixed(2)}</div>
+        <span class="kpi-sub">Toca para ir a Cuentas por Cobrar ➔</span>
+      </div>
+    </div>
+
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+      <div>
+        <h2 style="font-size:19px; font-weight:900;">📊 Libro Diario de Caja e Historial de Pagos por Cliente</h2>
+        <p style="font-size:12.5px; color:var(--text-muted);">Filtra los pagos realizados por cualquier cliente o registra ingresos y egresos operativos.</p>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <select
+          style="padding:8px 12px; border-radius:10px; border:1.5px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:12.5px; font-weight:800;"
+          onchange="setLedgerClientFilter(this.value)"
+        >
+          ${clientFilterOptions}
+        </select>
+        <button type="button" class="btn btn--ghost" onclick="openAddFinanceCategoryModal()">
+          <i class="fas fa-tags"></i> + Categoría
+        </button>
+        <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
+          <i class="fas fa-minus-circle"></i> Registrar Gasto
+        </button>
+        <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')">
+          <i class="fas fa-plus-circle"></i> Registrar Ingreso
+        </button>
+      </div>
+    </div>
+
+    <div class="data-table-wrapper">
+      <table class="renacer-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Tipo</th>
+            <th>Categoría</th>
+            <th>Concepto / Cliente / Troquel</th>
+            <th>Método</th>
+            <th>Monto ($)</th>
+            <th style="text-align:right;">Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${movRowsHtml}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function setLedgerClientFilter(val) {
+  ledgerClientFilter = val;
+  renderScreen();
+}
+
+function deleteFinanceMovement(movId) {
+  if (!confirm("¿Eliminar este movimiento del Libro Diario?")) return;
+  db.finanzas_movimientos = db.finanzas_movimientos.filter((m) => m.id_mov !== movId);
+  saveDatabase();
+  renderApp();
+  showToast("Movimiento eliminado del Libro Diario.");
+}
+
+function openAddFinanceCategoryModal() {
+  openModal({
+    title: "Crear Nueva Categoría Financiera Personalizada",
+    icon: "fa-tags",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Tipo de Categoría</label>
+          <select id="new-cat-type">
+            <option value="egreso">Categoría de Gasto / Egreso</option>
+            <option value="ingreso">Categoría de Ingreso</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Nombre de la Categoría *</label>
+          <input type="text" id="new-cat-name" placeholder="Ej: Compra de Piedras de Esmeril / Transporte" required />
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewFinanceCategory()">Guardar Categoría</button>
+    `
+  });
+}
+
+function saveNewFinanceCategory() {
+  const type = document.getElementById("new-cat-type")?.value || "egreso";
+  const name = (document.getElementById("new-cat-name")?.value || "").trim();
+  if (!name) return;
+  if (type === "ingreso") db.finanzas_categorias.ingresos.push(name);
+  else db.finanzas_categorias.egresos.push(name);
+  saveDatabase();
+  closeModal();
+  showToast(`Categoría "${name}" agregada.`);
+}
+
+function openNewFinanceMovementModal(tipo) {
+  const cats = tipo === "ingreso" ? db.finanzas_categorias.ingresos : db.finanzas_categorias.egresos;
+  const catOptions = cats.map((c) => `<option value="${c}">${c}</option>`).join("");
+
+  openModal({
+    title: tipo === "ingreso" ? "Registrar Nuevo Ingreso en Caja" : "Registrar Gasto / Egreso Operativo",
+    icon: tipo === "ingreso" ? "fa-arrow-up" : "fa-arrow-down",
+    body: `
+      <div class="form-grid-3">
+        <div class="form-field">
+          <label>Categoría *</label>
+          <select id="mov-cat">${catOptions}</select>
+        </div>
+        <div class="form-field">
+          <label>Monto ($) *</label>
+          <input type="number" step="0.5" id="mov-amount" placeholder="Ej: 25.00" required />
+        </div>
+        <div class="form-field">
+          <label>Método de Pago</label>
+          <select id="mov-method">
+            <option value="efectivo">Efectivo (Divisas / Caja)</option>
+            <option value="pago_movil">Pago Móvil / Transferencia</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label>Concepto / Descripción Detallada *</label>
+        <input type="text" id="mov-concept" placeholder="Ej: Compra de líquido desengrasante para tanque químico" required />
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewFinanceMovement('${tipo}')">Guardar Movimiento</button>
+    `
+  });
+}
+
+function saveNewFinanceMovement(tipo) {
+  const cat = document.getElementById("mov-cat")?.value || "General";
+  const amount = Math.max(0, Number(document.getElementById("mov-amount")?.value) || 0);
+  const method = document.getElementById("mov-method")?.value || "efectivo";
+  const concept = (document.getElementById("mov-concept")?.value || "").trim();
+
+  if (!amount || !concept) {
+    showToast("Ingresa monto y concepto del movimiento.", "error");
+    return;
+  }
+
+  db.finanzas_movimientos.unshift({
+    id_mov: "MOV-" + Date.now(),
+    fecha: new Date().toISOString().slice(0, 10),
+    tipo,
+    categoria: cat,
+    concepto: concept,
+    monto: amount,
+    metodo: method,
+    orden_id: "-"
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast("Movimiento registrado en el Libro Diario.");
+}
+
+/* ============================================================================
+   DIRECTORIO DE CLIENTES (CON HISTORIAL DE PAGOS + EDICIÓN) Y CATÁLOGO EDITABLE
+   ============================================================================ */
+function renderClientsAndCatalogScreen() {
+  const clientRows = db.clientes
+    .map((c) => {
+      const clientOrders = db.ordenes.filter(
+        (o) => o.cliente_id === c.id_cliente || o.documento_cliente === c.documento_identidad
+      );
+      const totalPaid = clientOrders.reduce((acc, o) => acc + (Number(o.monto_abonado) || 0), 0);
+      const totalPending = clientOrders.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
+
+      return `
+        <tr>
+          <td>
+            <strong>${c.documento_identidad}</strong>
+            <div style="font-size:11px; color:var(--text-muted);">${clientOrders.length} orden(es)</div>
+          </td>
+          <td>
+            <div style="font-weight:900;">${c.nombre_completo}</div>
+            <div style="font-size:11px; color:var(--text-muted);">📍 ${c.direccion || "Sin dirección"}</div>
+          </td>
+          <td><a href="tel:${c.telefono}" style="color:var(--renacer-navy); font-weight:800;">${c.telefono}</a></td>
+          <td>
+            <span class="state-badge ${c.es_taller_aliado ? "state-badge--exec" : "state-badge--diag"}">
+              ${c.es_taller_aliado ? "🤝 TALLER ALIADO" : "PARTICULAR"}
+            </span>
+            <div style="font-size:11px; margin-top:4px; font-family:'JetBrains Mono',monospace;">
+              Pagado: <strong style="color:#16a34a;">$${totalPaid.toFixed(2)}</strong> · Resto: <strong style="color:${totalPending > 0 ? "#dc2626" : "var(--text-muted)"};">$${totalPending.toFixed(2)}</strong>
+            </div>
+          </td>
+          <td style="text-align:right;">
+            <div style="display:flex; justify-content:flex-end; gap:5px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--primary" style="padding:4px 9px; font-size:11px;" onclick="openClientHistoryModal('${c.id_cliente}')" title="Ver historial de órdenes y pagos del cliente">
+                <i class="fas fa-history"></i> Pagos
+              </button>
+              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px;" onclick="openEditClientModal('${c.id_cliente}')" title="Editar datos del cliente">
+                <i class="fas fa-edit"></i>
+              </button>
+              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteClient('${c.id_cliente}')" title="Eliminar cliente">
+                <i class="fas fa-trash-alt"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const catRows = db.catalogo_servicios
+    .map(
+      (s) => `
+      <tr>
+        <td><strong>${s.nombre}</strong></td>
+        <td style="font-family:'JetBrains Mono',monospace; font-weight:900;">$${Number(s.precio_sugerido).toFixed(2)}</td>
+        <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">$${Number(s.comision_sugerida).toFixed(2)}</td>
+        <td style="text-align:right;">
+          <div style="display:flex; justify-content:flex-end; gap:5px;">
+            <button type="button" class="btn btn--ghost" style="padding:4px 9px; font-size:11px;" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio o comisión del servicio">
+              <i class="fas fa-edit"></i> Editar
+            </button>
+            <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio">
+              <i class="fas fa-trash-alt"></i>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `
+    )
+    .join("");
+
+  return `
+    <div class="clients-catalog-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap:18px;">
+      <div>
+        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:1px solid var(--border-subtle); margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <h3 style="font-size:16.5px; font-weight:900;"><i class="fas fa-address-book"></i> Directorio de Clientes e Historial de Pagos</h3>
+          <button type="button" class="btn btn--gold" style="padding:6px 10px; font-size:11.5px;" onclick="openAddClientModal()">
+            <i class="fas fa-user-plus"></i> + Nuevo Cliente
+          </button>
+        </div>
+        <div class="data-table-wrapper">
+          <table class="renacer-table">
+            <thead>
+              <tr>
+                <th>Cédula / RIF</th>
+                <th>Nombre / Taller</th>
+                <th>Teléfono</th>
+                <th>Tipo y Balance</th>
+                <th style="text-align:right;">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${clientRows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:1px solid var(--border-subtle); margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <h3 style="font-size:16.5px; font-weight:900;"><i class="fas fa-tools"></i> Catálogo de Servicios, Precios y Comisiones</h3>
+          <button type="button" class="btn btn--gold" style="padding:6px 10px; font-size:11.5px;" onclick="openAddCatalogServiceModal()">
+            <i class="fas fa-plus"></i> + Nuevo Servicio
+          </button>
+        </div>
+        <div class="data-table-wrapper">
+          <table class="renacer-table">
+            <thead>
+              <tr>
+                <th>Servicio de Rectificación</th>
+                <th>Precio Cliente</th>
+                <th>Comisión Técnico</th>
+                <th style="text-align:right;">Editar / Borrar</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${catRows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- HISTORIAL DE PAGOS Y ÓRDENES POR CLIENTE ---------- */
+function openClientHistoryModal(clientId) {
+  const client = db.clientes.find((c) => c.id_cliente === clientId);
+  if (!client) return;
+
+  const clientOrders = db.ordenes.filter(
+    (o) => o.cliente_id === client.id_cliente || o.documento_cliente === client.documento_identidad
+  );
+  const clientOrderIds = new Set(clientOrders.map((o) => o.id_orden));
+
+  const clientMovs = db.finanzas_movimientos.filter(
+    (m) =>
+      clientOrderIds.has(m.orden_id) ||
+      String(m.concepto || "").toLowerCase().includes((client.nombre_completo || "").toLowerCase())
+  );
+
+  const totalBilled = clientOrders.reduce((acc, o) => acc + (Number(o.monto_total) || 0), 0);
+  const totalPaid = clientOrders.reduce((acc, o) => acc + (Number(o.monto_abonado) || 0), 0);
+  const totalDebt = clientOrders.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
+
+  const ordersRows = clientOrders.length
+    ? clientOrders
+        .map(
+          (o) => `
+          <tr>
+            <td><strong>TROQUEL #${o.codigo_troquel}</strong></td>
+            <td>${o.datos_motor.tipo_pieza} · ${o.datos_motor.marca} ${o.datos_motor.modelo}</td>
+            <td>${formatDateHuman(o.fecha_ingreso, false)}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">$${Number(o.monto_total).toFixed(2)}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">$${Number(o.monto_abonado).toFixed(2)}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:${o.saldo_pendiente > 0 ? "#dc2626" : "#16a34a"};">$${Number(o.saldo_pendiente).toFixed(2)}</td>
+          </tr>
+        `
+        )
+        .join("")
+    : `<tr><td colspan="6" style="text-align:center; padding:16px; color:var(--text-muted);">Este cliente aún no tiene órdenes registradas.</td></tr>`;
+
+  const paymentsRows = clientMovs.length
+    ? clientMovs
+        .map(
+          (m) => `
+          <tr>
+            <td><strong>${formatDateHuman(m.fecha, false)}</strong></td>
+            <td>${m.categoria}</td>
+            <td>${m.concepto}</td>
+            <td>${(m.metodo || "efectivo").toUpperCase()}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">+$${Number(m.monto).toFixed(2)}</td>
+          </tr>
+        `
+        )
+        .join("")
+    : `<tr><td colspan="5" style="text-align:center; padding:16px; color:var(--text-muted);">No hay pagos individuales registrados en el Libro Diario para este cliente.</td></tr>`;
+
+  openModal({
+    title: `📜 Historial de Pagos y Piezas — ${client.nombre_completo} (${client.documento_identidad})`,
+    icon: "fa-history",
+    wide: true,
+    body: `
+      <div class="kpi-strip" style="margin-bottom:14px;">
+        <div class="kpi-card">
+          <span class="kpi-label">Piezas Recibidas</span>
+          <div class="kpi-value">${clientOrders.length}</div>
+          <span class="kpi-sub">Órdenes históricas</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Total Presupuestado</span>
+          <div class="kpi-value">$${totalBilled.toFixed(2)}</div>
+          <span class="kpi-sub">Suma de trabajos</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Total Abonado / Pagado</span>
+          <div class="kpi-value" style="color:#16a34a;">$${totalPaid.toFixed(2)}</div>
+          <span class="kpi-sub">${clientMovs.length} pago(s) en caja</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Resto Pendiente</span>
+          <div class="kpi-value" style="color:${totalDebt > 0 ? "#dc2626" : "#16a34a"};">$${totalDebt.toFixed(2)}</div>
+          <span class="kpi-sub">${totalDebt > 0 ? "Cuenta por cobrar abierta" : "Solvente al día"}</span>
+        </div>
+      </div>
+
+      <div class="form-section-box">
+        <div class="form-section-title"><i class="fas fa-cogs"></i> Piezas / Troqueles de ${client.nombre_completo}</div>
+        <div class="data-table-wrapper">
+          <table class="renacer-table">
+            <thead>
+              <tr>
+                <th>Troquel</th>
+                <th>Pieza / Motor</th>
+                <th>Fecha Ingreso</th>
+                <th>Total</th>
+                <th>Abonado</th>
+                <th>Resto</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${ordersRows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="form-section-box" style="margin-bottom:0;">
+        <div class="form-section-title"><i class="fas fa-receipt"></i> Historial Detallado de Abonos y Pagos Recibidos</div>
+        <div class="data-table-wrapper">
+          <table class="renacer-table">
+            <thead>
+              <tr>
+                <th>Fecha Pago</th>
+                <th>Categoría</th>
+                <th>Detalle / Orden</th>
+                <th>Método</th>
+                <th>Monto Pagado</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${paymentsRows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="openEditClientModal('${client.id_cliente}')">
+        <i class="fas fa-edit"></i> Editar Cliente
+      </button>
+      <button type="button" class="btn btn--primary" onclick="closeModal()">Cerrar Historial</button>
+    `
+  });
+}
+
+/* ---------- CRUD COMPLETO DE CLIENTES ---------- */
+function openAddClientModal() {
+  openModal({
+    title: "Registrar Nuevo Cliente o Taller Aliado",
+    icon: "fa-user-plus",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Cédula o RIF *</label>
+          <input type="text" id="new-cli-doc" placeholder="Ej: V-15889900 o J-40112233-1" required />
+        </div>
+        <div class="form-field">
+          <label>Nombre Completo o Taller *</label>
+          <input type="text" id="new-cli-name" placeholder="Ej: Taller Mecánico Los Andes" required />
+        </div>
+        <div class="form-field">
+          <label>Teléfono / WhatsApp *</label>
+          <input type="text" id="new-cli-phone" placeholder="0414-XXXXXXX" required />
+        </div>
+        <div class="form-field">
+          <label>Dirección</label>
+          <input type="text" id="new-cli-addr" placeholder="Sector / Ciudad" />
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; font-weight:800; cursor:pointer;">
+        <input type="checkbox" id="new-cli-allied" style="width:18px; height:18px;" />
+        🤝 Clasificar como Mecánico / Taller Aliado (Habilita Crédito Flexible)
+      </label>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewClientDirect()">Guardar Cliente</button>
+    `
+  });
+}
+
+function saveNewClientDirect() {
+  const doc = (document.getElementById("new-cli-doc")?.value || "").trim().toUpperCase();
+  const name = (document.getElementById("new-cli-name")?.value || "").trim();
+  const phone = (document.getElementById("new-cli-phone")?.value || "").trim();
+  const addr = (document.getElementById("new-cli-addr")?.value || "").trim();
+  const allied = Boolean(document.getElementById("new-cli-allied")?.checked);
+
+  if (!doc || !name) {
+    showToast("Ingresa la Cédula/RIF y el nombre del cliente.", "error");
+    return;
+  }
+
+  db.clientes.push({
+    id_cliente: "CLI-" + Date.now().toString().slice(-4),
+    documento_identidad: doc,
+    nombre_completo: name,
+    telefono: phone || "0414-0000000",
+    direccion: addr || "Sin dirección",
+    es_taller_aliado: allied
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Cliente ${name} registrado en el directorio.`);
+}
+
+function openEditClientModal(clientId) {
+  const c = db.clientes.find((x) => x.id_cliente === clientId);
+  if (!c) return;
+
+  openModal({
+    title: `✏️ Editar Cliente — ${c.nombre_completo}`,
+    icon: "fa-user-edit",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Cédula o RIF *</label>
+          <input type="text" id="edit-cli-doc" value="${c.documento_identidad}" required />
+        </div>
+        <div class="form-field">
+          <label>Nombre Completo o Taller *</label>
+          <input type="text" id="edit-cli-name" value="${c.nombre_completo}" required />
+        </div>
+        <div class="form-field">
+          <label>Teléfono / WhatsApp *</label>
+          <input type="text" id="edit-cli-phone" value="${c.telefono || ""}" required />
+        </div>
+        <div class="form-field">
+          <label>Dirección</label>
+          <input type="text" id="edit-cli-addr" value="${c.direccion || ""}" />
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; font-weight:800; cursor:pointer;">
+        <input type="checkbox" id="edit-cli-allied" ${c.es_taller_aliado ? "checked" : ""} style="width:18px; height:18px;" />
+        🤝 Clasificar como Mecánico / Taller Aliado
+      </label>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveEditedClient('${c.id_cliente}')">Guardar Cambios</button>
+    `
+  });
+}
+
+function saveEditedClient(clientId) {
+  const c = db.clientes.find((x) => x.id_cliente === clientId);
+  if (!c) return;
+
+  const doc = (document.getElementById("edit-cli-doc")?.value || "").trim().toUpperCase();
+  const name = (document.getElementById("edit-cli-name")?.value || "").trim();
+  const phone = (document.getElementById("edit-cli-phone")?.value || "").trim();
+  const addr = (document.getElementById("edit-cli-addr")?.value || "").trim();
+  const allied = Boolean(document.getElementById("edit-cli-allied")?.checked);
+
+  if (!doc || !name) {
+    showToast("Cédula/RIF y nombre son obligatorios.", "error");
+    return;
+  }
+
+  c.documento_identidad = doc;
+  c.nombre_completo = name;
+  c.telefono = phone;
+  c.direccion = addr;
+  c.es_taller_aliado = allied;
+
+  // Sincronizar datos en órdenes asociadas a este cliente
+  db.ordenes.forEach((o) => {
+    if (o.cliente_id === clientId) {
+      o.documento_cliente = doc;
+      o.nombre_cliente = name;
+      o.telefono_cliente = phone;
+      o.direccion_cliente = addr;
+    }
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Datos del cliente ${name} actualizados.`);
+}
+
+function deleteClient(clientId) {
+  const c = db.clientes.find((x) => x.id_cliente === clientId);
+  if (!c) return;
+  if (!confirm(`¿Eliminar al cliente "${c.nombre_completo}" del directorio?`)) return;
+  db.clientes = db.clientes.filter((x) => x.id_cliente !== clientId);
+  saveDatabase();
+  renderApp();
+  showToast(`Cliente ${c.nombre_completo} eliminado.`);
+}
+
+/* ---------- CRUD COMPLETO DEL CATÁLOGO DE SERVICIOS Y COMISIONES ---------- */
+function openAddCatalogServiceModal() {
+  openModal({
+    title: "Añadir Servicio al Catálogo del Taller",
+    icon: "fa-tools",
+    body: `
+      <div class="form-field" style="margin-bottom:10px;">
+        <label>Nombre del Servicio *</label>
+        <input type="text" id="cat-srv-name" placeholder="Ej: Rectificación de Cigüeñal 4 Cilindros" required />
+      </div>
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Precio Sugerido al Cliente ($) *</label>
+          <input type="number" step="0.5" id="cat-srv-price" value="40" required />
+        </div>
+        <div class="form-field">
+          <label>Comisión Base para el Técnico ($) *</label>
+          <input type="number" step="0.5" id="cat-srv-comm" value="12" required />
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewCatalogService()">Guardar en Catálogo</button>
+    `
+  });
+}
+
+function saveNewCatalogService() {
+  const name = (document.getElementById("cat-srv-name")?.value || "").trim();
+  const price = Math.max(0, Number(document.getElementById("cat-srv-price")?.value) || 0);
+  const comm = Math.max(0, Number(document.getElementById("cat-srv-comm")?.value) || 0);
+  if (!name) return;
+
+  db.catalogo_servicios.push({
+    id_cat: "CAT-" + Date.now(),
+    nombre: name,
+    precio_sugerido: price,
+    comision_sugerida: comm
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Servicio "${name}" agregado al catálogo.`);
+}
+
+function openEditCatalogServiceModal(catId) {
+  const s = db.catalogo_servicios.find((x) => x.id_cat === catId);
+  if (!s) return;
+
+  openModal({
+    title: `✏️ Editar Servicio del Catálogo`,
+    icon: "fa-edit",
+    body: `
+      <div class="form-field" style="margin-bottom:10px;">
+        <label>Nombre del Servicio *</label>
+        <input type="text" id="edit-cat-name" value="${s.nombre}" required />
+      </div>
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Precio Sugerido al Cliente ($) *</label>
+          <input type="number" step="0.5" id="edit-cat-price" value="${Number(s.precio_sugerido) || 0}" required />
+        </div>
+        <div class="form-field">
+          <label>Comisión Base para el Técnico ($) *</label>
+          <input type="number" step="0.5" id="edit-cat-comm" value="${Number(s.comision_sugerida) || 0}" required />
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveEditedCatalogService('${s.id_cat}')">Guardar Cambios</button>
+    `
+  });
+}
+
+function saveEditedCatalogService(catId) {
+  const s = db.catalogo_servicios.find((x) => x.id_cat === catId);
+  if (!s) return;
+
+  const name = (document.getElementById("edit-cat-name")?.value || "").trim();
+  const price = Math.max(0, Number(document.getElementById("edit-cat-price")?.value) || 0);
+  const comm = Math.max(0, Number(document.getElementById("edit-cat-comm")?.value) || 0);
+  if (!name) {
+    showToast("El nombre del servicio no puede estar vacío.", "error");
+    return;
+  }
+
+  s.nombre = name;
+  s.precio_sugerido = price;
+  s.comision_sugerida = comm;
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Servicio "${name}" actualizado ($${price.toFixed(2)} / Com: $${comm.toFixed(2)}).`);
+}
+
+function deleteCatalogService(catId) {
+  const s = db.catalogo_servicios.find((x) => x.id_cat === catId);
+  if (!s) return;
+  if (!confirm(`¿Eliminar el servicio "${s.nombre}" del catálogo?`)) return;
+  db.catalogo_servicios = db.catalogo_servicios.filter((x) => x.id_cat !== catId);
+  saveDatabase();
+  renderApp();
+  showToast(`Servicio "${s.nombre}" eliminado del catálogo.`);
+}
+
+/* ============================================================================
+   INSTALACIÓN PWA Y ARRANQUE AUTOMÁTICO CON RELOJ EN TIEMPO REAL
+   ============================================================================ */
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = document.getElementById("pwa-install-btn");
+  if (btn) btn.classList.remove("hidden");
+});
+
+function triggerPwaInstall() {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  initTheme();
+  db = loadDatabase();
+  populateLoginSelect();
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+
+  const savedUserId = localStorage.getItem(SESSION_KEY);
+  if (savedUserId) {
+    const found = db.usuarios.find((u) => u.id_usuario === savedUserId);
+    if (found) {
+      quickLoginAs(savedUserId);
+    }
+  }
+
+  // Cronómetro en tiempo real (Fase 3): actualiza cada segundo los trabajos "En Proceso"
+  setInterval(tickLiveSubtaskTimers, 1000);
+
+  // Sincronización automática directa con el Google Sheets vinculado
+  syncFromGoogleSheets(true);
+});
