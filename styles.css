@@ -2010,3 +2010,96 @@ body {
   justify-content: space-between;
   gap: 8px;
 }
+
+/* ==========================================================================
+   OPTIMIZACIÓN MÓVIL (PARA JEFES DE TALLER Y TÉCNICOS EN TELÉFONOS)
+   + ESTADOS BLOQUEADOS DE BOTONES (FASE 3 PUNTO 5)
+   ========================================================================== */
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  pointer-events: none;
+}
+
+.worker-state-btn.active-state {
+  border-color: var(--renacer-gold);
+  box-shadow: 0 0 0 2px rgba(245, 223, 0, 0.25);
+}
+
+@media (max-width: 768px) {
+  .app-topbar {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .brand-title {
+    font-size: 16px;
+  }
+
+  .brand-subtitle {
+    display: none;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .topbar-search {
+    flex: 1 1 100%;
+    max-width: 100%;
+    order: 3;
+  }
+
+  .app-workspace {
+    padding: 12px 10px 92px;
+  }
+
+  .modal-backdrop {
+    padding: 8px;
+    align-items: flex-end;
+  }
+
+  .modal-box,
+  .modal-dialog {
+    max-height: 94dvh;
+    border-radius: 18px 18px 12px 12px;
+  }
+
+  .modal-header {
+    padding: 14px 16px;
+  }
+
+  .modal-header h3 {
+    font-size: 15px;
+  }
+
+  .modal-body {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .modal-footer {
+    padding: 12px 14px;
+  }
+
+  .modal-footer .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .renacer-table thead th,
+  .renacer-table tbody td,
+  .ar-excel-table thead th,
+  .ar-excel-table tbody td {
+    padding: 9px 10px;
+    font-size: 12px;
+  }
+
+  .kpi-value {
+    font-size: 20px;
+  }
+}
+
