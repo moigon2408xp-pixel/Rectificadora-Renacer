@@ -11,128 +11,96 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <link rel="stylesheet" href="./styles.css?v=5" />
+  <link rel="stylesheet" href="./styles.css?v=6" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
   <div class="app-shell">
 
-    <!-- ==================== PANTALLA DE ACCESO ==================== -->
+    <!-- ==================== PANTALLA DE ACCESO PROFESIONAL ==================== -->
     <section id="login-view" class="unlock-screen">
       <div class="login-bg-decor" aria-hidden="true">
         <div class="login-bg-circle login-bg-circle--1"></div>
         <div class="login-bg-circle login-bg-circle--2"></div>
       </div>
 
-      <div class="login-container">
-        <!-- Columna Izquierda: Identidad de Marca Rectificadora Renacer -->
-        <div class="login-brand-col">
+      <div class="login-card-clean">
+        <!-- Cabecera de Marca -->
+        <div class="login-clean-header">
           <div class="login-logo-wrapper">
             <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="login-logo" />
           </div>
           <span class="login-biblical-badge"><i class="fas fa-book-open"></i> JOB 8:7</span>
-          <p class="login-brand-sub">Sistema Integral de Control Mecánico</p>
-          <h1 class="login-brand-name">RECTIFICADORA RENACER</h1>
-          <p class="login-brand-tag">
-            Recepción por Troquel · Diagnóstico y Presupuesto Dinámico · Doble Galería Fotográfica · Asignación Multipersonal y Destajo (Fases 1, 2 y 3)
-          </p>
+          <h1 class="login-clean-title">RECTIFICADORA RENACER</h1>
+          <p class="login-clean-sub">Sistema de Gestión de Taller y Producción</p>
+        </div>
 
-          <!-- Tarjetas de Acceso Instantáneo por Rol (Ideal para Taller y Demostración en Vivo) -->
-          <div class="quick-profiles-box">
-            <div class="quick-profiles-title">
-              <i class="fas fa-bolt"></i> Acceso Rápido por Perfil Operativo (1 Clic):
-            </div>
-            <div class="quick-profiles-grid">
-              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-MOISES')" style="grid-column: 1 / -1; border-color:rgba(245,223,0,0.55); background:rgba(245,223,0,0.14);">
-                <div class="profile-quick-icon" style="background:rgba(245,223,0,0.28); color:#f5df00;">
-                  <i class="fas fa-user-shield"></i>
-                </div>
-                <div class="profile-quick-info">
-                  <strong>Moisés González (Admin)</strong>
-                  <span>Administrador General · Control Total, Limpieza de Pruebas y Auditoría (Fases 1, 2 y 3)</span>
-                </div>
-              </button>
+        <!-- Alerta de sesión anterior (si existe) -->
+        <div id="login-resume-banner" class="login-resume-banner hidden">
+          <div style="font-size:12.5px; color:#fde047; font-weight:800;">
+            <i class="fas fa-user-check"></i> Sesión guardada: <strong id="login-resume-name">Moises Gonzalez</strong>
+          </div>
+          <button type="button" class="btn btn--gold btn--sm" onclick="resumePreviousSession()" style="padding:4px 10px; font-size:11.5px;">
+            Continuar ➔
+          </button>
+        </div>
 
-              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-JESUS')">
-                <div class="profile-quick-icon" style="background:rgba(245,223,0,0.22); color:#f5df00;">
-                  <i class="fas fa-user-gear"></i>
-                </div>
-                <div class="profile-quick-info">
-                  <strong>Jesús Andrade</strong>
-                  <span>Jefe de Taller · Gestión, QC y Finanzas</span>
-                </div>
-              </button>
-
-              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-ENRIQUE')">
-                <div class="profile-quick-icon" style="background:rgba(56,189,248,0.22); color:#38bdf8;">
-                  <i class="fas fa-user-tie"></i>
-                </div>
-                <div class="profile-quick-info">
-                  <strong>Sr. Enrique Andrade</strong>
-                  <span>Jefe de Taller · Control y Cobranzas</span>
-                </div>
-              </button>
-
-              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-RECEPCION')">
-                <div class="profile-quick-icon" style="background:rgba(168,85,247,0.22); color:#c084fc;">
-                  <i class="fas fa-clipboard-check"></i>
-                </div>
-                <div class="profile-quick-info">
-                  <strong>Recepción Taller</strong>
-                  <span>Teléfono Fijo · Ingreso y Abonos</span>
-                </div>
-              </button>
-
-              <button type="button" class="profile-quick-card" onclick="quickLoginAs('USR-HEIBER')">
-                <div class="profile-quick-icon" style="background:rgba(34,197,94,0.22); color:#4ade80;">
-                  <i class="fas fa-wrench"></i>
-                </div>
-                <div class="profile-quick-info">
-                  <strong>Heiber (Técnico)</strong>
-                  <span>Técnico Rectificador · Mis Trabajos y Fotos</span>
-                </div>
-              </button>
+        <!-- Formulario de Acceso Limpio -->
+        <form id="login-form" class="login-clean-form" onsubmit="handleManualLogin(event)">
+          <div class="field-group">
+            <label for="login-username-input"><i class="fas fa-user"></i> Usuario o Nombre</label>
+            <div class="login-input-wrap">
+              <input
+                id="login-username-input"
+                type="text"
+                placeholder="Ej: Moises Gonzalez"
+                autocomplete="username"
+                list="login-users-datalist"
+                required
+              />
+              <datalist id="login-users-datalist"></datalist>
             </div>
           </div>
-        </div>
 
-        <!-- Columna Derecha: Formulario de Ingreso Manual -->
-        <div>
-          <form id="login-form" class="unlock-form" onsubmit="handleManualLogin(event)">
-            <div style="margin-bottom:4px;">
-              <h2 style="font-size:20px; font-weight:900; color:#ffffff;">Iniciar Sesión en Taller</h2>
-              <p style="font-size:12.5px; color:#cbd5e1; margin-top:2px;">
-                Selecciona tu usuario o ingresa tu PIN personal de trabajo.
-              </p>
+          <div class="field-group">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <label for="login-pin-input"><i class="fas fa-lock"></i> Contraseña / PIN Numérico</label>
+              <button type="button" class="btn-clean-link" onclick="toggleLoginPinVisibility()">
+                <i class="fas fa-eye" id="login-pin-eye-icon"></i> <span id="login-pin-eye-text">Ver</span>
+              </button>
             </div>
+            <div class="login-input-wrap">
+              <input
+                id="login-pin-input"
+                type="password"
+                inputmode="numeric"
+                placeholder="Ingresa tu PIN numérico"
+                autocomplete="current-password"
+                required
+              />
+            </div>
+          </div>
 
-            <label for="login-user-select">Usuario del Sistema</label>
-            <select id="login-user-select" required></select>
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#cbd5e1; margin-top:2px;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" id="login-remember-me" checked style="accent-color:var(--renacer-gold); width:16px; height:16px;" />
+              Recordar usuario en este equipo
+            </label>
+          </div>
 
-            <label for="login-pin-input">PIN de Acceso</label>
-            <input
-              id="login-pin-input"
-              type="password"
-              inputmode="numeric"
-              placeholder="Ingresa tu PIN (ej. 123456)"
-              value="123456"
-              required
-            />
+          <button type="submit" class="btn btn--gold btn--lg" style="width:100%; justify-content:center; padding:13px; font-size:15px; margin-top:6px;">
+            <i class="fas fa-sign-in-alt"></i> Entrar al Sistema Renacer
+          </button>
 
-            <button type="submit" class="login-submit-btn">
-              <i class="fas fa-sign-in-alt"></i> Entrar al Sistema Renacer
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button type="button" class="btn btn--ghost" style="flex:1; background:rgba(255,255,255,0.06); color:#fff; border-color:rgba(255,255,255,0.18); font-size:12px;" onclick="triggerPwaInstall()">
+              <i class="fas fa-download"></i> Instalar App (PC / Teléfono)
             </button>
-
-            <div style="display:flex; gap:8px; margin-top:6px;">
-              <button type="button" class="btn btn--ghost" style="flex:1; background:rgba(255,255,255,0.08); color:#fff; border-color:rgba(255,255,255,0.18); font-size:11.5px;" onclick="triggerPwaInstall()">
-                <i class="fas fa-download"></i> Instalar App (Teléfono/PC)
-              </button>
-              <button type="button" class="btn btn--ghost" style="background:rgba(255,255,255,0.08); color:#fde047; border-color:rgba(245,223,0,0.3); font-size:11.5px;" onclick="resetDemoDatabase()" title="Restaurar datos de ejemplo originales">
-                <i class="fas fa-redo"></i> Demo Inicial
-              </button>
-            </div>
-          </form>
-        </div>
+            <button type="button" class="btn btn--ghost" style="background:rgba(255,255,255,0.06); color:#fde047; border-color:rgba(245,223,0,0.3); font-size:12px;" onclick="resetDemoDatabase()" title="Restaurar datos de ejemplo">
+              <i class="fas fa-redo"></i> Demo
+            </button>
+          </div>
+        </form>
       </div>
     </section>
 
@@ -210,7 +178,7 @@
 
   </div>
 
-  <script src="./app.js?v=5"></script>
+  <script src="./app.js?v=6"></script>
 </body>
 </html>
 
