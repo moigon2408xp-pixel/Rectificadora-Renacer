@@ -1823,27 +1823,27 @@ function getTabsForRole(role) {
   if (role === "tecnico") {
     const myTasks = db.subtareas.filter((s) => s.tecnico_id === currentUser.id_usuario && s.estado_subtarea !== "terminado").length;
     return [
-      { id: "worker_panel", label: "Mis Trabajos", icon: "fa-hammer", badge: myTasks },
-      { id: "worker_earnings", label: "Mis Comisiones", icon: "fa-wallet" },
-      { id: "attendance", label: "Mis Días Activos", icon: "fa-calendar-check" }
+      { id: "worker_panel", label: "Mis Trabajos", shortLabel: "Trabajos", icon: "fa-hammer", badge: myTasks },
+      { id: "worker_earnings", label: "Mis Comisiones", shortLabel: "Ganancias", icon: "fa-wallet" },
+      { id: "attendance", label: "Mis Días Activos", shortLabel: "Días", icon: "fa-calendar-check" }
     ];
   }
 
   if (role === "recepcion") {
     return [
-      { id: "pipeline", label: "Tablero de Órdenes", icon: "fa-columns", badge: db.ordenes.length },
-      { id: "accounts_receivable", label: "Cuentas por Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
-      { id: "clients_catalog", label: "Clientes y Precios", icon: "fa-address-book" }
+      { id: "pipeline", label: "Tablero de Órdenes", shortLabel: "Órdenes", icon: "fa-columns", badge: db.ordenes.length },
+      { id: "accounts_receivable", label: "Cuentas por Cobrar", shortLabel: "Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
+      { id: "clients_catalog", label: "Clientes y Precios", shortLabel: "Clientes", icon: "fa-address-book" }
     ];
   }
 
   // Administrador (Moisés) y Jefes de Taller (Jesús y Sr. Enrique): 5 módulos claros sin duplicados
   return [
-    { id: "pipeline", label: "Tablero de Órdenes", icon: "fa-columns", badge: db.ordenes.length },
-    { id: "accounts_receivable", label: "Cuentas por Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
-    { id: "commissions_hr", label: "Comisiones y Personal", icon: "fa-user-check" },
-    { id: "finances_ledger", label: "Libro Diario (Caja)", icon: "fa-chart-pie" },
-    { id: "clients_catalog", label: "Clientes y Catálogo", icon: "fa-cogs" }
+    { id: "pipeline", label: "Tablero de Órdenes", shortLabel: "Órdenes", icon: "fa-columns", badge: db.ordenes.length },
+    { id: "accounts_receivable", label: "Cuentas por Cobrar", shortLabel: "Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
+    { id: "commissions_hr", label: "Comisiones y Personal", shortLabel: "Personal", icon: "fa-user-check" },
+    { id: "finances_ledger", label: "Libro Diario (Caja)", shortLabel: "Caja", icon: "fa-chart-pie" },
+    { id: "clients_catalog", label: "Clientes y Catálogo", shortLabel: "Clientes", icon: "fa-cogs" }
   ];
 }
 
@@ -1897,7 +1897,7 @@ function renderApp() {
       (t) => `
       <button type="button" class="bottom-nav-item ${currentTab === t.id ? "active" : ""}" onclick="navigateTab('${t.id}')">
         <i class="fas ${t.icon}"></i>
-        <span>${t.label.slice(0, 12)}</span>
+        <span>${t.shortLabel || t.label}</span>
       </button>
     `
     )
@@ -2130,45 +2130,43 @@ function renderPipelineScreen(forcedState) {
 
   const roleContextBar = isAdmin
     ? `
-      <div style="background:linear-gradient(135deg, #182254 0%, #0f172a 100%); border:1px solid rgba(245,223,0,0.45); border-radius:14px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; color:#fff;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <span style="background:var(--renacer-gold); color:#0f1638; font-weight:900; font-size:10.5px; padding:3px 9px; border-radius:99px;">
-            <i class="fas fa-user-shield"></i> VISTA ADMINISTRADOR (${currentUser.nombre.toUpperCase()})
+      <div class="admin-context-bar">
+        <div class="admin-context-info">
+          <span class="admin-context-badge">
+            <i class="fas fa-user-shield"></i> ADMINISTRADOR (${currentUser.nombre.toUpperCase()})
           </span>
-          <span style="font-size:12.5px; color:#cbd5e1;">Control total de órdenes, edición de precios/comisiones, perfiles y limpieza de pruebas.</span>
+          <span class="admin-context-desc">Control total de órdenes, precios, perfiles y limpieza.</span>
         </div>
-        <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--danger" style="padding:5px 10px; font-size:11.5px;" onclick="clearAllTestOrders()">
+        <div class="admin-context-actions">
+          <button type="button" class="btn btn--danger btn--xs" onclick="clearAllTestOrders()">
             <i class="fas fa-broom"></i> Limpiar Pruebas
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px; color:#fff; border-color:rgba(255,255,255,0.25);" onclick="navigateTab('clients_catalog')">
-            <i class="fas fa-edit"></i> Editar Precios / Clientes
+          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('clients_catalog')">
+            <i class="fas fa-edit"></i> Precios / Clientes
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px; color:#fff; border-color:rgba(255,255,255,0.25);" onclick="navigateTab('commissions_hr')">
-            <i class="fas fa-users-cog"></i> Editar Trabajadores
+          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('commissions_hr')">
+            <i class="fas fa-users-cog"></i> Trabajadores
           </button>
         </div>
       </div>
     `
     : isJefe
     ? `
-      <div style="background:var(--bg-card); border:1.5px solid rgba(245,196,0,0.5); border-radius:14px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-        <div>
-          <span style="background:var(--renacer-gold); color:#0f1638; font-weight:900; font-size:10.5px; padding:3px 9px; border-radius:99px;">
-            <i class="fas fa-mobile-alt"></i> JEFE DE TALLER · ${currentUser.nombre.toUpperCase()}
+      <div class="admin-context-bar">
+        <div class="admin-context-info">
+          <span class="admin-context-badge">
+            <i class="fas fa-user-tie"></i> JEFE DE TALLER · ${currentUser.nombre.toUpperCase()}
           </span>
-          <span style="font-size:12.5px; color:var(--text-muted); margin-left:6px;">
-            Acceso rápido desde tu teléfono a recepción, asignación por destajo, calidad y cobros.
-          </span>
+          <span class="admin-context-desc">Acceso rápido a recepción, asignación, calidad y cobros.</span>
         </div>
-        <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--warning" style="padding:5px 10px; font-size:11.5px;" onclick="setPhaseFilter('esperando_aprobacion_abono')">
+        <div class="admin-context-actions">
+          <button type="button" class="btn btn--warning btn--xs" onclick="setPhaseFilter('esperando_aprobacion_abono')">
             ⏳ Por Aprobar (${counts.esperando_aprobacion_abono})
           </button>
-          <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="setPhaseFilter('control_calidad')">
+          <button type="button" class="btn btn--primary btn--xs" onclick="setPhaseFilter('control_calidad')">
             🛡️ Calidad (${counts.control_calidad + counts.terminado})
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px;" onclick="navigateTab('accounts_receivable')">
+          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('accounts_receivable')">
             💵 Por Cobrar
           </button>
         </div>
