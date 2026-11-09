@@ -1,4 +1,4 @@
-const CACHE_NAME = 'renacer-taller-v1';
+const CACHE_NAME = 'renacer-taller-v4';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -35,17 +35,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Estrategia Network-First con respaldo en caché para ver cambios al instante
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const networkFetch = fetch(req).then((res) => {
+    fetch(req)
+      .then((res) => {
         if (res && res.status === 200 && res.type === 'basic') {
           const clone = res.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
         }
         return res;
-      }).catch(() => cached);
-      return cached || networkFetch;
-    })
+      })
+      .catch(() => caches.match(req))
   );
 });
 
