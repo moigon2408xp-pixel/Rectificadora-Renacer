@@ -74,16 +74,24 @@ function cleanTimeHuman(raw) {
 }
 
 function formatLiveSubtaskTimer(sub) {
-  const baseMin = Number(sub.minutos_acumulados ?? sub.tiempo_neto_min ?? 0);
+  const baseSec = Number(sub.segundos_acumulados) || ((Number(sub.minutos_acumulados) || Number(sub.tiempo_neto_min) || 0) * 60);
+  let totalSec = baseSec;
   if (sub.estado_subtarea === "empezado" && sub.inicio_activo_ts) {
     const elapsedSec = Math.max(0, Math.floor((Date.now() - Number(sub.inicio_activo_ts)) / 1000));
-    const totalSec = baseMin * 60 + elapsedSec;
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    totalSec += elapsedSec;
   }
-  return formatMinutes(baseMin);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function accumulateSubtaskActiveTime(sub) {
+  if (!sub.inicio_activo_ts) return;
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - Number(sub.inicio_activo_ts)) / 1000));
+  sub.segundos_acumulados = (Number(sub.segundos_acumulados) || (Number(sub.minutos_acumulados) || 0) * 60) + elapsedSec;
+  sub.minutos_acumulados = Math.floor(sub.segundos_acumulados / 60);
+  sub.inicio_activo_ts = null;
 }
 
 /* ---------- Placeholder Visual Limpio (Sin texto de relleno superpuesto) ---------- */
@@ -1830,10 +1838,10 @@ function getTabsForRole(role) {
   }
 
   if (role === "recepcion") {
+    // Recepción (teléfono fijo de ingreso): Solo registro físico de órdenes y catálogo de clientes/precios
     return [
-      { id: "pipeline", label: "Tablero de Órdenes", shortLabel: "Órdenes", icon: "fa-columns", badge: db.ordenes.length },
-      { id: "accounts_receivable", label: "Cuentas por Cobrar", shortLabel: "Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
-      { id: "clients_catalog", label: "Clientes y Precios", shortLabel: "Clientes", icon: "fa-address-book" }
+      { id: "pipeline", label: "Recepción de Órdenes", shortLabel: "Órdenes", icon: "fa-columns", badge: db.ordenes.length },
+      { id: "clients_catalog", label: "Clientes y Precios", shortLabel: "Precios", icon: "fa-address-book" }
     ];
   }
 
@@ -1848,6 +1856,12 @@ function getTabsForRole(role) {
 }
 
 function navigateTab(tabId) {
+  if (currentUser && currentUser.rol === "recepcion") {
+    if (tabId === "accounts_receivable" || tabId === "finances_ledger" || tabId === "commissions_hr") {
+      showToast("Acceso protegido: La información financiera, caja y cuentas por cobrar es exclusiva de Dirección y Jefes de Taller.", "error");
+      tabId = "pipeline";
+    }
+  }
   if (tabId === "default") {
     tabId = currentUser && currentUser.rol === "tecnico" ? "worker_panel" : "pipeline";
   }
@@ -2669,13 +2683,28 @@ function openNewOrderModal() {
             <div class="form-field">
               <label>Documento de Identidad (Cédula / RIF) *</label>
               <div style="display:flex; gap:6px;">
-                <input type="text" id="new-cli-doc" placeholder="Ej: V-14520310 o J-40125896-3" required oninput="lookupClientByDoc(this.value)" />
-                <button type="button" class="btn btn--primary" onclick="lookupClientByDoc(document.getElementById('new-cli-doc').value)" title="Buscar cliente">
+                <select id="new-cli-doc-type" onchange="handleNewOrderDocInput()" style="width:115px; font-weight:800; background:var(--bg-input); color:var(--text-main); border:1.5px solid var(--border-color); border-radius:10px; padding:7px 8px;">
+                  <option value="V-">V- (Venezolano)</option>
+                  <option value="J-">J- (Jurídico / RIF)</option>
+                  <option value="E-">E- (Extranjero)</option>
+                  <option value="G-">G- (Gubernamental)</option>
+                </select>
+                <input
+                  type="text"
+                  id="new-cli-doc-num"
+                  placeholder="Número..."
+                  inputmode="numeric"
+                  required
+                  oninput="handleNewOrderDocInput()"
+                  style="flex:1;"
+                />
+                <button type="button" class="btn btn--primary" onclick="handleNewOrderDocInput()" title="Buscar cliente">
                   <i class="fas fa-search"></i>
                 </button>
               </div>
-              <span id="cli-lookup-status" style="font-size:11px; font-weight:700; color:var(--text-muted);">
-                Escribe ej. V-14520310 (Luis Mecánico) para autocompletar o ingresa uno nuevo.
+              <input type="hidden" id="new-cli-doc" value="V-" />
+              <span id="cli-lookup-status" style="font-size:11px; font-weight:700; color:var(--text-muted); margin-top:4px; display:block;">
+                Selecciona el tipo (V-, J-, E-, G-) e ingresa el número para autocompletar o registrar sin errores.
               </span>
             </div>
             <div class="form-field">
@@ -2730,7 +2759,36 @@ function openNewOrderModal() {
             </div>
             <div class="form-field">
               <label>Marca del Vehículo *</label>
-              <input type="text" id="new-ord-marca" placeholder="Ej: Toyota, Chevrolet, Ford" required />
+              <select id="new-ord-marca-select" onchange="handleMarcaSelectChange(this.value)" style="width:100%; padding:9px 10px; border-radius:10px; border:1.5px solid var(--border-color); font-weight:700; background:var(--bg-input); color:var(--text-main);">
+                <option value="">-- Seleccionar Marca --</option>
+                <option value="TOYOTA">TOYOTA</option>
+                <option value="CHEVROLET">CHEVROLET</option>
+                <option value="FORD">FORD</option>
+                <option value="MITSUBISHI">MITSUBISHI</option>
+                <option value="HYUNDAI">HYUNDAI</option>
+                <option value="NISSAN">NISSAN</option>
+                <option value="JEEP">JEEP</option>
+                <option value="FIAT">FIAT</option>
+                <option value="RENAULT">RENAULT</option>
+                <option value="VOLKSWAGEN">VOLKSWAGEN</option>
+                <option value="HONDA">HONDA</option>
+                <option value="KIA">KIA</option>
+                <option value="MAZDA">MAZDA</option>
+                <option value="MACK">MACK (Camión / Diésel)</option>
+                <option value="IVECO">IVECO (Diésel)</option>
+                <option value="ISUZU">ISUZU</option>
+                <option value="CHERY">CHERY</option>
+                <option value="DODGE">DODGE</option>
+                <option value="CHRYSLER">CHRYSLER</option>
+                <option value="PEUGEOT">PEUGEOT</option>
+                <option value="OTRA">OTRA MARCA (Escribir manual)...</option>
+              </select>
+              <input
+                type="text"
+                id="new-ord-marca"
+                placeholder="Escribe el nombre de la marca si no está en la lista..."
+                style="display:none; margin-top:6px;"
+              />
             </div>
             <div class="form-field">
               <label>Modelo / Motor *</label>
@@ -2848,16 +2906,53 @@ function lookupClientByDoc(docRaw) {
     document.getElementById("new-cli-phone").value = found.telefono;
     document.getElementById("new-cli-address").value = found.direccion || "";
     document.getElementById("new-cli-allied").value = found.es_taller_aliado ? "true" : "false";
+
+    const parts = found.documento_identidad.split("-");
+    if (parts.length >= 2) {
+      const typeSelect = document.getElementById("new-cli-doc-type");
+      const numInput = document.getElementById("new-cli-doc-num");
+      if (typeSelect) typeSelect.value = parts[0] + "-";
+      if (numInput && !numInput.value) numInput.value = parts.slice(1).join("-");
+    }
+
     if (statusEl) {
       statusEl.style.color = "#16a34a";
-      statusEl.innerHTML = `<i class="fas fa-check-circle"></i> Cliente registrado encontrado: <strong>${found.nombre_completo}</strong> (Autocompletado).`;
+      statusEl.innerHTML = `<i class="fas fa-check-circle"></i> Cliente encontrado: <strong>${found.nombre_completo}</strong> (Datos autocompletados).`;
     }
   } else {
     tempNewOrderState.clienteEncontradoId = null;
     if (statusEl) {
       statusEl.style.color = "#d97706";
-      statusEl.innerHTML = `<i class="fas fa-user-plus"></i> Documento nuevo: Completa los campos para registrarlo automáticamente sin duplicados.`;
+      statusEl.innerHTML = `<i class="fas fa-user-plus"></i> Cliente nuevo: Completa el nombre y teléfono para registrarlo sin duplicados.`;
     }
+  }
+}
+
+function handleMarcaSelectChange(val) {
+  const input = document.getElementById("new-ord-marca");
+  if (!input) return;
+  if (val === "OTRA") {
+    input.style.display = "block";
+    input.value = "";
+    input.required = true;
+    input.focus();
+  } else {
+    input.style.display = "none";
+    input.value = val;
+    input.required = false;
+  }
+}
+
+function handleNewOrderDocInput() {
+  const prefix = document.getElementById("new-cli-doc-type")?.value || "V-";
+  const numInput = document.getElementById("new-cli-doc-num");
+  const rawNum = numInput ? numInput.value : "";
+  const cleanNum = rawNum.replace(/[^0-9A-Za-z-]/g, "").trim();
+  const fullDoc = cleanNum ? (prefix + cleanNum).toUpperCase() : "";
+  const hiddenDoc = document.getElementById("new-cli-doc");
+  if (hiddenDoc) hiddenDoc.value = fullDoc;
+  if (fullDoc) {
+    lookupClientByDoc(fullDoc);
   }
 }
 
@@ -3025,7 +3120,9 @@ function renderTempBudgetItems() {
 }
 
 function saveNewOrder() {
-  const doc = (document.getElementById("new-cli-doc")?.value || "").trim().toUpperCase();
+  const docType = document.getElementById("new-cli-doc-type")?.value || "V-";
+  const docNum = (document.getElementById("new-cli-doc-num")?.value || "").trim().replace(/[^0-9A-Za-z-]/g, "");
+  const doc = docNum ? (docType + docNum).toUpperCase() : (document.getElementById("new-cli-doc")?.value || "").trim().toUpperCase();
   const name = (document.getElementById("new-cli-name")?.value || "").trim();
   const phone = (document.getElementById("new-cli-phone")?.value || "").trim();
   const address = (document.getElementById("new-cli-address")?.value || "").trim();
@@ -3033,7 +3130,9 @@ function saveNewOrder() {
 
   const troquel = (document.getElementById("new-ord-troquel")?.value || "").trim();
   const pieza = document.getElementById("new-ord-pieza")?.value || "Cámara / Culata";
-  const marca = (document.getElementById("new-ord-marca")?.value || "").trim();
+  const marcaSel = document.getElementById("new-ord-marca-select")?.value || "";
+  const marcaCustom = (document.getElementById("new-ord-marca")?.value || "").trim();
+  const marca = (marcaSel && marcaSel !== "OTRA") ? marcaSel : marcaCustom;
   const modelo = (document.getElementById("new-ord-modelo")?.value || "").trim();
   const serial = (document.getElementById("new-ord-serial")?.value || "").trim() || "S/N";
   const obs = (document.getElementById("new-ord-obs")?.value || "").trim();
@@ -4978,51 +5077,78 @@ function renderWorkerPanelScreen() {
                 ${
                   sub.estado_subtarea !== "terminado"
                     ? `
-                    <!-- 4. SELECTOR DE SUB-ESTADOS OPERATIVOS DEL TÉCNICO (FASE 3) -->
-                    <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-top:2px;">
-                      4. Sub-estados Operativos del Técnico (Control en Tiempo Real):
+                    <!-- 4. CONTROL OPERATIVO Y CRONÓMETRO EXACTO DEL TÉCNICO -->
+                    <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-top:4px;">
+                      Flujo Operativo en Mesa de Trabajo:
                     </div>
-                    <div class="worker-big-buttons">
-                      <button
-                        type="button"
-                        class="worker-state-btn ${sub.estado_subtarea === "pendiente" ? "active-state" : ""}"
-                        onclick="setSubtaskToPending('${sub.id_subtarea}')"
-                      >
-                        <i class="fas fa-clock"></i>
-                        <span>⏳ POR HACER / PENDIENTE</span>
-                        <small style="font-size:10px; font-weight:700;">En cola de estación</small>
-                      </button>
-
-                      <button
-                        type="button"
-                        class="worker-state-btn btn-start ${sub.estado_subtarea === "empezado" ? "active-state" : ""}"
-                        onclick="startSubtaskWork('${sub.id_subtarea}')"
-                      >
-                        <i class="fas fa-play"></i>
-                        <span>🔨 EN PROCESO</span>
-                        <small style="font-size:10px; font-weight:700;">Inicia reloj en máquina</small>
-                      </button>
-
-                      <button
-                        type="button"
-                        class="worker-state-btn btn-pause ${sub.estado_subtarea === "pausado" ? "active-state" : ""}"
-                        onclick="openPauseSubtaskModal('${sub.id_subtarea}')"
-                      >
-                        <i class="fas fa-pause-circle"></i>
-                        <span>⏸️ PAUSADO / IMPREVISTO</span>
-                        <small style="font-size:10px; font-weight:700;">Exige nota a gerencia</small>
-                      </button>
-                    </div>
-
-                    <!-- 5. BOTÓN DE FINALIZACIÓN CON VALIDACIÓN FOTOGRÁFICA OBLIGATORIA -->
-                    <button
-                      type="button"
-                      class="btn btn--success btn--lg"
-                      style="width:100%; justify-content:center; padding:12px 16px; font-size:13.5px; margin-top:4px;"
-                      onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
-                    >
-                      <i class="fas fa-camera"></i> [ Terminar Tarea / Enviar a Control de Calidad ]
-                    </button>
+                    ${
+                      sub.estado_subtarea === "pendiente"
+                        ? `
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                          <div style="background:rgba(2,132,199,0.08); border:1px solid rgba(2,132,199,0.3); border-radius:10px; padding:10px 14px; display:flex; align-items:center; justify-content:space-between;">
+                            <span style="font-size:12.5px; font-weight:700; color:#0284c7;">
+                              <i class="fas fa-clock"></i> Tarea en cola de estación (Reloj en 00:00:00)
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            class="btn btn--primary btn--lg"
+                            style="width:100%; justify-content:center; padding:12px 16px; font-size:14px; font-weight:800;"
+                            onclick="startSubtaskWork('${sub.id_subtarea}')"
+                          >
+                            <i class="fas fa-play-circle"></i> Iniciar Trabajo en Máquina (Activar Cronómetro)
+                          </button>
+                        </div>
+                      `
+                        : sub.estado_subtarea === "empezado"
+                        ? `
+                        <div style="display:grid; grid-template-columns: 1fr 1.3fr; gap:8px;">
+                          <button
+                            type="button"
+                            class="btn btn--warning"
+                            style="justify-content:center; padding:12px 10px; font-size:12.5px; font-weight:800;"
+                            onclick="openPauseSubtaskModal('${sub.id_subtarea}')"
+                          >
+                            <i class="fas fa-pause-circle"></i> Pausar (Imprevisto)
+                          </button>
+                          <button
+                            type="button"
+                            class="btn btn--success btn--lg"
+                            style="justify-content:center; padding:12px 12px; font-size:13px; font-weight:800;"
+                            onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
+                          >
+                            <i class="fas fa-camera"></i> Terminar (Subir Foto)
+                          </button>
+                        </div>
+                      `
+                        : sub.estado_subtarea === "pausado"
+                        ? `
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                          <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.4); border-radius:10px; padding:8px 12px; font-size:12px; color:#d97706; font-weight:700;">
+                            <i class="fas fa-pause-circle"></i> Trabajo detenido temporalmente · Cronómetro congelado con precisión de segundos.
+                          </div>
+                          <div style="display:grid; grid-template-columns: 1fr 1.3fr; gap:8px;">
+                            <button
+                              type="button"
+                              class="btn btn--primary btn--lg"
+                              style="justify-content:center; padding:12px 10px; font-size:12.5px; font-weight:800;"
+                              onclick="startSubtaskWork('${sub.id_subtarea}')"
+                            >
+                              <i class="fas fa-play"></i> Reanudar Trabajo
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn--success btn--lg"
+                              style="justify-content:center; padding:12px 12px; font-size:13px; font-weight:800;"
+                              onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
+                            >
+                              <i class="fas fa-camera"></i> Terminar (Subir Foto)
+                            </button>
+                          </div>
+                        </div>
+                      `
+                        : ""
+                    }
                   `
                     : `
                     <div style="background:rgba(22,163,74,0.12); border:1px solid rgba(22,163,74,0.35); border-radius:12px; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
@@ -5086,11 +5212,7 @@ function selectWorkerPreview(workerId) {
 function setSubtaskToPending(subtaskId) {
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
-  if (sub.inicio_activo_ts) {
-    const elapsed = Math.max(1, Math.round((Date.now() - Number(sub.inicio_activo_ts)) / 60000));
-    sub.minutos_acumulados = (Number(sub.minutos_acumulados) || 0) + elapsed;
-    sub.inicio_activo_ts = null;
-  }
+  accumulateSubtaskActiveTime(sub);
   sub.estado_subtarea = "pendiente";
 
   const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
@@ -5202,11 +5324,7 @@ function confirmPauseSubtaskWithNote(subtaskId) {
   }
 
   sub.estado_subtarea = "pausado";
-  if (sub.inicio_activo_ts) {
-    const elapsed = Math.max(1, Math.round((Date.now() - Number(sub.inicio_activo_ts)) / 60000));
-    sub.minutos_acumulados = (Number(sub.minutos_acumulados) || 0) + elapsed;
-    sub.inicio_activo_ts = null;
-  }
+  accumulateSubtaskActiveTime(sub);
 
   const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
   if (ord) {
@@ -5358,14 +5476,10 @@ function confirmSubtaskCompletion(subtaskId) {
     return;
   }
 
-  // Detener el cronómetro en vivo y sumar el tiempo real invertido
-  if (sub.inicio_activo_ts) {
-    const elapsed = Math.max(1, Math.round((Date.now() - Number(sub.inicio_activo_ts)) / 60000));
-    sub.minutos_acumulados = (Number(sub.minutos_acumulados) || 0) + elapsed;
-    sub.inicio_activo_ts = null;
-  }
+  // Detener el cronómetro en vivo y sumar el tiempo real invertido con precisión exacta de segundos
+  accumulateSubtaskActiveTime(sub);
   if (!sub.minutos_acumulados || sub.minutos_acumulados === 0) {
-    sub.minutos_acumulados = 35;
+    sub.minutos_acumulados = Math.max(1, Math.floor((Number(sub.segundos_acumulados) || 0) / 60));
   }
 
   sub.estado_subtarea = "terminado";
