@@ -544,6 +544,9 @@ body {
   padding: 2px 7px;
   border-radius: 99px;
   font-weight: 900;
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.5px;
 }
 
 .renacer-brand-sub {
@@ -1275,7 +1278,7 @@ body {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: 9999;
   background: rgba(10, 15, 36, 0.76);
   backdrop-filter: blur(6px);
   display: flex;
@@ -2411,6 +2414,29 @@ body {
     border-radius: 14px !important;
   }
 
+  /* HEADER BRAND Y VERSÍCULO BÍBLICO JOB 8:7 SIN RECORTE */
+  .renacer-header-brand {
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+    gap: 6px !important;
+    overflow: visible !important;
+  }
+
+  .renacer-brand-title {
+    font-size: 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    white-space: nowrap !important;
+  }
+
+  .job-pill {
+    flex-shrink: 0 !important;
+    display: inline-block !important;
+    font-size: 9.5px !important;
+    padding: 2px 6px !important;
+  }
+
   /* BARRA DE NAVEGACIÓN INFERIOR NATIVA */
   .mobile-bottom-nav {
     display: flex !important;
@@ -2418,7 +2444,7 @@ body {
     bottom: 0 !important;
     left: 0 !important;
     right: 0 !important;
-    z-index: 1000 !important;
+    z-index: 90 !important;
     background: #141d47 !important;
     border-top: 2px solid var(--renacer-gold) !important;
     padding: 4px 2px calc(4px + env(safe-area-inset-bottom, 0px)) !important;
@@ -2486,19 +2512,24 @@ body {
     display: block !important;
   }
 
-  /* MODALES AJUSTADOS A LA PANTALLA MÓVIL */
+  /* MODALES AJUSTADOS A PANTALLA MÓVIL Y SUPERIORES A LA BARRA INFERIOR */
   .modal-backdrop {
-    padding: 6px !important;
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 99999 !important;
+    padding: 0 !important;
     align-items: flex-end !important;
+    background: rgba(10, 15, 36, 0.82) !important;
   }
 
   .modal-box,
   .modal-dialog {
     width: 100% !important;
     max-width: 100% !important;
-    max-height: 92dvh !important;
-    border-radius: 16px 16px 8px 8px !important;
+    max-height: 94dvh !important;
+    border-radius: 20px 20px 0 0 !important;
     margin: 0 !important;
+    z-index: 100000 !important;
   }
 
   .modal-header {
@@ -2515,8 +2546,14 @@ body {
   }
 
   .modal-footer {
-    padding: 10px 12px !important;
+    padding: 12px 14px !important;
     flex-direction: column !important;
+    gap: 8px !important;
+    position: sticky !important;
+    bottom: 0 !important;
+    background: var(--bg-card) !important;
+    box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.45) !important;
+    z-index: 100001 !important;
   }
 
   .modal-footer .btn {
