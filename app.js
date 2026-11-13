@@ -2277,16 +2277,45 @@ function renderApp() {
 
   const mobileNav = document.getElementById("mobile-bottom-nav");
   if (mobileNav) {
-    mobileNav.innerHTML = tabs
-      .map(
-        (t) => `
-        <button type="button" class="bottom-nav-item ${currentTab === t.id ? "active" : ""}" onclick="navigateTab('${t.id}')">
-          <i class="fas ${t.icon}"></i>
-          <span>${t.shortLabel || t.label}</span>
+    if (currentUser.rol === "tecnico") {
+      mobileNav.innerHTML = `
+        <button type="button" class="bottom-nav-item ${currentTab === "worker_panel" ? "active" : ""}" onclick="navigateTab('worker_panel')">
+          <i class="fas fa-hammer"></i>
+          <span>Trabajos</span>
         </button>
-      `
-      )
-      .join("");
+        <button type="button" class="bottom-nav-item ${currentTab === "worker_earnings" ? "active" : ""}" onclick="navigateTab('worker_earnings')">
+          <i class="fas fa-wallet"></i>
+          <span>Ganancias</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "attendance" ? "active" : ""}" onclick="navigateTab('attendance')">
+          <i class="fas fa-calendar-check"></i>
+          <span>Días</span>
+        </button>
+      `;
+    } else {
+      mobileNav.innerHTML = `
+        <button type="button" class="bottom-nav-item ${currentTab === "dashboard" ? "active" : ""}" onclick="navigateTab('dashboard')">
+          <i class="fas fa-home"></i>
+          <span>Inicio</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "pipeline" ? "active" : ""}" onclick="navigateTab('pipeline')">
+          <i class="fas fa-clipboard-list"></i>
+          <span>Órdenes</span>
+        </button>
+        <button type="button" class="bottom-nav-item bottom-nav-item--center" onclick="openNewOrderModal()" title="Registrar Nueva Orden">
+          <i class="fas fa-plus"></i>
+          <span>+ Orden</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "accounts_receivable" ? "active" : ""}" onclick="navigateTab('accounts_receivable')">
+          <i class="fas fa-file-invoice-dollar"></i>
+          <span>Cobrar</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "finances_ledger" ? "active" : ""}" onclick="navigateTab('finances_ledger')">
+          <i class="fas fa-chart-line"></i>
+          <span>Finanzas</span>
+        </button>
+      `;
+    }
   }
 
   renderScreen();
@@ -2337,8 +2366,10 @@ function renderScreen() {
       break;
     case "clients_dir":
     case "clients_catalog":
+      screen.innerHTML = renderClientsDirectoryScreen();
+      break;
     case "catalog_mgr":
-      screen.innerHTML = renderClientsAndCatalogScreen();
+      screen.innerHTML = renderCatalogManagerScreen();
       break;
     default:
       screen.innerHTML = renderDashboardScreen();
@@ -3548,10 +3579,10 @@ function renderPipelineScreen(forcedState) {
         <i class="fas fa-stethoscope"></i> 1. Diagnóstico <span class="count-badge">${counts.diagnostico_presupuesto}</span>
       </button>
       <button type="button" class="stage-pill-btn ${activeFilter === "esperando_aprobacion_abono" ? "active" : ""}" onclick="setPhaseFilter('esperando_aprobacion_abono')">
-        <i class="fas fa-hand-holding-usd"></i> 2. Aprobación <span class="count-badge">${counts.esperando_aprobacion_abono}</span>
+        <i class="fas fa-hand-holding-usd"></i> 2. Por Aprobar <span class="count-badge">${counts.esperando_aprobacion_abono}</span>
       </button>
       <button type="button" class="stage-pill-btn ${activeFilter === "asignacion_ejecucion" ? "active" : ""}" onclick="setPhaseFilter('asignacion_ejecucion')">
-        <i class="fas fa-cogs"></i> 3. Asignación <span class="count-badge">${counts.asignacion_ejecucion}</span>
+        <i class="fas fa-cogs"></i> 3. En Ejecución <span class="count-badge">${counts.asignacion_ejecucion}</span>
       </button>
       <button type="button" class="stage-pill-btn ${activeFilter === "terminado" ? "active" : ""}" onclick="setPhaseFilter('terminado')">
         <i class="fas fa-flag-checkered"></i> 4. Terminado <span class="count-badge">${counts.terminado}</span>
@@ -3573,7 +3604,7 @@ function renderPipelineScreen(forcedState) {
     ${
       currentViewMode === "table"
         ? renderOrdersCompactTable(filteredOrders)
-        : `<div class="orders-grid">${cardsHtml}</div>`
+        : `<div class="orders-grid ${filteredOrders.length === 1 ? "orders-grid--single" : ""}">${cardsHtml}</div>`
     }
   `;
 }
@@ -3760,10 +3791,10 @@ function renderOrderCardTelegramStyle(order) {
 
   const stateMap = {
     diagnostico_presupuesto: { label: "1. Diagnóstico", cls: "state-badge--diag", icon: "fa-stethoscope" },
-    esperando_aprobacion_abono: { label: "2. Esperando Aprobación", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
+    esperando_aprobacion_abono: { label: "2. Por Aprobar", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
     asignacion_ejecucion: { label: "3. En Ejecución", cls: "state-badge--exec", icon: "fa-cogs" },
     terminado: { label: "4. Terminado", cls: "state-badge--term", icon: "fa-flag-checkered" },
-    control_calidad: { label: "5. Control de Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
+    control_calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
     entregado: { label: "6. Entregado", cls: "state-badge--done", icon: "fa-lock" },
     anulado: { label: "Anulada", cls: "state-badge--danger", icon: "fa-ban" }
   };
@@ -6276,48 +6307,32 @@ function copyTextToClipboard(text) {
 
 /* ============================================================================
    MÓDULO DE CUENTAS POR COBRAR ("SUMA DE RESTO" ESTILO TABLA EXCEL DE JESÚS
-   + FILTRO DE "ENTREGADAS Y POR COBRAR", POR CLIENTE E INTERVALO DE FECHAS)
+   SIN REDUNDANCIAS + TOTALES REALES + ESTADOS 100% UNIFICADOS)
    ============================================================================ */
 function renderAccountsReceivableScreen() {
-  // Excluir órdenes anuladas de cualquier cálculo de cuentas por cobrar
-  const activePendingOrders = db.ordenes.filter(
+  // Todas las órdenes activas que tienen saldo pendiente > 0
+  const allPendingOrders = db.ordenes.filter(
     (o) => o.estado_actual !== "anulado" && Number(o.saldo_pendiente) > 0
   );
 
-  // 1. Entregadas a Crédito (Talleres Aliados / Clientes con entrega realizada pero saldo pendiente): Deuda real exigible en calle
-  const entregadasPorCobrar = activePendingOrders.filter((o) => o.estado_actual === "entregado");
-  const sumEntregadasPorCobrar = entregadasPorCobrar.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
+  const tasaBcv = Number(db.configuracion?.tasaBcv) || 45.80;
+  const totalGeneralResto = allPendingOrders.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
+  const totalGeneralFacturado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
+  const totalGeneralAbonado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0);
 
-  // 2. En Taller (En ejecución, terminado o en control de calidad con saldo pendiente por cobrar al entregar): Taller retiene la pieza física
-  const enTallerPorCobrar = activePendingOrders.filter(
-    (o) => o.estado_actual === "asignacion_ejecucion" || o.estado_actual === "terminado" || o.estado_actual === "control_calidad"
-  );
-  const sumEnTaller = enTallerPorCobrar.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
+  // Clasificación operativa clara:
+  const enCalle = allPendingOrders.filter((o) => o.estado_actual === "entregado");
+  const sumEnCalle = enCalle.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
 
-  // TOTAL CUENTAS POR COBRAR EXIGIBLES = Entregadas a crédito + En taller
-  // (Elimina la redundancia de sumar presupuestos no aprobados a la deuda real)
-  const sumExigibles = sumEntregadasPorCobrar + sumEnTaller;
-  const totalExigiblesCount = entregadasPorCobrar.length + enTallerPorCobrar.length;
+  const enTaller = allPendingOrders.filter((o) => o.estado_actual !== "entregado");
+  const sumEnTaller = enTaller.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
 
-  // 3. Presupuestos y Diagnósticos pendientes de aprobación (NO exigibles, meramente informativos)
-  const presupuestosPendientes = activePendingOrders.filter(
-    (o) => o.estado_actual === "diagnostico_presupuesto" || o.estado_actual === "esperando_aprobacion_abono"
-  );
-  const sumPresupuestos = presupuestosPendientes.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
-
-  // Aplicar filtros seleccionados (arFilterState, arFilterClient, arDateFrom, arDateTo)
-  let filtered = [];
+  // Filtro
+  let filtered = allPendingOrders.slice();
   if (arFilterState === "entregadas_por_cobrar") {
-    filtered = entregadasPorCobrar.slice();
+    filtered = enCalle;
   } else if (arFilterState === "en_taller") {
-    filtered = enTallerPorCobrar.slice();
-  } else if (arFilterState === "en_espera_respuesta") {
-    filtered = presupuestosPendientes.slice();
-  } else if (arFilterState === "all") {
-    filtered = activePendingOrders.slice();
-  } else {
-    // Por defecto: solo cuentas exigibles para evitar redundancia con presupuestos informativos
-    filtered = entregadasPorCobrar.concat(enTallerPorCobrar);
+    filtered = enTaller;
   }
 
   if (arFilterClient !== "all") {
@@ -6331,7 +6346,7 @@ function renderAccountsReceivableScreen() {
     filtered = filtered.filter((o) => cleanDateISO(o.fecha_ingreso) <= arDateTo);
   }
 
-  // Agrupar por Cliente / Mecánico exactamente como la tabla dinámica de Excel de Jesús
+  // Agrupar por Cliente exactamente como la tabla dinámica de Excel de Jesús Andrade
   const groupedByClient = {};
   filtered.forEach((o) => {
     const key = o.cliente_id || o.nombre_cliente;
@@ -6342,15 +6357,19 @@ function renderAccountsReceivableScreen() {
         documento_cliente: o.documento_cliente,
         telefono_cliente: o.telefono_cliente,
         ordenes: [],
-        subtotalResto: 0
+        subtotalResto: 0,
+        subtotalFacturado: 0,
+        subtotalAbonado: 0
       };
     }
     groupedByClient[key].ordenes.push(o);
     groupedByClient[key].subtotalResto += Number(o.saldo_pendiente) || 0;
+    groupedByClient[key].subtotalFacturado += Number(o.monto_total) || 0;
+    groupedByClient[key].subtotalAbonado += Number(o.monto_abonado) || 0;
   });
 
   const groupsList = Object.values(groupedByClient);
-  const totalGeneralFiltered = groupsList.reduce((acc, g) => acc + g.subtotalResto, 0);
+  const totalFilteredResto = groupsList.reduce((acc, g) => acc + g.subtotalResto, 0);
 
   const clientOptionsHtml =
     `<option value="all">Todos los Clientes / Mecánicos (${db.clientes.length})</option>` +
@@ -6363,8 +6382,12 @@ function renderAccountsReceivableScreen() {
 
   const stateBadgeLabel = (st) => {
     if (st === "entregado") return `<span class="state-badge state-badge--done">📦 Entregada a Crédito</span>`;
-    if (st === "diagnostico_presupuesto" || st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait" style="background:rgba(217,119,6,0.12); color:#d97706; border:1px dashed #d97706;">⏳ Cotización Informativa</span>`;
-    return `<span class="state-badge state-badge--exec">🔨 Retenida en Taller (${st.replace(/_/g, " ")})</span>`;
+    if (st === "diagnostico_presupuesto") return `<span class="state-badge state-badge--diag">1. Diagnóstico</span>`;
+    if (st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait">2. Por Aprobar</span>`;
+    if (st === "asignacion_ejecucion") return `<span class="state-badge state-badge--exec">3. En Ejecución</span>`;
+    if (st === "terminado") return `<span class="state-badge state-badge--term">4. Terminado</span>`;
+    if (st === "control_calidad") return `<span class="state-badge state-badge--qc">5. Calidad</span>`;
+    return `<span class="state-badge">${st.replace(/_/g, " ")}</span>`;
   };
 
   const excelRowsHtml = groupsList.length
@@ -6374,7 +6397,7 @@ function renderAccountsReceivableScreen() {
             .map(
               (ord) => `
               <tr class="ar-order-item-row">
-                <td style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:14px;">
+                <td style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:14px; color:var(--renacer-gold);">
                   TROQUEL #${ord.codigo_troquel}
                 </td>
                 <td>
@@ -6431,61 +6454,64 @@ function renderAccountsReceivableScreen() {
     : `<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">No hay saldos pendientes que coincidan con el filtro seleccionado.</td></tr>`;
 
   return `
-    <!-- Tarjetas de Resumen Rápido (Sin redundancias: Deuda Exigible separada de Cotizaciones) -->
-    <div class="kpi-strip">
-      <div class="kpi-card ${arFilterState === "exigibles" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'exigibles')">
-        <span class="kpi-label">🎯 Total Exigible por Cobrar</span>
-        <div class="kpi-value" style="color:#dc2626;">$${sumExigibles.toFixed(2)}</div>
-        <span class="kpi-sub">${totalExigiblesCount} pieza(s) en calle o en taller</span>
-      </div>
-      <div class="kpi-card ${arFilterState === "entregadas_por_cobrar" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'entregadas_por_cobrar')">
-        <span class="kpi-label">📦 Entregadas a Crédito (Calle)</span>
-        <div class="kpi-value" style="color:#b45309;">$${sumEntregadasPorCobrar.toFixed(2)}</div>
-        <span class="kpi-sub">${entregadasPorCobrar.length} pieza(s) retiradas sin liquidar</span>
-      </div>
-      <div class="kpi-card ${arFilterState === "en_taller" ? "active-kpi" : ""}" style="cursor:pointer;" onclick="setArFilter('state', 'en_taller')">
-        <span class="kpi-label">🔨 En Taller (Saldo al Retirar)</span>
-        <div class="kpi-value" style="color:#0284c7;">$${sumEnTaller.toFixed(2)}</div>
-        <span class="kpi-sub">${enTallerPorCobrar.length} pieza(s) con colateral físico</span>
-      </div>
-      <div class="kpi-card ${arFilterState === "en_espera_respuesta" ? "active-kpi" : ""}" style="cursor:pointer; background:rgba(217,119,6,0.06); border-color:rgba(217,119,6,0.3);" onclick="setArFilter('state', 'en_espera_respuesta')">
-        <span class="kpi-label">⏳ Cotizaciones Pendientes</span>
-        <div class="kpi-value" style="color:#d97706;">$${sumPresupuestos.toFixed(2)}</div>
-        <span class="kpi-sub">Informativo · ${presupuestosPendientes.length} por aprobar</span>
-      </div>
-    </div>
-
-    <!-- Barra de Filtros estilo Tabla Dinámica Excel (Estado, Cliente, Desde / Hasta) -->
-    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:14px 16px; margin-bottom:16px;">
-      <div class="form-grid-4">
-        <div class="form-field">
-          <label><i class="fas fa-filter"></i> Estado de la Cuenta</label>
-          <select onchange="setArFilter('state', this.value)">
-            <option value="exigibles" ${arFilterState === "exigibles" ? "selected" : ""}>🎯 Cuentas Exigibles (Crédito + En Taller: $${sumExigibles.toFixed(2)})</option>
-            <option value="entregadas_por_cobrar" ${arFilterState === "entregadas_por_cobrar" ? "selected" : ""}>📦 Entregadas a Crédito / Talleres Aliados ($${sumEntregadasPorCobrar.toFixed(2)})</option>
-            <option value="en_taller" ${arFilterState === "en_taller" ? "selected" : ""}>🔨 Retenidas en Taller con Saldo al Entregar ($${sumEnTaller.toFixed(2)})</option>
-            <option value="en_espera_respuesta" ${arFilterState === "en_espera_respuesta" ? "selected" : ""}>⏳ Presupuestos / Cotizaciones Pendientes ($${sumPresupuestos.toFixed(2)})</option>
-            <option value="all" ${arFilterState === "all" ? "selected" : ""}>Mostrar Todo Incluyendo Cotizaciones</option>
-          </select>
+    <!-- Panel Ejecutivo de Cuentas por Cobrar (Diseño Directo Sin Redundancias) -->
+    <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:18px 22px; margin-bottom:16px; box-shadow:var(--shadow-sm);">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
+        <div>
+          <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
+            <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> CONTROL GENERAL DE CUENTAS POR COBRAR
+          </span>
+          <div style="display:flex; align-items:baseline; gap:12px; margin-top:4px; flex-wrap:wrap;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:32px; font-weight:900; color:#dc2626;">
+              $${totalGeneralResto.toFixed(2)}
+            </span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:800; color:#0284c7;">
+              ≈ Bs. ${(totalGeneralResto * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+            <span style="font-size:12px; color:var(--text-muted); font-weight:700;">(Tasa BCV: Bs. ${tasaBcv.toFixed(2)})</span>
+          </div>
         </div>
-        <div class="form-field">
-          <label><i class="fas fa-user-tie"></i> Filtrar por Cliente / Mecánico</label>
-          <select onchange="setArFilter('client', this.value)">
+
+        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+          <div style="background:var(--bg-input); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
+            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">📦 EN CALLE (CRÉDITO)</span>
+            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#b45309;">
+              $${sumEnCalle.toFixed(2)} <span style="font-size:11px; font-weight:700; color:var(--text-muted);">(${enCalle.length} pz)</span>
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
+            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">🔨 EN TALLER (RETENIDAS)</span>
+            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#0284c7;">
+              $${sumEnTaller.toFixed(2)} <span style="font-size:11px; font-weight:700; color:var(--text-muted);">(${enTaller.length} pz)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Filtros Rápidos (Chips) -->
+      <div style="display:flex; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); flex-wrap:wrap; align-items:center;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted); margin-right:4px;">Filtrar:</span>
+        <button type="button" class="btn ${arFilterState === "all" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'all')">
+          Todas (${allPendingOrders.length})
+        </button>
+        <button type="button" class="btn ${arFilterState === "entregadas_por_cobrar" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'entregadas_por_cobrar')">
+          📦 En Calle / Crédito (${enCalle.length})
+        </button>
+        <button type="button" class="btn ${arFilterState === "en_taller" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'en_taller')">
+          🔨 En Taller (${enTaller.length})
+        </button>
+
+        <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <select onchange="setArFilter('client', this.value)" style="padding:4px 10px; font-size:11.5px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);">
             ${clientOptionsHtml}
           </select>
-        </div>
-        <div class="form-field">
-          <label><i class="fas fa-calendar-alt"></i> Fecha Desde</label>
-          <input type="date" value="${arDateFrom}" onchange="setArFilter('from', this.value)" />
-        </div>
-        <div class="form-field">
-          <label><i class="fas fa-calendar-check"></i> Fecha Hasta</label>
-          <div style="display:flex; gap:6px;">
-            <input type="date" value="${arDateTo}" onchange="setArFilter('to', this.value)" style="flex:1;" />
-            <button type="button" class="btn btn--ghost" onclick="resetArFilters()" title="Limpiar filtros">
-              <i class="fas fa-undo"></i>
-            </button>
-          </div>
+          <input type="date" value="${arDateFrom}" onchange="setArFilter('from', this.value)" style="padding:3px 8px; font-size:11px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);" title="Desde" />
+          <input type="date" value="${arDateTo}" onchange="setArFilter('to', this.value)" style="padding:3px 8px; font-size:11px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);" title="Hasta" />
+          ${
+            (arFilterState !== "all" || arFilterClient !== "all" || arDateFrom || arDateTo)
+              ? `<button type="button" class="btn btn--ghost" style="padding:3px 8px; font-size:11px;" onclick="resetArFilters()" title="Limpiar filtros"><i class="fas fa-undo"></i></button>`
+              : ""
+          }
         </div>
       </div>
     </div>
@@ -6510,7 +6536,7 @@ function renderAccountsReceivableScreen() {
         <tfoot>
           <tr class="ar-total-general-row">
             <td colspan="5">Total general (${filtered.length} pieza/s en esta vista)</td>
-            <td style="text-align:right; font-family:'JetBrains Mono',monospace;">$ ${totalGeneralFiltered.toFixed(2)}</td>
+            <td style="text-align:right; font-family:'JetBrains Mono',monospace;">$ ${totalFilteredResto.toFixed(2)}</td>
             <td></td>
           </tr>
         </tfoot>
@@ -8790,128 +8816,473 @@ function saveNewFinanceMovement(tipo) {
 }
 
 /* ============================================================================
-   DIRECTORIO DE CLIENTES (CON HISTORIAL DE PAGOS + EDICIÓN) Y CATÁLOGO EDITABLE
+   DIRECTORIO DE CLIENTES Y TALLERES ALIADOS (100% FLUIDO, RESPONSIVE DESKTOP/MÓVIL)
    ============================================================================ */
-function renderClientsAndCatalogScreen() {
-  const clientRows = db.clientes
-    .map((c) => {
-      const clientOrders = db.ordenes.filter(
-        (o) => o.cliente_id === c.id_cliente || o.documento_cliente === c.documento_identidad
-      );
-      const totalPaid = clientOrders.reduce((acc, o) => acc + (Number(o.monto_abonado) || 0), 0);
-      const totalPending = clientOrders.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
+let clientDirFilterType = "all"; // "all" | "aliados" | "particulares" | "deudores"
+let clientDirSearch = "";
 
-      return `
-        <tr>
-          <td>
-            <strong>${c.documento_identidad}</strong>
-            <div style="font-size:11px; color:var(--text-muted);">${clientOrders.length} orden(es)</div>
-          </td>
-          <td>
-            <div style="font-weight:900;">${c.nombre_completo}</div>
-            <div style="font-size:11px; color:var(--text-muted);">📍 ${c.direccion || "Sin dirección"}</div>
-          </td>
-          <td><a href="tel:${c.telefono}" style="color:var(--renacer-navy); font-weight:800;">${c.telefono}</a></td>
-          <td>
-            <span class="state-badge ${c.es_taller_aliado ? "state-badge--exec" : "state-badge--diag"}">
-              ${c.es_taller_aliado ? "🤝 TALLER ALIADO" : "PARTICULAR"}
-            </span>
-            <div style="font-size:11px; margin-top:4px; font-family:'JetBrains Mono',monospace;">
-              Pagado: <strong style="color:#16a34a;">$${totalPaid.toFixed(2)}</strong> · Resto: <strong style="color:${totalPending > 0 ? "#dc2626" : "var(--text-muted)"};">$${totalPending.toFixed(2)}</strong>
-            </div>
-          </td>
-          <td style="text-align:right;">
-            <div style="display:flex; justify-content:flex-end; gap:5px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--primary" style="padding:4px 9px; font-size:11px;" onclick="openClientHistoryModal('${c.id_cliente}')" title="Ver historial de órdenes y pagos del cliente">
-                <i class="fas fa-history"></i> Pagos
-              </button>
-              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px;" onclick="openEditClientModal('${c.id_cliente}')" title="Editar datos del cliente">
-                <i class="fas fa-edit"></i>
-              </button>
-              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteClient('${c.id_cliente}')" title="Eliminar cliente">
-                <i class="fas fa-trash-alt"></i>
-              </button>
-            </div>
-          </td>
-        </tr>
-      `;
-    })
-    .join("");
+function setClientDirFilter(type) {
+  clientDirFilterType = type;
+  renderApp();
+}
 
-  const catRows = db.catalogo_servicios
-    .map(
-      (s) => `
-      <tr>
-        <td><strong>${s.nombre}</strong></td>
-        <td style="font-family:'JetBrains Mono',monospace; font-weight:900;">$${Number(s.precio_sugerido).toFixed(2)}</td>
-        <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">$${Number(s.comision_sugerida).toFixed(2)}</td>
-        <td style="text-align:right;">
-          <div style="display:flex; justify-content:flex-end; gap:5px;">
-            <button type="button" class="btn btn--ghost" style="padding:4px 9px; font-size:11px;" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio o comisión del servicio">
-              <i class="fas fa-edit"></i> Editar
-            </button>
-            <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio">
-              <i class="fas fa-trash-alt"></i>
-            </button>
-          </div>
-        </td>
-      </tr>
-    `
-    )
-    .join("");
+function filterClientsDirectoryLive(query) {
+  clientDirSearch = (query || "").toLowerCase().trim();
+  const rows = document.querySelectorAll(".client-table-row");
+  const cards = document.querySelectorAll(".client-mobile-card-item");
+  
+  rows.forEach((row) => {
+    const text = row.getAttribute("data-search") || "";
+    row.style.display = text.includes(clientDirSearch) ? "" : "none";
+  });
+  cards.forEach((card) => {
+    const text = card.getAttribute("data-search") || "";
+    card.style.display = text.includes(clientDirSearch) ? "" : "none";
+  });
+}
+
+function renderClientsDirectoryScreen() {
+  const tasaBcv = Number(db.configuracion?.tasaBcv) || 45.80;
+
+  // Enriquecer clientes con sus órdenes y saldos reales
+  const enrichedClients = db.clientes.map((c) => {
+    const clientOrders = db.ordenes.filter(
+      (o) => o.cliente_id === c.id_cliente || o.documento_cliente === c.documento_identidad
+    );
+    const totalPaid = clientOrders.reduce((acc, o) => acc + (Number(o.monto_abonado) || 0), 0);
+    const totalPending = clientOrders.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
+    return {
+      ...c,
+      clientOrders,
+      totalOrders: clientOrders.length,
+      totalPaid,
+      totalPending,
+      hasPending: totalPending > 0.01
+    };
+  });
+
+  const totalClients = enrichedClients.length;
+  const countAliados = enrichedClients.filter((c) => c.es_taller_aliado).length;
+  const countParticulares = totalClients - countAliados;
+  const countDeudores = enrichedClients.filter((c) => c.hasPending).length;
+  const totalGeneralDeuda = enrichedClients.reduce((acc, c) => acc + c.totalPending, 0);
+
+  // Filtrado por píldoras
+  let filteredClients = enrichedClients.slice();
+  if (clientDirFilterType === "aliados") {
+    filteredClients = filteredClients.filter((c) => c.es_taller_aliado);
+  } else if (clientDirFilterType === "particulares") {
+    filteredClients = filteredClients.filter((c) => !c.es_taller_aliado);
+  } else if (clientDirFilterType === "deudores") {
+    filteredClients = filteredClients.filter((c) => c.hasPending);
+  }
+
+  // Filtrado por búsqueda en memoria si aplica
+  if (clientDirSearch) {
+    filteredClients = filteredClients.filter((c) => {
+      const searchBlob = `${c.nombre_completo} ${c.nombre_cliente || ""} ${c.documento_identidad} ${c.telefono} ${c.direccion || ""}`.toLowerCase();
+      return searchBlob.includes(clientDirSearch);
+    });
+  }
+
+  // Filas para la tabla desktop
+  const desktopRows = filteredClients.length
+    ? filteredClients
+        .map((c) => {
+          const searchBlob = `${c.nombre_completo} ${c.nombre_cliente || ""} ${c.documento_identidad} ${c.telefono} ${c.direccion || ""}`.toLowerCase();
+          const cleanPhone = (c.telefono || "").replace(/\D/g, "");
+          const waUrl = cleanPhone ? `https://wa.me/${cleanPhone.startsWith("58") ? cleanPhone : "58" + cleanPhone.replace(/^0/, "")}` : "#";
+
+          return `
+            <tr class="client-table-row" data-search="${searchBlob}">
+              <td style="white-space:nowrap;">
+                <strong style="font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--text-main);">${c.documento_identidad}</strong>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                  <span class="badge" style="background:rgba(245,223,0,0.15); color:var(--renacer-gold); padding:2px 6px; border-radius:6px; font-weight:800;">
+                    ${c.totalOrders} orden(es)
+                  </span>
+                </div>
+              </td>
+              <td>
+                <div style="font-weight:900; font-size:14px; color:var(--text-main);">${c.nombre_completo}</div>
+                <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+                  <i class="fas fa-map-marker-alt" style="color:var(--renacer-gold);"></i> ${c.direccion || "Sin dirección registrada"}
+                </div>
+              </td>
+              <td style="white-space:nowrap;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <a href="tel:${c.telefono}" style="color:var(--renacer-navy); font-weight:800; text-decoration:none; font-family:'JetBrains Mono',monospace;">
+                    📞 ${c.telefono || "Sin teléfono"}
+                  </a>
+                  ${
+                    cleanPhone
+                      ? `<a href="${waUrl}" target="_blank" class="btn btn--success" style="padding:2px 7px; font-size:11px; border-radius:6px; text-decoration:none;" title="Enviar WhatsApp directo">
+                          <i class="fab fa-whatsapp"></i>
+                        </a>`
+                      : ""
+                  }
+                </div>
+              </td>
+              <td>
+                <span class="state-badge ${c.es_taller_aliado ? "state-badge--exec" : "state-badge--diag"}" style="font-size:11px;">
+                  ${c.es_taller_aliado ? "🤝 TALLER ALIADO (CRÉDITO)" : "👤 PARTICULAR"}
+                </span>
+                <div style="font-size:11px; margin-top:5px; font-family:'JetBrains Mono',monospace;">
+                  Pagado: <strong style="color:#16a34a;">$${c.totalPaid.toFixed(2)}</strong> · 
+                  Resto: <strong style="color:${c.totalPending > 0 ? "#dc2626" : "var(--text-muted)"}; font-size:${c.totalPending > 0 ? "12px" : "11px"}; font-weight:${c.totalPending > 0 ? "900" : "700"};">
+                    $${c.totalPending.toFixed(2)}
+                  </strong>
+                </div>
+              </td>
+              <td style="text-align:right; white-space:nowrap;">
+                <div style="display:flex; justify-content:flex-end; gap:6px; align-items:center;">
+                  <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openClientHistoryModal('${c.id_cliente}')" title="Ver historial de órdenes y comprobantes">
+                    <i class="fas fa-history"></i> Pagos
+                  </button>
+                  <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditClientModal('${c.id_cliente}')" title="Editar datos del cliente">
+                    <i class="fas fa-edit"></i>
+                  </button>
+                  <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px; color:#dc2626;" onclick="deleteClient('${c.id_cliente}')" title="Eliminar cliente">
+                    <i class="fas fa-trash-alt"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `<tr><td colspan="5" style="text-align:center; padding:36px 20px; color:var(--text-muted);">No se encontraron clientes con el criterio seleccionado.</td></tr>`;
+
+  // Tarjetas para móviles (diseño nativo 100% responsive, nunca se corta)
+  const mobileCards = filteredClients.length
+    ? filteredClients
+        .map((c) => {
+          const searchBlob = `${c.nombre_completo} ${c.nombre_cliente || ""} ${c.documento_identidad} ${c.telefono} ${c.direccion || ""}`.toLowerCase();
+          const cleanPhone = (c.telefono || "").replace(/\D/g, "");
+          const waUrl = cleanPhone ? `https://wa.me/${cleanPhone.startsWith("58") ? cleanPhone : "58" + cleanPhone.replace(/^0/, "")}` : "#";
+
+          return `
+            <div class="client-mobile-card client-mobile-card-item" data-search="${searchBlob}">
+              <div class="client-mobile-card__header">
+                <div>
+                  <div class="client-mobile-card__title">${c.nombre_completo}</div>
+                  <div class="client-mobile-card__doc">
+                    ${c.documento_identidad} · <span style="color:var(--text-muted);">${c.totalOrders} orden(es)</span>
+                  </div>
+                </div>
+                <span class="state-badge ${c.es_taller_aliado ? "state-badge--exec" : "state-badge--diag"}" style="font-size:10.5px;">
+                  ${c.es_taller_aliado ? "🤝 ALIADO" : "PARTICULAR"}
+                </span>
+              </div>
+
+              <div class="client-mobile-card__meta">
+                <div class="client-mobile-card__contact-row">
+                  <a href="tel:${c.telefono}" class="btn btn--ghost" style="padding:4px 10px; font-size:12px; font-family:'JetBrains Mono',monospace;">
+                    📞 ${c.telefono || "Sin teléfono"}
+                  </a>
+                  ${
+                    cleanPhone
+                      ? `<a href="${waUrl}" target="_blank" class="btn btn--success" style="padding:4px 10px; font-size:12px; text-decoration:none;">
+                          <i class="fab fa-whatsapp"></i> WhatsApp
+                        </a>`
+                      : ""
+                  }
+                </div>
+                <div style="font-size:11.5px; color:var(--text-muted);">
+                  📍 ${c.direccion || "Sin dirección registrada"}
+                </div>
+              </div>
+
+              <div class="client-mobile-card__balance-box">
+                <div>
+                  <span style="color:var(--text-muted); font-size:11px;">Pagado:</span>
+                  <strong style="color:#16a34a; margin-left:4px;">$${c.totalPaid.toFixed(2)}</strong>
+                </div>
+                <div>
+                  <span style="color:var(--text-muted); font-size:11px;">Deuda:</span>
+                  <strong style="color:${c.totalPending > 0 ? "#dc2626" : "var(--text-muted)"}; margin-left:4px; font-size:${c.totalPending > 0 ? "13px" : "12px"};">
+                    $${c.totalPending.toFixed(2)}
+                  </strong>
+                </div>
+              </div>
+
+              <div class="client-mobile-card__actions">
+                <button type="button" class="btn btn--primary" style="padding:6px 12px; font-size:12px; flex:1;" onclick="openClientHistoryModal('${c.id_cliente}')">
+                  <i class="fas fa-history"></i> Historial y Pagos
+                </button>
+                <button type="button" class="btn btn--ghost" style="padding:6px 10px; font-size:12px;" onclick="openEditClientModal('${c.id_cliente}')" title="Editar">
+                  <i class="fas fa-edit"></i>
+                </button>
+                <button type="button" class="btn btn--ghost" style="padding:6px 10px; font-size:12px; color:#dc2626;" onclick="deleteClient('${c.id_cliente}')" title="Eliminar">
+                  <i class="fas fa-trash-alt"></i>
+                </button>
+              </div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div style="text-align:center; padding:32px 16px; background:var(--bg-card); border-radius:14px; border:1px solid var(--border-color); color:var(--text-muted);">No se encontraron clientes.</div>`;
 
   return `
-    <div class="clients-catalog-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap:18px;">
-      <div>
-        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:1px solid var(--border-subtle); margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-          <h3 style="font-size:16.5px; font-weight:900;"><i class="fas fa-address-book"></i> Directorio de Clientes e Historial de Pagos</h3>
-          <button type="button" class="btn btn--gold" style="padding:6px 10px; font-size:11.5px;" onclick="openAddClientModal()">
-            <i class="fas fa-user-plus"></i> + Nuevo Cliente
-          </button>
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <!-- Header Ejecutivo con Resumen KPI -->
+      <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:18px 22px; box-shadow:var(--shadow-sm);">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
+          <div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
+                <i class="fas fa-address-book" style="color:var(--renacer-gold);"></i> CRM Y DIRECTORIO COMERCIAL
+              </span>
+            </div>
+            <h2 style="font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
+              Directorio de Clientes y Talleres Aliados
+            </h2>
+            <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
+              Consulta balances, historial de pagos, créditos otorgados y contacto directo por WhatsApp.
+            </p>
+          </div>
+
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button type="button" class="btn btn--gold" style="padding:9px 16px; font-size:13px; font-weight:800;" onclick="openAddClientModal()">
+              <i class="fas fa-user-plus"></i> + Nuevo Cliente
+            </button>
+            <button type="button" class="btn btn--ghost" style="padding:9px 14px; font-size:13px;" onclick="navigateTab('catalog_mgr')" title="Ver Catálogo de Servicios">
+              <i class="fas fa-tools"></i> Ver Precios y Servicios
+            </button>
+          </div>
         </div>
-        <div class="data-table-wrapper">
-          <table class="renacer-table">
-            <thead>
-              <tr>
-                <th>Cédula / RIF</th>
-                <th>Nombre / Taller</th>
-                <th>Teléfono</th>
-                <th>Tipo y Balance</th>
-                <th style="text-align:right;">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${clientRows}
-            </tbody>
-          </table>
+
+        <!-- KPI Strip de Clientes -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border-subtle);">
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">TOTAL REGISTRADOS</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
+              ${totalClients} <span style="font-size:11px; font-weight:600; color:var(--text-muted);">clientes</span>
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">🤝 TALLERES ALIADOS</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#38bdf8; margin-top:2px;">
+              ${countAliados}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">⚠️ CON SALDO PENDIENTE</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#f87171; margin-top:2px;">
+              ${countDeudores}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">DEUDA TOTAL ACUMULADA</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#dc2626; margin-top:2px;">
+              $${totalGeneralDeuda.toFixed(2)}
+            </div>
+          </div>
+        </div>
+
+        <!-- Barra de Búsqueda y Filtros Rápidos -->
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <button type="button" class="btn ${clientDirFilterType === "all" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('all')">
+              Todos (${totalClients})
+            </button>
+            <button type="button" class="btn ${clientDirFilterType === "aliados" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('aliados')">
+              🤝 Talleres Aliados (${countAliados})
+            </button>
+            <button type="button" class="btn ${clientDirFilterType === "particulares" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('particulares')">
+              👤 Particulares (${countParticulares})
+            </button>
+            <button type="button" class="btn ${clientDirFilterType === "deudores" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('deudores')">
+              ⚠️ Con Saldo Deudor (${countDeudores})
+            </button>
+          </div>
+
+          <div style="position:relative; min-width:240px; flex:1; max-width:380px;">
+            <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;"></i>
+            <input type="text" value="${clientDirSearch}" placeholder="Buscar por nombre, cédula o teléfono..." oninput="filterClientsDirectoryLive(this.value)" style="width:100%; padding:7px 12px 7px 32px; font-size:12px; border-radius:10px; background:var(--bg-input); border:1px solid var(--border-subtle); color:var(--text-main);" />
+          </div>
         </div>
       </div>
 
-      <div>
-        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:1px solid var(--border-subtle); margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-          <h3 style="font-size:16.5px; font-weight:900;"><i class="fas fa-tools"></i> Catálogo de Servicios, Precios y Comisiones</h3>
-          <button type="button" class="btn btn--gold" style="padding:6px 10px; font-size:11.5px;" onclick="openAddCatalogServiceModal()">
-            <i class="fas fa-plus"></i> + Nuevo Servicio
-          </button>
-        </div>
-        <div class="data-table-wrapper">
-          <table class="renacer-table">
-            <thead>
-              <tr>
-                <th>Servicio de Rectificación</th>
-                <th>Precio Cliente</th>
-                <th>Comisión Técnico</th>
-                <th style="text-align:right;">Editar / Borrar</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${catRows}
-            </tbody>
-          </table>
-        </div>
+      <!-- VISTA DESKTOP: TABLA COMPLETA CON ESPACIO AMPLIO -->
+      <div class="clients-desktop-view data-table-wrapper" style="box-shadow:var(--shadow-sm); border-radius:16px;">
+        <table class="renacer-table">
+          <thead>
+            <tr>
+              <th style="width:140px;">Cédula / RIF</th>
+              <th>Nombre Completo / Taller</th>
+              <th style="width:180px;">Teléfono & WhatsApp</th>
+              <th style="width:230px;">Clasificación & Balance</th>
+              <th style="text-align:right; width:170px;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${desktopRows}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- VISTA MOBILE: TARJETAS FLUIDAS SIN CORTE DE COLUMNAS -->
+      <div class="clients-mobile-view">
+        ${mobileCards}
       </div>
     </div>
   `;
+}
+
+/* ============================================================================
+   CATÁLOGO DE SERVICIOS, PRECIOS Y COMISIONES (VISTA DEDICADA 100% FLUIDA)
+   ============================================================================ */
+let catalogSearchQuery = "";
+
+function filterCatalogLive(query) {
+  catalogSearchQuery = (query || "").toLowerCase().trim();
+  const rows = document.querySelectorAll(".catalog-service-row");
+  rows.forEach((row) => {
+    const text = row.getAttribute("data-search") || "";
+    row.style.display = text.includes(catalogSearchQuery) ? "" : "none";
+  });
+}
+
+function renderCatalogManagerScreen() {
+  const services = db.catalogo_servicios || [];
+  const totalServices = services.length;
+  const avgPrice = totalServices ? services.reduce((acc, s) => acc + (Number(s.precio_sugerido) || 0), 0) / totalServices : 0;
+  const avgCommission = totalServices ? services.reduce((acc, s) => acc + (Number(s.comision_sugerida) || 0), 0) / totalServices : 0;
+  const avgMargin = avgPrice > 0 ? ((avgPrice - avgCommission) / avgPrice) * 100 : 0;
+
+  const rowsHtml = services.length
+    ? services
+        .map((s) => {
+          const precio = Number(s.precio_sugerido) || 0;
+          const comision = Number(s.comision_sugerida) || 0;
+          const margen = precio - comision;
+          const margenPct = precio > 0 ? (margen / precio) * 100 : 0;
+          const searchBlob = `${s.nombre} ${s.categoria || ""}`.toLowerCase();
+
+          return `
+            <tr class="catalog-service-row" data-search="${searchBlob}">
+              <td>
+                <div style="font-weight:900; font-size:14.5px; color:var(--text-main);">${s.nombre}</div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                  <i class="fas fa-tag" style="color:var(--renacer-gold);"></i> ${s.categoria || "Rectificación General"}
+                </div>
+              </td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:var(--text-main);">
+                $${precio.toFixed(2)}
+              </td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:800; font-size:14px; color:#16a34a;">
+                $${comision.toFixed(2)}
+              </td>
+              <td>
+                <div style="font-family:'JetBrains Mono',monospace; font-weight:800; font-size:13px; color:#0284c7;">
+                  $${margen.toFixed(2)} <span style="font-size:11px; color:var(--text-muted);">(${margenPct.toFixed(0)}%)</span>
+                </div>
+              </td>
+              <td style="text-align:right;">
+                <div style="display:flex; justify-content:flex-end; gap:6px;">
+                  <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px;" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio o comisión">
+                    <i class="fas fa-edit"></i> Editar
+                  </button>
+                  <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px; color:#dc2626;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio">
+                    <i class="fas fa-trash-alt"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `<tr><td colspan="5" style="text-align:center; padding:36px; color:var(--text-muted);">No hay servicios registrados en el catálogo.</td></tr>`;
+
+  return `
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <!-- Header del Catálogo -->
+      <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:18px 22px; box-shadow:var(--shadow-sm);">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
+          <div>
+            <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
+              <i class="fas fa-tools" style="color:var(--renacer-gold);"></i> MATRIZ DE PRECIOS Y DESTAJO
+            </span>
+            <h2 style="font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
+              Catálogo de Servicios, Precios y Comisiones
+            </h2>
+            <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
+              Define los precios cobrados al cliente y la comisión base asignada a los técnicos por cada trabajo.
+            </p>
+          </div>
+
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button type="button" class="btn btn--gold" style="padding:9px 16px; font-size:13px; font-weight:800;" onclick="openAddCatalogServiceModal()">
+              <i class="fas fa-plus-circle"></i> + Nuevo Servicio
+            </button>
+            <button type="button" class="btn btn--ghost" style="padding:9px 14px; font-size:13px;" onclick="navigateTab('clients_dir')">
+              <i class="fas fa-users"></i> Ver Clientes
+            </button>
+          </div>
+        </div>
+
+        <!-- KPI Strip de Precios -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border-subtle);">
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">TOTAL SERVICIOS</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
+              ${totalServices}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">PRECIO PROMEDIO CLIENTE</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
+              $${avgPrice.toFixed(2)}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">COMISIÓN PROMEDIO TÉCNICO</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#16a34a; margin-top:2px;">
+              $${avgCommission.toFixed(2)}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">MARGEN PROMEDIO TALLER</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#0284c7; margin-top:2px;">
+              ${avgMargin.toFixed(0)}%
+            </div>
+          </div>
+        </div>
+
+        <!-- Buscador en Vivo -->
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; justify-content:flex-end;">
+          <div style="position:relative; width:100%; max-width:360px;">
+            <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;"></i>
+            <input type="text" placeholder="Buscar servicio por nombre..." oninput="filterCatalogLive(this.value)" style="width:100%; padding:7px 12px 7px 32px; font-size:12px; border-radius:10px; background:var(--bg-input); border:1px solid var(--border-subtle); color:var(--text-main);" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla Full-Width de Servicios -->
+      <div class="data-table-wrapper" style="box-shadow:var(--shadow-sm); border-radius:16px;">
+        <table class="renacer-table">
+          <thead>
+            <tr>
+              <th>Servicio de Rectificación</th>
+              <th style="width:160px;">Precio al Cliente ($)</th>
+              <th style="width:180px;">Comisión Técnico ($)</th>
+              <th style="width:160px;">Margen Taller</th>
+              <th style="text-align:right; width:140px;">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// Alias de retrocompatibilidad
+function renderClientsAndCatalogScreen() {
+  return renderClientsDirectoryScreen();
 }
 
 /* ---------- HISTORIAL DE PAGOS Y ÓRDENES POR CLIENTE ---------- */
