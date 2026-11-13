@@ -2437,32 +2437,118 @@ body {
     padding: 2px 6px !important;
   }
 
-  /* BARRA DE NAVEGACIÓN INFERIOR NATIVA */
+  /* TOPBAR RESPONSIVO Y LIMPIO EN MÓVIL */
+  .renacer-main-topbar {
+    padding: 8px 12px !important;
+    gap: 8px !important;
+    justify-content: space-between !important;
+  }
+
+  .topbar-mobile-brand {
+  display: none;
+}
+
+.topbar-left-zone {
+    gap: 8px !important;
+    flex: 0 0 auto !important;
+  }
+
+  .topbar-mobile-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+
+  .topbar-mobile-logo {
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 50% !important;
+    object-fit: cover !important;
+    border: 1.5px solid var(--renacer-gold) !important;
+  }
+
+  .topbar-mobile-title {
+    font-weight: 900 !important;
+    font-size: 14px !important;
+    color: #fff !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  .topbar-date-range-filter {
+    display: none !important;
+  }
+
+  .topbar-search-box {
+    display: none !important;
+  }
+
+  .desktop-sidebar-toggle {
+    display: none !important;
+  }
+
+  #btn-header-new-order {
+    display: none !important;
+  }
+
+  .topbar-right-zone {
+    gap: 6px !important;
+  }
+
+  .topbar-user-pill {
+    padding: 5px 8px !important;
+    font-size: 11px !important;
+  }
+
+  .topbar-user-pill span#active-user-label {
+    max-width: 85px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  /* BARRA DE NAVEGACIÓN INFERIOR NATIVA ELEGANTE */
+  .mobile-quick-actions-bar {
+    display: none !important;
+  }
+
   .mobile-bottom-nav {
     display: flex !important;
     position: fixed !important;
     bottom: 0 !important;
     left: 0 !important;
     right: 0 !important;
-    z-index: 90 !important;
-    background: #141d47 !important;
+    z-index: 1000 !important;
+    background: #10173e !important;
     border-top: 2px solid var(--renacer-gold) !important;
-    padding: 4px 2px calc(4px + env(safe-area-inset-bottom, 0px)) !important;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4) !important;
+    padding: 2px 4px calc(4px + env(safe-area-inset-bottom, 0px)) !important;
     width: 100% !important;
     max-width: 100vw !important;
+    height: 58px !important;
+    align-items: center !important;
+    justify-content: space-around !important;
     box-sizing: border-box !important;
   }
 
   .bottom-nav-item {
     flex: 1 1 0 !important;
     min-width: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
     padding: 4px 1px !important;
     gap: 2px !important;
     color: #94a3b8 !important;
+    text-decoration: none !important;
+    background: transparent !important;
+    border: none !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
   }
 
   .bottom-nav-item i {
-    font-size: 15px !important;
+    font-size: 16px !important;
   }
 
   .bottom-nav-item span {
@@ -2471,11 +2557,39 @@ body {
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     max-width: 100% !important;
+    font-weight: 700 !important;
   }
 
   .bottom-nav-item.active {
     color: var(--renacer-gold) !important;
-    background: rgba(245, 223, 0, 0.12) !important;
+  }
+
+  /* BOTÓN CENTRAL DESTACADO + NUEVA ORDEN */
+  .bottom-nav-item--center {
+    position: relative !important;
+    top: -12px !important;
+    background: linear-gradient(135deg, #f5df00 0%, #eab308 100%) !important;
+    color: #10173e !important;
+    width: 48px !important;
+    height: 48px !important;
+    border-radius: 50% !important;
+    flex: 0 0 48px !important;
+    box-shadow: 0 4px 14px rgba(245, 223, 0, 0.45) !important;
+    border: 3px solid #10173e !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+  }
+
+  .bottom-nav-item--center i {
+    font-size: 20px !important;
+    color: #10173e !important;
+    margin: 0 !important;
+  }
+
+  .bottom-nav-item--center span {
+    display: none !important;
   }
 
   /* BARRA DE ADMINISTRADOR EN MÓVIL */
@@ -2811,6 +2925,10 @@ body {
   box-sizing: border-box;
 }
 
+.topbar-mobile-brand {
+  display: none;
+}
+
 .topbar-left-zone {
   display: flex;
   align-items: center;
@@ -2863,6 +2981,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .date-pill {
@@ -2871,21 +2990,24 @@ body {
   gap: 6px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.18);
-  padding: 4px 10px;
+  padding: 4px 8px;
   border-radius: 8px;
   color: #cbd5e1;
   font-size: 11px;
   font-weight: 800;
+  flex-shrink: 0;
 }
 
 .date-pill input[type="date"] {
   background: transparent;
   border: none;
   color: #fff;
-  font-size: 12px;
+  font-size: 11.5px;
   font-family: inherit;
-  font-weight: 600;
+  font-weight: 700;
   outline: none;
+  width: 120px;
+  min-width: 115px;
 }
 
 .btn-week-filter {
@@ -3110,25 +3232,7 @@ body {
 
 /* BARRA FLOTANTE DE ACCIONES RÁPIDAS MÓVILES (SR. ENRIQUE / JEFES) */
 .mobile-quick-actions-bar {
-  display: none;
-  position: fixed;
-  bottom: 64px;
-  left: 12px;
-  right: 12px;
-  z-index: 105;
-  background: rgba(16, 23, 62, 0.94);
-  backdrop-filter: blur(12px);
-  border: 1.5px solid rgba(245, 223, 0, 0.4);
-  border-radius: 16px;
-  padding: 8px 10px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
-  justify-content: space-between;
-  gap: 8px;
-}
-@media (max-width: 768px) {
-  .mobile-quick-actions-bar {
-    display: flex;
-  }
+  display: none !important;
 }
 .quick-action-pill {
   flex: 1;
@@ -3382,4 +3486,132 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* ============================================================================
+   OPTIMIZACIONES VISUALES Y FLUIDEZ (RESPONSIVE CLIENTES, CATÁLOGO Y ÓRDENES)
+   ============================================================================ */
+
+/* Contenedor de órdenes cuando hay 1 sola orden (evita 75% de espacio vacío a la derecha) */
+.orders-grid--single {
+  grid-template-columns: minmax(360px, 680px) !important;
+}
+
+@media (max-width: 768px) {
+  .orders-grid--single {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Directorio de Clientes: Separación clara entre Desktop (Tabla) y Mobile (Tarjetas) */
+.clients-desktop-view {
+  display: block;
+}
+.clients-mobile-view {
+  display: none;
+}
+
+@media (max-width: 820px) {
+  .clients-desktop-view {
+    display: none !important;
+  }
+  .clients-mobile-view {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+
+/* Tarjeta individual de cliente en móviles (100% fluida, sin cortes) */
+.client-mobile-card {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.client-mobile-card:hover {
+  border-color: rgba(245, 223, 0, 0.4);
+}
+.client-mobile-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.client-mobile-card__title {
+  font-size: 15px;
+  font-weight: 900;
+  color: var(--text-main);
+  line-height: 1.25;
+}
+.client-mobile-card__doc {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--renacer-gold);
+  font-weight: 700;
+  margin-top: 2px;
+}
+.client-mobile-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.client-mobile-card__contact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.client-mobile-card__balance-box {
+  background: var(--bg-subtle);
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+}
+.client-mobile-card__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Catálogo de Servicios Full Width */
+.catalog-full-card {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Compact Admin Bar */
+.admin-context-bar {
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  border-radius: 12px;
+}
+@media (max-width: 640px) {
+  .admin-context-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .admin-context-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
