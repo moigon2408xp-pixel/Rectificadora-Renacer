@@ -6,12 +6,12 @@
   <meta name="theme-color" content="#182254" />
   <meta name="description" content="Sistema Integral de Recepción, Diagnóstico, Presupuesto, Asignación por Subtareas, Control de Calidad y Comisiones — Rectificadora Renacer (Job 8:7)." />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="icon" type="image/png" href="./logo_renacer.png" />
-  <link rel="apple-touch-icon" href="./logo_renacer.png" />
+  <link rel="icon" type="image/png" href="./logo_renacer.png?v=20261113_1825" />
+  <link rel="apple-touch-icon" href="./logo_renacer.png?v=20261113_1825" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <link rel="stylesheet" href="./styles.css?v=8" />
+  <link rel="stylesheet" href="./styles.css?v=20261113_1845" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -28,7 +28,7 @@
         <!-- Cabecera de Marca -->
         <div class="login-clean-header">
           <div class="login-logo-wrapper">
-            <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="login-logo" />
+            <img src="./logo_renacer.png?v=20261113_1825" alt="Rectificadora Renacer" class="login-logo" />
           </div>
           <span class="login-biblical-badge"><i class="fas fa-book-open"></i> JOB 8:7</span>
           <h1 class="login-clean-title">RECTIFICADORA RENACER</h1>
@@ -115,7 +115,7 @@
         <!-- Logo y Marca Renacer -->
         <div class="sidebar-brand-box" onclick="navigateTab('default')">
           <div class="sidebar-logo-ring">
-            <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="sidebar-logo" />
+            <img src="./logo_renacer.png?v=20261113_1825" alt="Rectificadora Renacer" class="sidebar-logo" />
           </div>
           <div class="sidebar-brand-info">
             <div class="sidebar-brand-title">RENACER</div>
@@ -153,6 +153,12 @@
               <i class="fas fa-bars"></i>
             </button>
 
+            <!-- Marca compacta para móviles -->
+            <div class="topbar-mobile-brand">
+              <img src="./logo_renacer.png?v=20261113_1825" alt="Renacer" class="topbar-mobile-logo" />
+              <span class="topbar-mobile-title">RENACER</span>
+            </div>
+
             <!-- Buscador Global -->
             <div class="topbar-search-box">
               <i class="fas fa-search search-icon"></i>
@@ -160,7 +166,7 @@
                 type="search"
                 id="global-search-input"
                 class="topbar-search-input"
-                placeholder="Buscar Troquel (#5017), Cédula/RIF, Cliente o Motor..."
+                placeholder="Buscar Troquel, Cédula o Motor..."
                 oninput="handleGlobalSearch(this.value)"
               />
             </div>
@@ -199,7 +205,7 @@
             <div class="topbar-user-pill" onclick="openInteractiveProfileModal()" title="Mi Perfil & Configuración">
               <span class="user-live-dot"></span>
               <i class="fas fa-user-circle"></i>
-              <span id="active-user-label">Jesús Andrade</span>
+              <span id="active-user-label">Moisés González</span>
               <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
             </div>
 
@@ -227,22 +233,6 @@
 
         <!-- CONTENIDO DE LA PANTALLA ACTIVA -->
         <main id="screen" class="main-workspace" aria-live="polite"></main>
-
-        <!-- Barra de Acciones Rápidas Flotante para Móviles (Para Sr. Enrique y Jefes en Teléfono) -->
-        <div id="mobile-quick-actions-bar" class="mobile-quick-actions-bar">
-          <button type="button" class="quick-action-pill quick-action-pill--gold" onclick="openNewOrderModal()">
-            <i class="fas fa-plus"></i> <span>+ Orden</span>
-          </button>
-          <button type="button" class="quick-action-pill quick-action-pill--green" onclick="openQuickCashMovementModal('ingreso')">
-            <i class="fas fa-arrow-down"></i> <span>+ Ingreso</span>
-          </button>
-          <button type="button" class="quick-action-pill quick-action-pill--red" onclick="openQuickCashMovementModal('egreso')">
-            <i class="fas fa-arrow-up"></i> <span>+ Egreso</span>
-          </button>
-          <button type="button" class="quick-action-pill quick-action-pill--blue" onclick="navigateTab('accounts_receivable')">
-            <i class="fas fa-hand-holding-usd"></i> <span>Por Cobrar</span>
-          </button>
-        </div>
       </div>
 
       <!-- NAVEGACIÓN INFERIOR MÓVIL (PANTALLAS PEQUEÑAS) -->
@@ -255,7 +245,7 @@
 
   </div>
 
-  <script src="./app.js?v=8"></script>
+  <script src="./app.js?v=20261113_1845"></script>
 </body>
 </html>
 
