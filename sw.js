@@ -1,4 +1,4 @@
-const CACHE_NAME = 'renacer-taller-v10';
+const CACHE_NAME = 'renacer-taller-v11';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -48,3 +48,4 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(req))
   );
 });
+
