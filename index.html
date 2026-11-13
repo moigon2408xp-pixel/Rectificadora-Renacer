@@ -92,6 +92,10 @@
             <i class="fas fa-sign-in-alt"></i> Entrar al Sistema Renacer
           </button>
 
+          <button type="button" class="btn btn--ghost" style="width:100%; border-color:rgba(245,223,0,0.4); color:#fde047; margin-top:8px; font-size:13px; font-weight:800; background:rgba(245,223,0,0.06);" onclick="handleBiometricLogin()">
+            <i class="fas fa-fingerprint"></i> Ingresar con Huella Dactilar
+          </button>
+
           <div style="display:flex; gap:8px; margin-top:6px;">
             <button type="button" class="btn btn--ghost" style="flex:1; background:rgba(255,255,255,0.06); color:#fff; border-color:rgba(255,255,255,0.18); font-size:12px;" onclick="triggerPwaInstall()">
               <i class="fas fa-download"></i> Instalar App (PC / Teléfono)
@@ -104,33 +108,113 @@
       </div>
     </section>
 
-    <!-- ==================== ÁREA DE TRABAJO PRINCIPAL ==================== -->
-    <section id="workspace" class="hidden">
-      <!-- HEADER STICKY INDUSTRIAL RESPONSIVO -->
-      <header class="renacer-main-header">
-        <div class="renacer-header-top">
-          <a class="renacer-header-brand" onclick="navigateTab('default')">
-            <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="renacer-brand-logo" />
-            <div class="renacer-brand-text">
-              <div class="renacer-brand-title">
-                <span>RENACER</span>
-                <span class="job-pill">JOB 8:7</span>
-              </div>
-              <div class="renacer-brand-sub" id="header-subtitle-role">
-                Control de Ingreso, Troquel, Presupuesto y Asignación
-              </div>
-            </div>
-          </a>
+    <!-- ==================== ÁREA DE TRABAJO PRINCIPAL (LAYOUT CON BARRA LATERAL TIPO TUULAPP) ==================== -->
+    <section id="workspace" class="hidden renacer-workspace-layout">
+      <!-- SIDEBAR LATERAL (DISEÑO OFICIAL JESÚS ANDRADE / RENACER) -->
+      <aside id="renacer-sidebar" class="renacer-sidebar">
+        <!-- Logo y Marca Renacer -->
+        <div class="sidebar-brand-box" onclick="navigateTab('default')">
+          <div class="sidebar-logo-ring">
+            <img src="./logo_renacer.png" alt="Rectificadora Renacer" class="sidebar-logo" />
+          </div>
+          <div class="sidebar-brand-info">
+            <div class="sidebar-brand-title">RENACER</div>
+            <div class="sidebar-brand-sub"><i class="fas fa-book-open"></i> JOB 8:7</div>
+          </div>
+        </div>
 
-          <!-- Selector Rápido de Usuario & Logout -->
-          <div class="renacer-header-user-zone">
-            <div class="user-role-pill" onclick="openSwitchUserModal()" title="Cambiar de usuario">
-              <span class="role-dot"></span>
-              <i class="fas fa-user"></i>
+        <!-- Menú de Navegación Vertical -->
+        <nav class="sidebar-nav-menu" id="renacer-tabs-bar"></nav>
+
+        <!-- Pie de Barra Lateral -->
+        <div class="sidebar-bottom-status">
+          <button type="button" id="btn-sidebar-cloud-sync" class="sidebar-sync-pill" onclick="openCloudSyncModal()" title="Sincronización con Google Sheets">
+            <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
+            <span id="cloud-sync-badge-label">Sheets Conectado</span>
+          </button>
+          <div style="display:flex; gap:6px; margin-top:8px; width:100%;">
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1; font-size:10.5px; padding:4px 6px; border-color:rgba(255,255,255,0.15);" onclick="forceAppRefresh()" title="Forzar actualización y limpiar caché">
+              <i class="fas fa-sync-alt"></i> <span class="sidebar-text-hide">Actualizar</span>
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1; font-size:10.5px; padding:4px 6px; border-color:rgba(255,255,255,0.15);" onclick="openInteractiveProfileModal()" title="Mi Perfil y Ajustes">
+              <i class="fas fa-user-cog"></i> <span class="sidebar-text-hide">Perfil</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CONTENEDOR PRINCIPAL VIEWPORT -->
+      <div class="renacer-main-viewport">
+        <!-- TOPBAR INDUSTRIAL CON BUSCADOR, RANGO DE FECHAS Y ACCIONES -->
+        <header class="renacer-main-topbar">
+          <div class="topbar-left-zone">
+            <!-- Botón Móvil para Abrir Menú Lateral -->
+            <button type="button" class="sidebar-mobile-toggle" onclick="toggleSidebarMenu()" title="Menú">
+              <i class="fas fa-bars"></i>
+            </button>
+
+            <!-- Buscador Global -->
+            <div class="topbar-search-box">
+              <i class="fas fa-search search-icon"></i>
+              <input
+                type="search"
+                id="global-search-input"
+                class="topbar-search-input"
+                placeholder="Buscar Troquel (#5017), Cédula/RIF, Cliente o Motor..."
+                oninput="handleGlobalSearch(this.value)"
+              />
+            </div>
+
+            <!-- Rango de Fechas (Diseño Jesús Andrade) -->
+            <div class="topbar-date-range-filter">
+              <div class="date-pill">
+                <i class="far fa-calendar-alt"></i>
+                <span>DESDE</span>
+                <input type="date" id="topbar-date-from" onchange="applyDateRangeFilter()" />
+              </div>
+              <div class="date-pill">
+                <i class="far fa-calendar-alt"></i>
+                <span>HASTA</span>
+                <input type="date" id="topbar-date-to" onchange="applyDateRangeFilter()" />
+              </div>
+              <button type="button" class="btn-week-filter" onclick="setDateFilterCurrentWeek()">
+                Semana Actual
+              </button>
+            </div>
+          </div>
+
+          <div class="topbar-right-zone">
+            <!-- Botón Colapsar / Expandir Sidebar (Desktop) -->
+            <button type="button" class="control-btn-circle desktop-sidebar-toggle" onclick="toggleSidebarCollapse()" title="Colapsar / Expandir Barra Lateral">
+              <i class="fas fa-bars-staggered"></i>
+            </button>
+
+            <!-- Botón + Nueva Orden -->
+            <button type="button" id="btn-header-new-order" class="btn-topbar-action btn-topbar-action--gold" onclick="openNewOrderModal()">
+              <i class="fas fa-plus-circle"></i>
+              <span>Nueva Orden</span>
+            </button>
+
+            <!-- Selector / Perfil Interactivo de Usuario -->
+            <div class="topbar-user-pill" onclick="openInteractiveProfileModal()" title="Mi Perfil & Configuración">
+              <span class="user-live-dot"></span>
+              <i class="fas fa-user-circle"></i>
               <span id="active-user-label">Jesús Andrade</span>
               <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
             </div>
 
+            <!-- Notificaciones Push -->
+            <button type="button" id="btn-push-notifications" class="control-btn-circle" onclick="togglePushNotifications()" title="Activar / Comprobar Notificaciones Push">
+              <i class="fas fa-bell"></i>
+              <span id="push-status-dot" class="push-status-dot hidden"></span>
+            </button>
+
+            <!-- Botón Forzar Actualización -->
+            <button type="button" class="control-btn-circle" onclick="forceAppRefresh()" title="Forzar Actualización (Limpiar Caché y Recargar)">
+              <i class="fas fa-sync-alt"></i>
+            </button>
+
+            <!-- Botones de Sistema -->
             <button type="button" class="control-btn-circle" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
               <i class="fas fa-moon" id="theme-icon"></i>
             </button>
@@ -139,42 +223,29 @@
               <i class="fas fa-power-off"></i>
             </button>
           </div>
+        </header>
+
+        <!-- CONTENIDO DE LA PANTALLA ACTIVA -->
+        <main id="screen" class="main-workspace" aria-live="polite"></main>
+
+        <!-- Barra de Acciones Rápidas Flotante para Móviles (Para Sr. Enrique y Jefes en Teléfono) -->
+        <div id="mobile-quick-actions-bar" class="mobile-quick-actions-bar">
+          <button type="button" class="quick-action-pill quick-action-pill--gold" onclick="openNewOrderModal()">
+            <i class="fas fa-plus"></i> <span>+ Orden</span>
+          </button>
+          <button type="button" class="quick-action-pill quick-action-pill--green" onclick="openQuickCashMovementModal('ingreso')">
+            <i class="fas fa-arrow-down"></i> <span>+ Ingreso</span>
+          </button>
+          <button type="button" class="quick-action-pill quick-action-pill--red" onclick="openQuickCashMovementModal('egreso')">
+            <i class="fas fa-arrow-up"></i> <span>+ Egreso</span>
+          </button>
+          <button type="button" class="quick-action-pill quick-action-pill--blue" onclick="navigateTab('accounts_receivable')">
+            <i class="fas fa-hand-holding-usd"></i> <span>Por Cobrar</span>
+          </button>
         </div>
+      </div>
 
-        <!-- Fila de Acciones y Buscador -->
-        <div class="renacer-header-actions-row">
-          <div class="renacer-header-search">
-            <i class="fas fa-search search-icon"></i>
-            <input
-              type="search"
-              id="global-search-input"
-              class="renacer-search-input"
-              placeholder="Buscar Troquel (#5017), Cédula/RIF o Cliente..."
-              oninput="handleGlobalSearch(this.value)"
-            />
-          </div>
-
-          <div class="renacer-header-buttons">
-            <button type="button" id="btn-header-new-order" class="header-action-btn header-action-btn--gold" onclick="openNewOrderModal()">
-              <i class="fas fa-plus-circle"></i>
-              <span>Nueva Orden</span>
-            </button>
-
-            <button type="button" id="btn-header-cloud-sync" class="header-action-btn" style="background:rgba(22,163,74,0.18); color:#86efac; border:1px solid rgba(34,197,94,0.55);" onclick="openCloudSyncModal()" title="Sincronización con Google Sheets">
-              <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
-              <span id="cloud-sync-badge-label">Sheets</span>
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <!-- BARRA DE PESTAÑAS DINÁMICA SEGÚN ROL -->
-      <nav id="renacer-tabs-bar" class="renacer-tabs-bar"></nav>
-
-      <!-- CONTENIDO DE LA PANTALLA ACTIVA -->
-      <main id="screen" class="main-workspace" aria-live="polite"></main>
-
-      <!-- NAVEGACIÓN INFERIOR MÓVIL -->
+      <!-- NAVEGACIÓN INFERIOR MÓVIL (PANTALLAS PEQUEÑAS) -->
       <nav id="mobile-bottom-nav" class="mobile-bottom-nav"></nav>
     </section>
 
