@@ -758,9 +758,12 @@ body {
    CONTENEDOR PRINCIPAL Y FLUJO VISUAL DE LA FASE 1
    ========================================================================== */
 .main-workspace {
+  width: 100%;
   max-width: 1440px;
   margin: 0 auto;
   padding: 20px 18px 96px;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 /* Banner de Flujo de Estados de la Fase 1 */
@@ -2691,8 +2694,11 @@ body {
   height: 100vh;
   max-height: 100vh;
   width: 100%;
+  max-width: 100vw;
   background-color: var(--bg-main);
-  overflow: hidden;
+  overflow-x: hidden !important;
+  overflow-y: hidden;
+  box-sizing: border-box;
 }
 
 /* SIDEBAR LATERAL PERMANENTE (AZUL MOTOR CON BORDE ORO) */
@@ -2714,11 +2720,36 @@ body {
 }
 
 .renacer-sidebar.renacer-sidebar--collapsed {
-  width: 76px !important;
-  min-width: 76px !important;
+  width: 68px !important;
+  min-width: 68px !important;
+  padding: 14px 4px !important;
 }
 
-.renacer-sidebar.renacer-sidebar--collapsed .sidebar-brand-info,
+.renacer-sidebar.renacer-sidebar--collapsed .sidebar-brand-box {
+  justify-content: center !important;
+  padding: 4px 0 12px !important;
+  gap: 0 !important;
+  margin-bottom: 12px !important;
+  width: 100% !important;
+  overflow: hidden !important;
+}
+
+.renacer-sidebar.renacer-sidebar--collapsed .sidebar-logo-ring {
+  width: 44px !important;
+  height: 44px !important;
+  margin: 0 auto !important;
+  flex-shrink: 0 !important;
+}
+
+.renacer-sidebar.renacer-sidebar--collapsed .sidebar-brand-info {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
 .renacer-sidebar.renacer-sidebar--collapsed .sidebar-nav-btn-content span,
 .renacer-sidebar.renacer-sidebar--collapsed .sidebar-badge-count,
 .renacer-sidebar.renacer-sidebar--collapsed #cloud-sync-badge-label,
@@ -2900,9 +2931,12 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
   height: 100vh;
   max-height: 100vh;
   overflow-y: auto !important;
+  overflow-x: hidden !important;
   -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth;
   background: var(--bg-main);
@@ -2917,12 +2951,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 10px 22px;
+  gap: 10px;
+  padding: 8px 16px;
   background: linear-gradient(90deg, #10173e 0%, #15204d 100%);
   border-bottom: 2px solid var(--renacer-gold);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
   box-sizing: border-box;
+  max-width: 100%;
+  width: 100%;
+  flex-wrap: wrap;
 }
 
 .topbar-mobile-brand {
@@ -3603,6 +3640,8 @@ body {
   padding: 8px 14px;
   margin-bottom: 12px;
   border-radius: 12px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 @media (max-width: 640px) {
   .admin-context-bar {
@@ -3615,3 +3654,342 @@ body {
     justify-content: flex-start;
   }
 }
+
+/* ============================================================================
+   LIGHTBOX FOTOGRÁFICO FULL-SCREEN HD/4K (INSPECCIÓN VISUAL PROFESIONAL)
+   ============================================================================ */
+.photo-lightbox-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(4, 7, 24, 0.96);
+  backdrop-filter: blur(14px);
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  animation: fadeInLightbox 0.2s ease-out;
+}
+
+@keyframes fadeInLightbox {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.photo-lightbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  background: rgba(16, 23, 62, 0.9);
+  border-bottom: 1.5px solid rgba(245, 223, 0, 0.3);
+  color: #fff;
+  z-index: 10;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.photo-lightbox-title {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.photo-lightbox-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lightbox-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.lightbox-btn:hover {
+  background: rgba(245, 223, 0, 0.2);
+  border-color: var(--renacer-gold);
+  color: var(--renacer-gold);
+}
+
+.lightbox-btn--close {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+.lightbox-btn--close:hover {
+  background: #dc2626;
+  color: #fff;
+}
+
+.photo-lightbox-viewport {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.photo-lightbox-viewport:active {
+  cursor: grabbing;
+}
+
+.photo-lightbox-img {
+  max-width: 90vw;
+  max-height: 82vh;
+  object-fit: contain;
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+  transform-origin: center center;
+}
+
+.lightbox-nav-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(16, 23, 62, 0.75);
+  border: 1.5px solid var(--renacer-gold);
+  color: var(--renacer-gold);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.2s ease;
+}
+
+.lightbox-nav-arrow:hover {
+  background: var(--renacer-gold);
+  color: #0f1638;
+  transform: translateY(-50%) scale(1.1);
+}
+
+.lightbox-nav-arrow--prev {
+  left: 18px;
+}
+
+.lightbox-nav-arrow--next {
+  right: 18px;
+}
+
+/* Adaptación del Topbar para evitar Scroll Horizontal en Laptops (1024px - 1366px) */
+@media (max-width: 1366px) {
+  .topbar-search-box {
+    max-width: 200px;
+    min-width: 130px;
+  }
+  .date-pill input[type="date"] {
+    width: 95px !important;
+    min-width: 88px !important;
+  }
+  .date-pill {
+    padding: 3px 6px !important;
+    font-size: 10.5px !important;
+  }
+  .btn-week-filter {
+    padding: 5px 8px !important;
+    font-size: 10.5px !important;
+  }
+  .btn-topbar-action--gold {
+    padding: 6px 12px !important;
+    font-size: 12px !important;
+  }
+}
+
+@media (max-width: 1120px) {
+  .topbar-date-range-filter {
+    display: none !important;
+  }
+}
+
+/* ==========================================================================
+   OPTIMIZACIÓN RESPONSIVA MÓVIL TOTAL (< 768px)
+   Elimina solapamientos en cabecera y colisión con barra inferior
+   ========================================================================== */
+@media (max-width: 768px) {
+  html, body {
+    overflow-x: hidden !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+  }
+
+  .renacer-workspace-layout {
+    overflow-x: hidden !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+  }
+
+  .renacer-main-viewport {
+    overflow-x: hidden !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .renacer-main-topbar {
+    padding: 6px 10px !important;
+    gap: 6px !important;
+    justify-content: space-between !important;
+    flex-wrap: nowrap !important;
+    height: 54px !important;
+    box-sizing: border-box !important;
+  }
+
+  .topbar-left-zone {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+  }
+
+  .sidebar-mobile-toggle {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 8px !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(245, 223, 0, 0.3) !important;
+    color: var(--renacer-gold) !important;
+    font-size: 16px !important;
+    cursor: pointer !important;
+  }
+
+  .topbar-mobile-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+  }
+
+  .topbar-mobile-logo {
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 50% !important;
+    border: 1.5px solid var(--renacer-gold) !important;
+    object-fit: cover !important;
+  }
+
+  .topbar-mobile-title {
+    font-size: 13.5px !important;
+    font-weight: 900 !important;
+    color: #fff !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  /* Ocultar elementos sobrantes del topbar en móvil para evitar solapamiento */
+  .topbar-search-box {
+    display: none !important;
+  }
+
+  .topbar-date-range-filter {
+    display: none !important;
+  }
+
+  .desktop-sidebar-toggle {
+    display: none !important;
+  }
+
+  #btn-header-new-order {
+    display: none !important;
+  }
+
+  #btn-push-notifications {
+    display: none !important;
+  }
+
+  .topbar-right-zone {
+    display: flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    flex: 0 0 auto !important;
+  }
+
+  .topbar-user-pill {
+    padding: 5px 8px !important;
+    font-size: 11px !important;
+    max-width: 110px !important;
+  }
+
+  .topbar-user-pill span#active-user-label {
+    max-width: 70px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .topbar-user-pill .fa-chevron-down {
+    display: none !important;
+  }
+
+  .control-btn-circle {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 12px !important;
+  }
+
+  /* Barra de Navegación Inferior Limpia Sin Docks Superpuestos */
+  .mobile-quick-actions-bar {
+    display: none !important;
+  }
+
+  .mobile-bottom-nav {
+    display: flex !important;
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 9999 !important;
+    height: 58px !important;
+    background: #10173e !important;
+    border-top: 2px solid var(--renacer-gold) !important;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4) !important;
+    padding: 2px 4px calc(2px + env(safe-area-inset-bottom, 0px)) !important;
+    align-items: center !important;
+    justify-content: space-around !important;
+    box-sizing: border-box !important;
+  }
+
+  .main-workspace {
+    padding: 10px 8px 78px !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+    box-sizing: border-box !important;
+  }
+
+  .data-table-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+}
+
+
+
