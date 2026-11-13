@@ -3435,31 +3435,53 @@ function renderEnriqueHub() {
   `;
 }
 
-/* ---------- 2. TABLERO DE LOS 6 ESTADOS DE LA FASE 2 (WORKFLOW / KANBAN / LISTA) ---------- */
+/* ---------- 2. TABLERO DE LOS 6 ESTADOS OFICIALES DEL TALLER RENACER (JESÚS ANDRADE) ---------- */
+let pipelineWarrantySubfilter = "all"; // "all" | "active_warranty"
+
+function setWarrantySubfilter(sub) {
+  pipelineWarrantySubfilter = sub;
+  renderApp();
+}
+
 function renderPipelineScreen(forcedState) {
   const activeFilter = forcedState && forcedState !== "all" ? forcedState : currentPhaseFilter;
 
-  const countArchivados = db.ordenes.filter((o) => o.estado_actual === "entregado" || o.estado_actual === "anulado").length;
+  const countArchivados = db.ordenes.filter((o) => o.estado_actual === "archivado" || o.estado_actual === "anulado").length;
+  const countGarantias = db.ordenes.filter((o) => Boolean(o.garantia_activa)).length;
 
   const counts = {
-    all: db.ordenes.filter((o) => o.estado_actual !== "anulado").length,
-    diagnostico_presupuesto: db.ordenes.filter((o) => o.estado_actual === "diagnostico_presupuesto").length,
-    esperando_aprobacion_abono: db.ordenes.filter((o) => o.estado_actual === "esperando_aprobacion_abono").length,
-    asignacion_ejecucion: db.ordenes.filter((o) => o.estado_actual === "asignacion_ejecucion").length,
-    terminado: db.ordenes.filter((o) => o.estado_actual === "terminado").length,
-    control_calidad: db.ordenes.filter((o) => o.estado_actual === "control_calidad").length,
-    entregado: db.ordenes.filter((o) => o.estado_actual === "entregado").length,
-    archivados: countArchivados
+    all: db.ordenes.filter((o) => o.estado_actual !== "anulado" && o.estado_actual !== "archivado").length,
+    recepcion: db.ordenes.filter((o) => o.estado_actual === "recepcion" || o.estado_actual === "diagnostico_presupuesto").length,
+    diagnostico: db.ordenes.filter((o) => o.estado_actual === "diagnostico").length,
+    aprobacion: db.ordenes.filter((o) => o.estado_actual === "aprobacion" || o.estado_actual === "esperando_aprobacion_abono").length,
+    servicio: db.ordenes.filter((o) => o.estado_actual === "servicio" || o.estado_actual === "asignacion_ejecucion" || o.estado_actual === "terminado").length,
+    calidad: db.ordenes.filter((o) => o.estado_actual === "calidad" || o.estado_actual === "control_calidad").length,
+    entrega: db.ordenes.filter((o) => (o.estado_actual === "entrega" || o.estado_actual === "entregado") && o.estado_actual !== "archivado").length,
+    archivados: countArchivados,
+    garantias: countGarantias
   };
 
   let filteredOrders = db.ordenes.slice();
   if (activeFilter === "archivado") {
-    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "entregado" || o.estado_actual === "anulado");
-  } else if (activeFilter !== "all") {
-    filteredOrders = filteredOrders.filter((o) => o.estado_actual === activeFilter);
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "archivado" || o.estado_actual === "anulado");
+    if (pipelineWarrantySubfilter === "active_warranty") {
+      filteredOrders = filteredOrders.filter((o) => Boolean(o.garantia_activa));
+    }
+  } else if (activeFilter === "recepcion" || activeFilter === "diagnostico_presupuesto") {
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "recepcion" || o.estado_actual === "diagnostico_presupuesto");
+  } else if (activeFilter === "diagnostico") {
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "diagnostico");
+  } else if (activeFilter === "aprobacion" || activeFilter === "esperando_aprobacion_abono") {
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "aprobacion" || o.estado_actual === "esperando_aprobacion_abono");
+  } else if (activeFilter === "servicio" || activeFilter === "asignacion_ejecucion") {
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "servicio" || o.estado_actual === "asignacion_ejecucion" || o.estado_actual === "terminado");
+  } else if (activeFilter === "calidad" || activeFilter === "control_calidad") {
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual === "calidad" || o.estado_actual === "control_calidad");
+  } else if (activeFilter === "entrega" || activeFilter === "entregado") {
+    filteredOrders = filteredOrders.filter((o) => (o.estado_actual === "entrega" || o.estado_actual === "entregado") && o.estado_actual !== "archivado");
   } else {
-    // En 'all', mostrar piezas activas del taller (excluye anuladas)
-    filteredOrders = filteredOrders.filter((o) => o.estado_actual !== "anulado");
+    // En 'all', mostrar piezas activas del taller (excluye archivadas y anuladas)
+    filteredOrders = filteredOrders.filter((o) => o.estado_actual !== "anulado" && o.estado_actual !== "archivado");
   }
 
   if (searchQuery) {
@@ -3471,8 +3493,8 @@ function renderPipelineScreen(forcedState) {
 
   // Ordenar: Devueltas por calidad y Prioridad Alta primero
   filteredOrders.sort((a, b) => {
-    const scoreA = (a.devuelto_calidad ? 2 : 0) + (a.prioridad_alta ? 1 : 0);
-    const scoreB = (b.devuelto_calidad ? 2 : 0) + (b.prioridad_alta ? 1 : 0);
+    const scoreA = (a.garantia_activa ? 3 : 0) + (a.devuelto_calidad ? 2 : 0) + (a.prioridad_alta ? 1 : 0);
+    const scoreB = (b.garantia_activa ? 3 : 0) + (b.devuelto_calidad ? 2 : 0) + (b.prioridad_alta ? 1 : 0);
     return scoreB - scoreA;
   });
 
@@ -3507,8 +3529,11 @@ function renderPipelineScreen(forcedState) {
           <button type="button" class="btn btn--danger btn--xs" onclick="clearAllTestOrders()">
             <i class="fas fa-broom"></i> Limpiar Pruebas
           </button>
-          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('clients_catalog')">
-            <i class="fas fa-edit"></i> Precios / Clientes
+          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('clients_dir')">
+            <i class="fas fa-users"></i> Clientes
+          </button>
+          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('catalog_mgr')">
+            <i class="fas fa-tools"></i> Precios / Servicios
           </button>
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('commissions_hr')">
             <i class="fas fa-users-cog"></i> Trabajadores
@@ -3526,11 +3551,11 @@ function renderPipelineScreen(forcedState) {
           <span class="admin-context-desc">Acceso rápido a recepción, asignación, calidad y cobros.</span>
         </div>
         <div class="admin-context-actions">
-          <button type="button" class="btn btn--warning btn--xs" onclick="setPhaseFilter('esperando_aprobacion_abono')">
-            ⏳ Por Aprobar (${counts.esperando_aprobacion_abono})
+          <button type="button" class="btn btn--warning btn--xs" onclick="setPhaseFilter('aprobacion')">
+            ⏳ Por Aprobar (${counts.aprobacion})
           </button>
-          <button type="button" class="btn btn--primary btn--xs" onclick="setPhaseFilter('control_calidad')">
-            🛡️ Calidad (${counts.control_calidad + counts.terminado})
+          <button type="button" class="btn btn--primary btn--xs" onclick="setPhaseFilter('calidad')">
+            🛡️ Calidad (${counts.calidad})
           </button>
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('accounts_receivable')">
             💵 Por Cobrar
@@ -3550,7 +3575,7 @@ function renderPipelineScreen(forcedState) {
           Seguimiento de Órdenes y Producción (Por Código de Troquel)
         </h2>
         <p style="font-size:12.5px; color:var(--text-muted);">
-          Selecciona cualquier etapa para filtrar, gestionar presupuesto, asignar técnicos y emitir comprobantes con las 4 políticas del taller.
+          Flujo de 6 etapas del taller: 1. Recepción ➔ 2. Diagnóstico ➔ 3. Aprobación ➔ 4. Servicio ➔ 5. Calidad ➔ 6. Entrega.
         </p>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -3565,7 +3590,7 @@ function renderPipelineScreen(forcedState) {
         </div>
 
         <button type="button" class="btn ${activeFilter === "all" ? "btn--primary" : "btn--ghost"}" onclick="setPhaseFilter('all')">
-          Activas (${counts.all})
+          Activas en Taller (${counts.all})
         </button>
         <button type="button" class="btn btn--gold" onclick="openNewOrderModal()">
           <i class="fas fa-plus"></i> + Nueva Orden
@@ -3573,33 +3598,50 @@ function renderPipelineScreen(forcedState) {
       </div>
     </div>
 
-    <!-- BARRA DE PÍLDORAS POR ESTADO (OFICIAL WEB RENACER DISEÑO 2) -->
+    <!-- BARRA DE PÍLDORAS POR ESTADO: 6 ETAPAS OFICIALES RENACER -->
     <div class="renacer-filter-pill-bar">
-      <button type="button" class="stage-pill-btn ${activeFilter === "diagnostico_presupuesto" ? "active" : ""}" onclick="setPhaseFilter('diagnostico_presupuesto')">
-        <i class="fas fa-stethoscope"></i> 1. Diagnóstico <span class="count-badge">${counts.diagnostico_presupuesto}</span>
+      <button type="button" class="stage-pill-btn ${activeFilter === "recepcion" || activeFilter === "diagnostico_presupuesto" ? "active" : ""}" onclick="setPhaseFilter('recepcion')">
+        <i class="fas fa-clipboard-check"></i> 1. Recepción <span class="count-badge">${counts.recepcion}</span>
       </button>
-      <button type="button" class="stage-pill-btn ${activeFilter === "esperando_aprobacion_abono" ? "active" : ""}" onclick="setPhaseFilter('esperando_aprobacion_abono')">
-        <i class="fas fa-hand-holding-usd"></i> 2. Por Aprobar <span class="count-badge">${counts.esperando_aprobacion_abono}</span>
+      <button type="button" class="stage-pill-btn ${activeFilter === "diagnostico" ? "active" : ""}" onclick="setPhaseFilter('diagnostico')">
+        <i class="fas fa-stethoscope"></i> 2. Diagnóstico <span class="count-badge">${counts.diagnostico}</span>
       </button>
-      <button type="button" class="stage-pill-btn ${activeFilter === "asignacion_ejecucion" ? "active" : ""}" onclick="setPhaseFilter('asignacion_ejecucion')">
-        <i class="fas fa-cogs"></i> 3. En Ejecución <span class="count-badge">${counts.asignacion_ejecucion}</span>
+      <button type="button" class="stage-pill-btn ${activeFilter === "aprobacion" || activeFilter === "esperando_aprobacion_abono" ? "active" : ""}" onclick="setPhaseFilter('aprobacion')">
+        <i class="fas fa-hand-holding-usd"></i> 3. Aprobación <span class="count-badge">${counts.aprobacion}</span>
       </button>
-      <button type="button" class="stage-pill-btn ${activeFilter === "terminado" ? "active" : ""}" onclick="setPhaseFilter('terminado')">
-        <i class="fas fa-flag-checkered"></i> 4. Terminado <span class="count-badge">${counts.terminado}</span>
+      <button type="button" class="stage-pill-btn ${activeFilter === "servicio" || activeFilter === "asignacion_ejecucion" ? "active" : ""}" onclick="setPhaseFilter('servicio')">
+        <i class="fas fa-tools"></i> 4. Servicio <span class="count-badge">${counts.servicio}</span>
       </button>
-      <button type="button" class="stage-pill-btn ${activeFilter === "control_calidad" ? "active" : ""}" onclick="setPhaseFilter('control_calidad')">
-        <i class="fas fa-shield-alt"></i> 5. Calidad <span class="count-badge">${counts.control_calidad}</span>
+      <button type="button" class="stage-pill-btn ${activeFilter === "calidad" || activeFilter === "control_calidad" ? "active" : ""}" onclick="setPhaseFilter('calidad')">
+        <i class="fas fa-shield-alt"></i> 5. Calidad <span class="count-badge">${counts.calidad}</span>
       </button>
-      <button type="button" class="stage-pill-btn ${activeFilter === "entregado" ? "active" : ""}" onclick="setPhaseFilter('entregado')">
-        <i class="fas fa-lock"></i> 6. Entregado <span class="count-badge">${counts.entregado}</span>
+      <button type="button" class="stage-pill-btn ${activeFilter === "entrega" || activeFilter === "entregado" ? "active" : ""}" onclick="setPhaseFilter('entrega')">
+        <i class="fas fa-check-double"></i> 6. Entrega <span class="count-badge">${counts.entrega}</span>
       </button>
-      <button type="button" class="stage-pill-btn ${activeFilter === "archivado" ? "active" : ""}" onclick="setPhaseFilter('archivado')" style="border-color:rgba(148, 163, 184, 0.4);" title="Órdenes Entregadas y Anuladas">
+      <button type="button" class="stage-pill-btn ${activeFilter === "archivado" ? "active" : ""}" onclick="setPhaseFilter('archivado')" style="border-color:rgba(148, 163, 184, 0.4);" title="Órdenes Archivadas y Garantías">
         <i class="fas fa-archive"></i> Archivados &amp; Garantía <span class="count-badge" style="background:rgba(255,255,255,0.15); color:#fff;">${counts.archivados}</span>
       </button>
       <button type="button" class="stage-pill-reset" onclick="setPhaseFilter('all')" title="Ver todas las órdenes activas (${counts.all})">
         <i class="fas fa-filter-circle-xmark"></i>
       </button>
     </div>
+
+    ${
+      activeFilter === "archivado"
+        ? `
+        <!-- Sub-filtro para Archivados vs Garantías Activas -->
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px; background:var(--bg-card); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); flex-wrap:wrap;">
+          <span style="font-size:12px; font-weight:800; color:var(--text-muted);">Filtrar Historial:</span>
+          <button type="button" class="btn ${pipelineWarrantySubfilter === "all" ? "btn--primary" : "btn--ghost"}" style="padding:4px 10px; font-size:11.5px; border-radius:99px;" onclick="setWarrantySubfilter('all')">
+            Todas las Archivadas (${counts.archivados})
+          </button>
+          <button type="button" class="btn ${pipelineWarrantySubfilter === "active_warranty" ? "btn--danger" : "btn--ghost"}" style="padding:4px 10px; font-size:11.5px; border-radius:99px;" onclick="setWarrantySubfilter('active_warranty')">
+            <i class="fas fa-shield-alt"></i> 🛡️ Garantías Activas (${counts.garantias})
+          </button>
+        </div>
+      `
+        : ""
+    }
 
     ${
       currentViewMode === "table"
@@ -3790,15 +3832,22 @@ function renderOrderCardTelegramStyle(order) {
   const canManage = currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
 
   const stateMap = {
-    diagnostico_presupuesto: { label: "1. Diagnóstico", cls: "state-badge--diag", icon: "fa-stethoscope" },
-    esperando_aprobacion_abono: { label: "2. Por Aprobar", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
-    asignacion_ejecucion: { label: "3. En Ejecución", cls: "state-badge--exec", icon: "fa-cogs" },
-    terminado: { label: "4. Terminado", cls: "state-badge--term", icon: "fa-flag-checkered" },
+    recepcion: { label: "1. Recepción", cls: "state-badge--recep", icon: "fa-clipboard-check" },
+    diagnostico_presupuesto: { label: "1. Recepción", cls: "state-badge--recep", icon: "fa-clipboard-check" },
+    diagnostico: { label: "2. Diagnóstico", cls: "state-badge--diag", icon: "fa-stethoscope" },
+    aprobacion: { label: "3. Aprobación", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
+    esperando_aprobacion_abono: { label: "3. Aprobación", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
+    servicio: { label: "4. Servicio", cls: "state-badge--exec", icon: "fa-tools" },
+    asignacion_ejecucion: { label: "4. Servicio", cls: "state-badge--exec", icon: "fa-tools" },
+    terminado: { label: "4. Servicio (Listo)", cls: "state-badge--term", icon: "fa-flag-checkered" },
+    calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
     control_calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
-    entregado: { label: "6. Entregado", cls: "state-badge--done", icon: "fa-lock" },
+    entrega: { label: "6. Entrega", cls: "state-badge--done", icon: "fa-truck" },
+    entregado: { label: "6. Entrega", cls: "state-badge--done", icon: "fa-truck" },
+    archivado: { label: "📦 Archivado", cls: "state-badge--archive", icon: "fa-archive" },
     anulado: { label: "Anulada", cls: "state-badge--danger", icon: "fa-ban" }
   };
-  const st = stateMap[order.estado_actual] || stateMap.diagnostico_presupuesto;
+  const st = stateMap[order.estado_actual] || stateMap.recepcion;
 
   const finBadgeMap = {
     pago_total: `<span style="font-size:11px; font-weight:800; color:#22c55e; background:rgba(22,163,74,0.14); padding:3px 8px; border-radius:6px;">Pago Total 100%</span>`,
@@ -3830,6 +3879,7 @@ function renderOrderCardTelegramStyle(order) {
             <strong>${s.descripcion_servicio}</strong>
             <div style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:2px;">
               <span>Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong></span>
+              ${canManage && s.tecnico_id ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:4px; font-weight:800;" onclick="unassignTechnicianFromOrderCard('${s.id_subtarea}', '${order.id_orden}')" title="Quitar asignación de técnico">[✕ Quitar]</button>` : ""}
               <span>·</span>
               <span>${stateText}</span>
               ${timerBadge}
@@ -3844,67 +3894,97 @@ function renderOrderCardTelegramStyle(order) {
     })
     .join("");
 
-  // Botón de acción principal según el estado (1 a 6)
+  // Botón de acción según el flujo de las 6 etapas oficiales de Jesús Andrade
   let primaryActionBtn = "";
-  if (order.estado_actual === "diagnostico_presupuesto") {
+  if (order.estado_actual === "recepcion" || order.estado_actual === "diagnostico_presupuesto") {
     primaryActionBtn = `
-      <button type="button" class="btn btn--gold" onclick="openFinancialApprovalModal('${order.id_orden}')">
-        <i class="fas fa-hand-holding-usd"></i> Registrar Pago / Abono
-      </button>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--gold" onclick="openFinancialApprovalModal('${order.id_orden}')">
+          <i class="fas fa-hand-holding-usd"></i> Presupuesto / Abono
+        </button>
+        <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'diagnostico')">
+          Pasar a 2. Diagnóstico ➔
+        </button>
+      </div>
     `;
-  } else if (order.estado_actual === "esperando_aprobacion_abono") {
-    if (order.tipo_condicion_pago === "pendiente_definir") {
-      primaryActionBtn = `
+  } else if (order.estado_actual === "diagnostico") {
+    primaryActionBtn = `
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--ghost" onclick="openEditBudgetModal('${order.id_orden}')" title="Ajustar o ampliar presupuesto">
+          <i class="fas fa-pen"></i> Ajustar Presupuesto
+        </button>
+        <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'aprobacion')">
+          Enviar a 3. Aprobación ➔
+        </button>
+      </div>
+    `;
+  } else if (order.estado_actual === "aprobacion" || order.estado_actual === "esperando_aprobacion_abono") {
+    primaryActionBtn = `
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
         <button type="button" class="btn btn--warning" onclick="openFinancialApprovalModal('${order.id_orden}')">
-          <i class="fas fa-unlock"></i> Aprobar Abono / Crédito
+          <i class="fas fa-unlock"></i> Registrar Abono / Crédito
         </button>
-      `;
-    } else if (canManage) {
-      primaryActionBtn = `
-        <button type="button" class="btn btn--primary" onclick="openSubtaskAssignmentModal('${order.id_orden}')">
-          <i class="fas fa-user-check"></i> Asignar Técnicos (Fase 3)
-        </button>
-      `;
-    } else {
-      primaryActionBtn = `<span style="font-size:11.5px; font-weight:700; color:var(--text-muted);">Por asignar</span>`;
-    }
-  } else if (order.estado_actual === "asignacion_ejecucion") {
+        ${canManage ? `
+          <button type="button" class="btn btn--gold" onclick="openSubtaskAssignmentModal('${order.id_orden}')">
+            <i class="fas fa-user-check"></i> Asignar a 4. Servicio ➔
+          </button>
+        ` : ""}
+      </div>
+    `;
+  } else if (order.estado_actual === "servicio" || order.estado_actual === "asignacion_ejecucion" || order.estado_actual === "terminado") {
     primaryActionBtn = `
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
         <button type="button" class="btn btn--ghost" style="padding:7px 10px;" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Matriz de Asignación y Comisiones">
-          <i class="fas fa-users-cog"></i> Matriz / Comisiones
+          <i class="fas fa-users-cog"></i> Matriz / Reasignar
         </button>
         <button type="button" class="btn btn--success" onclick="moveOrderToQualityControl('${order.id_orden}')">
-          <i class="fas fa-shield-alt"></i> Enviar a Calidad
+          <i class="fas fa-shield-alt"></i> 🛡️ Enviar a 5. Calidad ➔
         </button>
       </div>
     `;
-  } else if (order.estado_actual === "terminado") {
-    primaryActionBtn = `
-      <button type="button" class="btn btn--primary" onclick="moveOrderToQualityControl('${order.id_orden}')">
-        <i class="fas fa-shield-alt"></i> Revisar en Calidad
-      </button>
-    `;
-  } else if (order.estado_actual === "control_calidad") {
+  } else if (order.estado_actual === "calidad" || order.estado_actual === "control_calidad") {
     primaryActionBtn = `
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
         <button type="button" class="btn btn--danger" style="padding:7px 10px;" onclick="promptRejectQualityControl('${order.id_orden}')">
-          ❌ Devolver
+          ❌ Devolver a Servicio
         </button>
         <button type="button" class="btn btn--success" style="padding:7px 11px;" onclick="openQualityAndDeliveryModal('${order.id_orden}')">
-          ✔️ Aprobar y Entregar
+          ✔️ Aprobar y Pasar a 6. Entrega ➔
         </button>
       </div>
     `;
-  } else if (order.estado_actual === "entregado") {
-    if (order.saldo_pendiente > 0) {
-      primaryActionBtn = `
-        <button type="button" class="btn btn--warning" onclick="openCollectReceivableModal('${order.id_orden}')">
-          <i class="fas fa-dollar-sign"></i> Cobrar Resto ($${Number(order.saldo_pendiente).toFixed(2)})
+  } else if (order.estado_actual === "entrega" || order.estado_actual === "entregado") {
+    primaryActionBtn = `
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        ${order.saldo_pendiente > 0 ? `
+          <button type="button" class="btn btn--warning" onclick="openCollectReceivableModal('${order.id_orden}')">
+            <i class="fas fa-dollar-sign"></i> Cobrar Resto ($${Number(order.saldo_pendiente).toFixed(2)})
+          </button>
+        ` : `<span class="state-badge state-badge--done" style="font-size:11px; padding:6px 10px;"><i class="fas fa-check"></i> 100% Pagada</span>`}
+        <button type="button" class="btn btn--gold" onclick="archiveOrder('${order.id_orden}')" title="Mover orden a histórico y garantía">
+          <i class="fas fa-archive"></i> 📦 Archivar Orden
         </button>
+      </div>
+    `;
+  } else if (order.estado_actual === "archivado") {
+    if (order.garantia_activa) {
+      primaryActionBtn = `
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <span class="state-badge" style="background:#ef4444; color:#fff; font-size:11px;"><i class="fas fa-shield-alt"></i> Garantía Activa</span>
+          <button type="button" class="btn btn--success" onclick="resolveWarranty('${order.id_orden}')">
+            <i class="fas fa-check-circle"></i> Resolver Garantía
+          </button>
+        </div>
       `;
     } else {
-      primaryActionBtn = `<span class="state-badge state-badge--done"><i class="fas fa-lock"></i> Cerrada</span>`;
+      primaryActionBtn = `
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <span class="state-badge state-badge--archive"><i class="fas fa-archive"></i> Archivada</span>
+          <button type="button" class="btn btn--warning" onclick="openWarrantyClaimModal('${order.id_orden}')" title="Reingresar pieza bajo garantía de 1 año">
+            <i class="fas fa-shield-halved"></i> 🛡️ Activar Garantía
+          </button>
+        </div>
+      `;
     }
   } else if (order.estado_actual === "anulado") {
     primaryActionBtn = `<span class="state-badge" style="background:rgba(239,68,68,0.18); color:#f87171; border:1px solid #ef4444;"><i class="fas fa-ban"></i> Anulada</span>`;
@@ -3981,6 +4061,29 @@ function renderOrderCardTelegramStyle(order) {
             <i class="fas fa-phone"></i> ${order.telefono_cliente}
           </a>
         </div>
+
+        ${(() => {
+          const allImgs = [...(order.galeria_fotos_pieza || []), ...(order.galeria_fotos_repuestos || [])];
+          if (!allImgs.length) return "";
+          return `
+            <div style="display:flex; align-items:center; gap:6px; margin:6px 0; overflow-x:auto; padding-bottom:2px;">
+              ${allImgs.slice(0, 4).map((u, idx) => `
+                <img
+                  src="${u}"
+                  alt="Foto ${idx + 1}"
+                  onclick="openPhotoLightbox('${u}', 'Troquel #${order.codigo_troquel} · ${order.datos_motor.marca}')"
+                  title="Toca para inspeccionar en 4K HD con Zoom"
+                  style="width:40px; height:40px; border-radius:8px; object-fit:cover; border:1.5px solid var(--border-color); cursor:zoom-in; flex-shrink:0; transition:transform 0.15s;"
+                />
+              `).join("")}
+              ${allImgs.length > 4 ? `
+                <button type="button" class="btn btn--ghost btn--xs" style="height:40px; border-radius:8px; padding:0 8px; font-size:10.5px;" onclick="openDualGalleryInspector('${order.id_orden}')">
+                  +${allImgs.length - 4}
+                </button>
+              ` : ""}
+            </div>
+          `;
+        })()}
 
         <!-- Resumen Financiero -->
         <div class="order-finance-strip">
@@ -4097,6 +4200,236 @@ function formatMinutes(mins) {
   return h > 0 ? `${h}h ${rem}m` : `${rem} min`;
 }
 
+function unassignTechnicianFromOrderCard(subtaskId, orderId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  const oldTechName = sub.nombre_tecnico;
+  sub.tecnico_id = null;
+  sub.nombre_tecnico = "Sin asignar";
+  sub.estado_subtarea = "pendiente";
+  const nowStr = cleanDateISO(new Date().toISOString(), true);
+  if (order) {
+    db.bitacora.push({
+      id_mensaje: "MSG-" + Date.now(),
+      orden_id: order.id_orden,
+      codigo_troquel: order.codigo_troquel,
+      autor_id: currentUser.id_usuario,
+      autor_nombre: currentUser.nombre,
+      autor_rol: currentUser.rol_label,
+      tipo_evento: "desasignacion",
+      mensaje: `Técnico (${oldTechName}) desasignado de la subtarea "${sub.descripcion_servicio}" por ${currentUser.nombre}. Queda en estado pendiente.`,
+      foto_adjunta_url: "",
+      fecha_hora: nowStr
+    });
+  }
+  saveDatabase();
+  renderScreen();
+  showToast("Técnico desasignado. La subtarea quedó libre.");
+}
+
+function deleteSubtaskDirect(subtaskId, orderId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+  Swal.fire({
+    title: `¿Eliminar "${sub.descripcion_servicio}"?`,
+    text: "Esta acción removerá la subtarea de la orden y actualizará el presupuesto total.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#ef4444",
+    confirmButtonText: "Sí, Eliminar",
+    cancelButtonText: "Cancelar"
+  }).then((res) => {
+    if (res.isConfirmed) {
+      db.subtareas = db.subtareas.filter((s) => s.id_subtarea !== subtaskId);
+      const remaining = db.subtareas.filter((s) => s.orden_id === orderId);
+      const newTotal = remaining.reduce((sum, s) => sum + (Number(s.monto_servicio) || 0), 0);
+      const order = db.ordenes.find((o) => o.id_orden === orderId);
+      if (order) {
+        order.monto_total = newTotal;
+        order.saldo_pendiente = Math.max(0, newTotal - (Number(order.monto_abonado) || 0));
+        const nowStr = cleanDateISO(new Date().toISOString(), true);
+        db.bitacora.push({
+          id_mensaje: "MSG-" + Date.now(),
+          orden_id: order.id_orden,
+          codigo_troquel: order.codigo_troquel,
+          autor_id: currentUser.id_usuario,
+          autor_nombre: currentUser.nombre,
+          autor_rol: currentUser.rol_label,
+          tipo_evento: "subtarea_eliminada",
+          mensaje: `Subtarea "${sub.descripcion_servicio}" ($${Number(sub.monto_servicio).toFixed(2)}) eliminada por ${currentUser.nombre}. Nuevo total: $${newTotal.toFixed(2)}.`,
+          foto_adjunta_url: "",
+          fecha_hora: nowStr
+        });
+      }
+      saveDatabase();
+      if (document.getElementById("live-assignment-totals-box")) {
+        openSubtaskAssignmentModal(orderId);
+      } else {
+        renderScreen();
+      }
+      showToast("Subtarea eliminada correctamente.");
+    }
+  });
+}
+
+function archiveOrder(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  Swal.fire({
+    title: "¿Archivar Orden definitivamente?",
+    html: `
+      <p style="font-size:13.5px; color:#cbd5e1; margin-bottom:8px;">
+        La orden con <strong>Troquel #${order.codigo_troquel}</strong> (${order.nombre_cliente} · ${order.datos_motor.marca} ${order.datos_motor.modelo}) saldrá del flujo activo de <strong>6. Entrega</strong> y pasará a <strong>Archivados & Garantía</strong>.
+      </p>
+      <div style="font-size:12px; color:#fde047; background:rgba(245,223,0,0.1); padding:8px 12px; border-radius:8px; border:1px solid rgba(245,223,0,0.3);">
+        🛡️ Se mantendrá disponible en el histórico bajo póliza de garantía de 1 año.
+      </div>
+    `,
+    icon: "question",
+    showCancelButton: true,
+    confirmButtonColor: "#f5df00",
+    confirmButtonText: "Sí, Archivar Orden",
+    cancelButtonText: "Cancelar"
+  }).then((res) => {
+    if (res.isConfirmed) {
+      order.estado_actual = "archivado";
+      order.fecha_archivado = new Date().toISOString();
+      const nowStr = cleanDateISO(new Date().toISOString(), true);
+      db.bitacora.push({
+        id_mensaje: "MSG-" + Date.now(),
+        orden_id: order.id_orden,
+        codigo_troquel: order.codigo_troquel,
+        autor_id: currentUser.id_usuario,
+        autor_nombre: currentUser.nombre,
+        autor_rol: currentUser.rol_label,
+        tipo_evento: "archivo",
+        mensaje: `Orden archivada formalmente por ${currentUser.nombre}. Sale de Entrega activa y se conserva en histórico bajo póliza de garantía.`,
+        foto_adjunta_url: "",
+        fecha_hora: nowStr
+      });
+      saveDatabase();
+      renderScreen();
+      showToast(`Orden #${order.codigo_troquel} archivada exitosamente.`);
+    }
+  });
+}
+
+function openWarrantyClaimModal(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  Swal.fire({
+    title: `🛡️ Activar Garantía (Reingreso) — Troquel #${order.codigo_troquel}`,
+    html: `
+      <p style="font-size:13px; color:#cbd5e1; margin-bottom:12px;">
+        Registra el motivo por el cual el cliente <strong>${order.nombre_cliente}</strong> reingresa la pieza (${order.datos_motor.marca} ${order.datos_motor.modelo}) bajo garantía.
+      </p>
+      <textarea id="swal-warranty-reason" class="swal2-textarea" placeholder="Describe la falla, fuga de compresión, sonido o ajuste requerido..." style="width:90%; font-size:13px;"></textarea>
+    `,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonText: "Activar Garantía",
+    cancelButtonText: "Cancelar",
+    preConfirm: () => {
+      const reason = document.getElementById("swal-warranty-reason")?.value.trim();
+      if (!reason) {
+        Swal.showValidationMessage("Debes indicar el motivo del reingreso por garantía.");
+        return false;
+      }
+      return reason;
+    }
+  }).then((res) => {
+    if (res.isConfirmed) {
+      order.garantia_activa = true;
+      order.motivo_garantia = res.value;
+      order.fecha_reingreso_garantia = new Date().toISOString();
+      const nowStr = cleanDateISO(new Date().toISOString(), true);
+      db.bitacora.push({
+        id_mensaje: "MSG-" + Date.now(),
+        orden_id: order.id_orden,
+        codigo_troquel: order.codigo_troquel,
+        autor_id: currentUser.id_usuario,
+        autor_nombre: currentUser.nombre,
+        autor_rol: currentUser.rol_label,
+        tipo_evento: "garantia",
+        mensaje: `⚠️ Reingreso por Garantía activado por ${currentUser.nombre}. Motivo: ${res.value}`,
+        foto_adjunta_url: "",
+        fecha_hora: nowStr
+      });
+      saveDatabase();
+      renderScreen();
+      showToast(`Garantía activada para Troquel #${order.codigo_troquel}.`);
+    }
+  });
+}
+
+function resolveWarranty(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  Swal.fire({
+    title: "¿Dar por Resuelta la Garantía?",
+    text: `Se marcará la garantía de la pieza #${order.codigo_troquel} como subsanada y entregada nuevamente al cliente.`,
+    icon: "success",
+    showCancelButton: true,
+    confirmButtonColor: "#22c55e",
+    confirmButtonText: "Sí, Cerrar Garantía",
+    cancelButtonText: "Cancelar"
+  }).then((res) => {
+    if (res.isConfirmed) {
+      order.garantia_activa = false;
+      order.fecha_resolucion_garantia = new Date().toISOString();
+      const nowStr = cleanDateISO(new Date().toISOString(), true);
+      db.bitacora.push({
+        id_mensaje: "MSG-" + Date.now(),
+        orden_id: order.id_orden,
+        codigo_troquel: order.codigo_troquel,
+        autor_id: currentUser.id_usuario,
+        autor_nombre: currentUser.nombre,
+        autor_rol: currentUser.rol_label,
+        tipo_evento: "garantia_resuelta",
+        mensaje: `Garantía subsanada satisfactoriamente y entregada al cliente por ${currentUser.nombre}.`,
+        foto_adjunta_url: "",
+        fecha_hora: nowStr
+      });
+      saveDatabase();
+      renderScreen();
+      showToast(`Garantía de Troquel #${order.codigo_troquel} resuelta.`);
+    }
+  });
+}
+
+function advanceOrderStage(orderId, targetStage) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  const stageNames = {
+    recepcion: "1. Recepción",
+    diagnostico: "2. Diagnóstico",
+    aprobacion: "3. Aprobación",
+    servicio: "4. Servicio",
+    calidad: "5. Calidad",
+    entrega: "6. Entrega",
+    archivado: "Archivados & Garantía"
+  };
+  const targetName = stageNames[targetStage] || targetStage;
+  order.estado_actual = targetStage;
+  const nowStr = cleanDateISO(new Date().toISOString(), true);
+  db.bitacora.push({
+    id_mensaje: "MSG-" + Date.now(),
+    orden_id: order.id_orden,
+    codigo_troquel: order.codigo_troquel,
+    autor_id: currentUser.id_usuario,
+    autor_nombre: currentUser.nombre,
+    autor_rol: currentUser.rol_label,
+    tipo_evento: "cambio_etapa",
+    mensaje: `Orden avanzada a etapa ${targetName} por ${currentUser.nombre}.`,
+    foto_adjunta_url: "",
+    fecha_hora: nowStr
+  });
+  saveDatabase();
+  renderScreen();
+  showToast(`Orden #${order.codigo_troquel} avanzada a ${targetName}.`);
+}
+
 
 /* ============================================================================
    SISTEMA MODAL GENÉRICO Y COMPRESOR DE FOTOS
@@ -4131,6 +4464,212 @@ function closeModal() {
   root.innerHTML = "";
 }
 
+/* ============================================================================
+   LIGHTBOX FOTOGRÁFICO HD/4K CON ZOOM, PAN Y PANTALLA COMPLETA
+   ============================================================================ */
+let lightboxState = {
+  active: false,
+  images: [],
+  currentIndex: 0,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+  isDragging: false,
+  startX: 0,
+  startY: 0,
+  title: "Foto Inspección de Pieza"
+};
+
+function openPhotoLightbox(imageUrl, title = "Foto Inspección de Pieza", gallery = [], initialIndex = 0) {
+  let images = Array.isArray(gallery) && gallery.length ? gallery : [imageUrl];
+  let curIdx = initialIndex >= 0 && initialIndex < images.length ? initialIndex : images.indexOf(imageUrl);
+  if (curIdx < 0) curIdx = 0;
+
+  lightboxState = {
+    active: true,
+    images: images,
+    currentIndex: curIdx,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    title: title
+  };
+
+  renderLightboxDOM();
+}
+
+function renderLightboxDOM() {
+  let existing = document.getElementById("renacer-photo-lightbox");
+  if (existing) existing.remove();
+
+  const currentImgUrl = lightboxState.images[lightboxState.currentIndex] || "";
+  const totalImgs = lightboxState.images.length;
+  const currentNum = lightboxState.currentIndex + 1;
+
+  const html = `
+    <div id="renacer-photo-lightbox" class="photo-lightbox-backdrop" onclick="handleLightboxBackdropClick(event)">
+      <div class="photo-lightbox-toolbar" onclick="event.stopPropagation()">
+        <div class="photo-lightbox-title">
+          <i class="fas fa-camera" style="color:var(--renacer-gold);"></i>
+          <span>${lightboxState.title}</span>
+          ${totalImgs > 1 ? `<span style="background:rgba(245,223,0,0.2); color:var(--renacer-gold); padding:2px 8px; border-radius:6px; font-weight:800; font-size:11.5px;">Foto ${currentNum} de ${totalImgs}</span>` : ""}
+        </div>
+
+        <div class="photo-lightbox-controls">
+          <button type="button" class="lightbox-btn" onclick="lightboxZoom(-0.25)" title="Alejar (-)">
+            <i class="fas fa-search-minus"></i>
+          </button>
+          <span id="lightbox-zoom-val" style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; min-width:44px; text-align:center;">
+            ${Math.round(lightboxState.zoom * 100)}%
+          </span>
+          <button type="button" class="lightbox-btn" onclick="lightboxZoom(0.25)" title="Acercar (+)">
+            <i class="fas fa-search-plus"></i>
+          </button>
+          <button type="button" class="lightbox-btn" onclick="lightboxResetZoom()" title="100%">
+            <i class="fas fa-undo"></i> 100%
+          </button>
+          <button type="button" class="lightbox-btn" onclick="toggleLightboxFullscreen()" title="Pantalla completa">
+            <i class="fas fa-expand"></i>
+          </button>
+          <a href="${currentImgUrl}" download="Foto_Renacer_${Date.now()}.jpg" target="_blank" class="lightbox-btn" title="Descargar / Abrir en HD">
+            <i class="fas fa-download"></i> HD
+          </a>
+          <button type="button" class="lightbox-btn lightbox-btn--close" onclick="closePhotoLightbox()" title="Cerrar (Esc)">
+            <i class="fas fa-times"></i> Cerrar
+          </button>
+        </div>
+      </div>
+
+      <div class="photo-lightbox-viewport" id="lightbox-viewport" onwheel="handleLightboxWheel(event)" onmousedown="handleLightboxMouseDown(event)">
+        ${
+          totalImgs > 1
+            ? `<button type="button" class="lightbox-nav-arrow lightbox-nav-arrow--prev" onclick="event.stopPropagation(); lightboxPrevPhoto()" title="Foto anterior (←)"><i class="fas fa-chevron-left"></i></button>`
+            : ""
+        }
+        <img
+          id="lightbox-current-img"
+          src="${currentImgUrl}"
+          alt="Foto inspección de pieza"
+          class="photo-lightbox-img"
+          style="transform: scale(${lightboxState.zoom}) translate(${lightboxState.panX}px, ${lightboxState.panY}px);"
+          draggable="false"
+        />
+        ${
+          totalImgs > 1
+            ? `<button type="button" class="lightbox-nav-arrow lightbox-nav-arrow--next" onclick="event.stopPropagation(); lightboxNextPhoto()" title="Siguiente foto (→)"><i class="fas fa-chevron-right"></i></button>`
+            : ""
+        }
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML("beforeend", html);
+  document.addEventListener("keydown", handleLightboxKeyDown);
+}
+
+function handleLightboxBackdropClick(e) {
+  if (e.target.id === "lightbox-viewport" || e.target.id === "renacer-photo-lightbox") {
+    closePhotoLightbox();
+  }
+}
+
+function closePhotoLightbox() {
+  const el = document.getElementById("renacer-photo-lightbox");
+  if (el) el.remove();
+  lightboxState.active = false;
+  document.removeEventListener("keydown", handleLightboxKeyDown);
+}
+
+function lightboxZoom(delta) {
+  lightboxState.zoom = Math.min(4.0, Math.max(0.5, lightboxState.zoom + delta));
+  applyLightboxTransform();
+}
+
+function lightboxResetZoom() {
+  lightboxState.zoom = 1;
+  lightboxState.panX = 0;
+  lightboxState.panY = 0;
+  applyLightboxTransform();
+}
+
+function applyLightboxTransform() {
+  const img = document.getElementById("lightbox-current-img");
+  const zoomDisplay = document.getElementById("lightbox-zoom-val");
+  if (img) {
+    img.style.transform = `scale(${lightboxState.zoom}) translate(${lightboxState.panX}px, ${lightboxState.panY}px)`;
+  }
+  if (zoomDisplay) {
+    zoomDisplay.textContent = `${Math.round(lightboxState.zoom * 100)}%`;
+  }
+}
+
+function handleLightboxWheel(e) {
+  e.preventDefault();
+  const delta = e.deltaY < 0 ? 0.2 : -0.2;
+  lightboxZoom(delta);
+}
+
+function lightboxNextPhoto() {
+  if (!lightboxState.images.length) return;
+  lightboxState.currentIndex = (lightboxState.currentIndex + 1) % lightboxState.images.length;
+  lightboxState.zoom = 1;
+  lightboxState.panX = 0;
+  lightboxState.panY = 0;
+  renderLightboxDOM();
+}
+
+function lightboxPrevPhoto() {
+  if (!lightboxState.images.length) return;
+  lightboxState.currentIndex = (lightboxState.currentIndex - 1 + lightboxState.images.length) % lightboxState.images.length;
+  lightboxState.zoom = 1;
+  lightboxState.panX = 0;
+  lightboxState.panY = 0;
+  renderLightboxDOM();
+}
+
+function handleLightboxKeyDown(e) {
+  if (!lightboxState.active) return;
+  if (e.key === "Escape") closePhotoLightbox();
+  if (e.key === "ArrowRight") lightboxNextPhoto();
+  if (e.key === "ArrowLeft") lightboxPrevPhoto();
+  if (e.key === "+" || e.key === "=") lightboxZoom(0.25);
+  if (e.key === "-") lightboxZoom(-0.25);
+}
+
+function toggleLightboxFullscreen() {
+  const el = document.getElementById("renacer-photo-lightbox");
+  if (!el) return;
+  if (!document.fullscreenElement) {
+    el.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+function handleLightboxMouseDown(e) {
+  if (e.button !== 0) return;
+  lightboxState.isDragging = true;
+  lightboxState.startX = e.clientX - lightboxState.panX;
+  lightboxState.startY = e.clientY - lightboxState.panY;
+
+  const onMouseMove = (ev) => {
+    if (!lightboxState.isDragging) return;
+    lightboxState.panX = ev.clientX - lightboxState.startX;
+    lightboxState.panY = ev.clientY - lightboxState.startY;
+    applyLightboxTransform();
+  };
+  const onMouseUp = () => {
+    lightboxState.isDragging = false;
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+  };
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mouseup", onMouseUp);
+}
+
 function readFileAsCompressedDataUrl(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -4138,7 +4677,7 @@ function readFileAsCompressedDataUrl(file) {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const maxDim = 920;
+        const maxDim = 1920; // 2K HD ultra nítido para inspección de sensores, grietas y troquel
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -4154,7 +4693,7 @@ function readFileAsCompressedDataUrl(file) {
         canvas.height = h;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", 0.78));
+        resolve(canvas.toDataURL("image/jpeg", 0.88));
       };
       img.onerror = () => resolve(ev.target.result);
       img.src = ev.target.result;
@@ -4350,8 +4889,8 @@ function openNewOrderModal() {
                     🧪 Foto Prueba
                   </button>
                   <label class="btn btn--primary" style="cursor:pointer; padding:6px 10px; font-size:11.5px;">
-                    <i class="fas fa-upload"></i> Subir Foto
-                    <input type="file" accept="image/*" style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'pieza')" />
+                    <i class="fas fa-upload"></i> Subir Fotos
+                    <input type="file" accept="image/*" multiple style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'pieza')" />
                   </label>
                 </div>
               </div>
@@ -4373,8 +4912,8 @@ function openNewOrderModal() {
                     🧪 Foto Prueba
                   </button>
                   <label class="btn btn--gold" style="cursor:pointer; padding:6px 10px; font-size:11.5px;">
-                    <i class="fas fa-camera"></i> Foto Repuestos
-                    <input type="file" accept="image/*" style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'repuestos')" />
+                    <i class="fas fa-camera"></i> Subir Fotos
+                    <input type="file" accept="image/*" multiple style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'repuestos')" />
                   </label>
                 </div>
               </div>
@@ -4502,16 +5041,19 @@ function addDemoPhotoToTempOrder(galleryType) {
 }
 
 async function handleNewOrderGalleryUpload(event, galleryType) {
-  const file = event.target.files && event.target.files[0];
-  if (!file) return;
-  const dataUrl = await readFileAsCompressedDataUrl(file);
-  if (galleryType === "pieza") {
-    tempNewOrderState.galeriaPieza.push(dataUrl);
-  } else {
-    tempNewOrderState.galeriaRepuestos.push(dataUrl);
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+  showToast(`Procesando ${files.length} foto(s) en alta resolución...`);
+  for (const file of files) {
+    const dataUrl = await readFileAsCompressedDataUrl(file);
+    if (galleryType === "pieza") {
+      tempNewOrderState.galeriaPieza.push(dataUrl);
+    } else {
+      tempNewOrderState.galeriaRepuestos.push(dataUrl);
+    }
   }
   renderTempOrderGalleries();
-  showToast("Fotografía agregada a la galería.");
+  showToast(`${files.length} foto(s) agregada(s) exitosamente.`);
 }
 
 function removeTempGalleryPhoto(galleryType, idx) {
@@ -4532,7 +5074,7 @@ function renderTempOrderGalleries() {
           .map(
             (src, i) => `
           <div class="gallery-thumb-item">
-            <img src="${src}" alt="Foto pieza ${i + 1}" />
+            <img src="${src}" alt="Foto pieza ${i + 1}" onclick="openPhotoLightbox('${src}', 'Inspección de Pieza #${i + 1}')" style="cursor:zoom-in;" title="Toca para ampliar en 4K HD" />
             <button type="button" class="thumb-remove-btn" onclick="removeTempGalleryPhoto('pieza', ${i})">&times;</button>
           </div>
         `
@@ -4546,7 +5088,7 @@ function renderTempOrderGalleries() {
           .map(
             (src, i) => `
           <div class="gallery-thumb-item">
-            <img src="${src}" alt="Foto repuestos ${i + 1}" />
+            <img src="${src}" alt="Foto repuestos ${i + 1}" onclick="openPhotoLightbox('${src}', 'Repuestos del Cliente #${i + 1}')" style="cursor:zoom-in;" title="Toca para ampliar en 4K HD" />
             <button type="button" class="thumb-remove-btn" onclick="removeTempGalleryPhoto('repuestos', ${i})">&times;</button>
           </div>
         `
@@ -5115,7 +5657,7 @@ function openSubtaskAssignmentModal(orderId) {
   const technicians = db.usuarios.filter((u) => u.rol === "tecnico" && u.activo);
 
   const techOptionsHtml = (selectedId) =>
-    `<option value="">-- Seleccionar Técnico --</option>` +
+    `<option value="">-- Sin Asignar / Quitar Técnico --</option>` +
     technicians
       .map(
         (t) =>
@@ -5172,6 +5714,18 @@ function openSubtaskAssignmentModal(orderId) {
           >
             ${techOptionsHtml(s.tecnico_id)}
           </select>
+        </td>
+        <td style="text-align:center; white-space:nowrap;">
+          <div style="display:flex; gap:4px; justify-content:center;">
+            ${s.tecnico_id ? `
+              <button type="button" class="btn btn--danger btn--xs" style="padding:4px 7px; font-size:10px; font-weight:800;" onclick="unassignSubtaskInModalDirect('${s.id_subtarea}', '${order.id_orden}')" title="Quitar técnico asignado">
+                ✕ Quitar
+              </button>
+            ` : ""}
+            <button type="button" class="btn btn--ghost btn--xs" style="padding:4px 6px; font-size:10.5px; color:#ef4444;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar subtarea">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
         </td>
       </tr>
     `
@@ -5242,6 +5796,7 @@ function openSubtaskAssignmentModal(orderId) {
               <th>Precio Cliente ($)</th>
               <th>Comisión Destajo ($)</th>
               <th>Técnico Asignado</th>
+              <th style="text-align:center;">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -5256,12 +5811,24 @@ function openSubtaskAssignmentModal(orderId) {
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--gold btn--lg" onclick="confirmSubtaskAssignments('${order.id_orden}')">
-        <i class="fas fa-play-circle"></i> Confirmar Matriz y Pasar a 3. Asignación y Ejecución
+        <i class="fas fa-play-circle"></i> Confirmar Matriz y Pasar a 4. Servicio
       </button>
     `
   });
 
   updateLiveAssignmentTotals(order.id_orden);
+}
+
+function unassignSubtaskInModalDirect(subtaskId, orderId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  if (sub) {
+    sub.tecnico_id = null;
+    sub.nombre_tecnico = "Sin asignar";
+    sub.estado_subtarea = "pendiente";
+  }
+  saveDatabase();
+  openSubtaskAssignmentModal(orderId);
+  showToast("Técnico desasignado de la subtarea.");
 }
 
 function addSubtaskDirectInAssignmentModal(orderId) {
@@ -5398,7 +5965,7 @@ function confirmSubtaskAssignments(orderId) {
 
   order.monto_total = nuevoMontoTotal;
   order.saldo_pendiente = Math.max(0, nuevoMontoTotal - (Number(order.monto_abonado) || 0));
-  order.estado_actual = "asignacion_ejecucion";
+  order.estado_actual = "servicio";
   const nowStr = cleanDateISO(new Date().toISOString(), true);
 
   db.bitacora.push({
@@ -5409,7 +5976,7 @@ function confirmSubtaskAssignments(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "asignacion",
-    mensaje: `Matriz de asignación confirmada por ${currentUser.nombre}. Orden en 3. Asignación y Ejecución.`,
+    mensaje: `Matriz de asignación confirmada por ${currentUser.nombre}. Orden en etapa 4. Servicio.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -6381,12 +6948,13 @@ function renderAccountsReceivableScreen() {
       .join("");
 
   const stateBadgeLabel = (st) => {
-    if (st === "entregado") return `<span class="state-badge state-badge--done">📦 Entregada a Crédito</span>`;
-    if (st === "diagnostico_presupuesto") return `<span class="state-badge state-badge--diag">1. Diagnóstico</span>`;
-    if (st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait">2. Por Aprobar</span>`;
-    if (st === "asignacion_ejecucion") return `<span class="state-badge state-badge--exec">3. En Ejecución</span>`;
-    if (st === "terminado") return `<span class="state-badge state-badge--term">4. Terminado</span>`;
-    if (st === "control_calidad") return `<span class="state-badge state-badge--qc">5. Calidad</span>`;
+    if (st === "entregado" || st === "entrega") return `<span class="state-badge state-badge--done">📦 6. Entrega (En Calle)</span>`;
+    if (st === "recepcion" || st === "diagnostico_presupuesto") return `<span class="state-badge state-badge--recep">1. Recepción</span>`;
+    if (st === "diagnostico") return `<span class="state-badge state-badge--diag">2. Diagnóstico</span>`;
+    if (st === "aprobacion" || st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait">3. Aprobación</span>`;
+    if (st === "servicio" || st === "asignacion_ejecucion") return `<span class="state-badge state-badge--exec">4. Servicio</span>`;
+    if (st === "terminado") return `<span class="state-badge state-badge--term">4. Servicio (Listo)</span>`;
+    if (st === "calidad" || st === "control_calidad") return `<span class="state-badge state-badge--qc">5. Calidad</span>`;
     return `<span class="state-badge">${st.replace(/_/g, " ")}</span>`;
   };
 
@@ -7360,10 +7928,11 @@ function openDualGalleryInspector(orderId) {
   const piezaImgs = (order.galeria_fotos_pieza || [])
     .map(
       (url, i) => `
-      <div style="border-radius:12px; overflow:hidden; border:1.5px solid var(--border-color); background:#000;">
-        <img src="${url}" alt="Pieza ${i + 1}" style="width:100%; height:210px; object-fit:cover;" />
-        <div style="padding:6px 10px; font-size:11.5px; font-weight:800; color:#fff; background:#0f172a;">
-          Foto Estado de la Pieza #${i + 1} · Troquel #${order.codigo_troquel}
+      <div style="border-radius:12px; overflow:hidden; border:1.5px solid var(--border-color); background:#000; position:relative; cursor:zoom-in;" onclick="openPhotoLightbox('${url}', 'Troquel #${order.codigo_troquel} · Estado de Pieza #${i + 1}')">
+        <img src="${url}" alt="Pieza ${i + 1}" style="width:100%; height:210px; object-fit:cover; display:block;" />
+        <div style="padding:6px 10px; font-size:11.5px; font-weight:800; color:#fff; background:#0f172a; display:flex; justify-content:space-between; align-items:center;">
+          <span>Foto Pieza #${i + 1} · Troquel #${order.codigo_troquel}</span>
+          <span style="color:var(--renacer-gold); font-size:10px;"><i class="fas fa-search-plus"></i> Ampliar 4K</span>
         </div>
       </div>
     `
@@ -7374,46 +7943,59 @@ function openDualGalleryInspector(orderId) {
     ? order.galeria_fotos_repuestos
         .map(
           (url, i) => `
-          <div style="border-radius:12px; overflow:hidden; border:2px solid var(--renacer-gold); background:#000;">
-            <img src="${url}" alt="Repuestos ${i + 1}" style="width:100%; height:210px; object-fit:cover;" />
-            <div style="padding:6px 10px; font-size:11.5px; font-weight:800; color:#0f1638; background:var(--renacer-gold);">
-              📷 Repuestos del Cliente #${i + 1} (Soporte Visual para Mesa Técnica)
+          <div style="border-radius:12px; overflow:hidden; border:2px solid var(--renacer-gold); background:#000; position:relative; cursor:zoom-in;" onclick="openPhotoLightbox('${url}', 'Troquel #${order.codigo_troquel} · Repuestos #${i + 1}')">
+            <img src="${url}" alt="Repuestos ${i + 1}" style="width:100%; height:210px; object-fit:cover; display:block;" />
+            <div style="padding:6px 10px; font-size:11.5px; font-weight:800; color:#0f1638; background:var(--renacer-gold); display:flex; justify-content:space-between; align-items:center;">
+              <span>📷 Repuestos del Cliente #${i + 1}</span>
+              <span style="font-size:10px;"><i class="fas fa-search-plus"></i> Ampliar 4K</span>
             </div>
           </div>
         `
         )
         .join("")
-    : `<div style="padding:24px; background:var(--bg-input); border-radius:12px; font-size:13px; color:var(--text-muted);">El cliente no dejó repuestos físicos en recepción para esta orden.</div>`;
+    : `<div style="padding:24px; background:var(--bg-input); border-radius:12px; font-size:13px; color:var(--text-muted); grid-column:1/-1;">El cliente no dejó repuestos físicos en recepción para esta orden.</div>`;
 
   const paymentProofHtml = order.comprobante_pago_foto
     ? `
       <div class="form-section-box" style="margin-top:14px;">
         <div class="form-section-title"><i class="fas fa-receipt"></i> Comprobante Fotográfico de Pago / Abono (${(order.metodo_pago || "efectivo").toUpperCase()})</div>
-        <img src="${order.comprobante_pago_foto}" style="max-width:320px; border-radius:12px; border:1.5px solid var(--border-color);" />
+        <img src="${order.comprobante_pago_foto}" style="max-width:320px; border-radius:12px; border:1.5px solid var(--border-color); cursor:zoom-in;" onclick="openPhotoLightbox('${order.comprobante_pago_foto}', 'Comprobante de Pago · Troquel #${order.codigo_troquel}')" />
       </div>
     `
     : "";
 
   openModal({
-    title: `Inspección Multimedia Dual — TROQUEL #${order.codigo_troquel}`,
+    title: `Inspección Multimedia Dual 4K — TROQUEL #${order.codigo_troquel}`,
     icon: "fa-images",
     wide: true,
     body: `
       <div class="form-section-box">
-        <div class="form-section-title">
-          <i class="fas fa-camera"></i> Galería 1: Fotos del Estado de la Pieza (${(order.galeria_fotos_pieza || []).length})
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+          <div class="form-section-title" style="margin-bottom:0;">
+            <i class="fas fa-camera"></i> Galería 1: Fotos del Estado de la Pieza (${(order.galeria_fotos_pieza || []).length})
+          </div>
+          <label class="btn btn--primary btn--xs" style="cursor:pointer; font-weight:800;">
+            <i class="fas fa-upload"></i> + Subir Fotos HD de Pieza
+            <input type="file" accept="image/*" multiple style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'pieza')" />
+          </label>
         </div>
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
-          ${piezaImgs}
+          ${piezaImgs || `<div style="grid-column:1/-1; padding:20px; color:var(--text-muted); font-size:12px;">Sin fotos registradas de la pieza.</div>`}
         </div>
       </div>
 
       <div class="form-section-box" style="border-color:rgba(245,196,0,0.6); background:rgba(245,196,0,0.04);">
-        <div class="form-section-title" style="color:#b45309;">
-          📷 Galería 2: Fotos de Repuestos Aportados por el Cliente (${(order.galeria_fotos_repuestos || []).length})
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+          <div class="form-section-title" style="color:#b45309; margin-bottom:0;">
+            📷 Galería 2: Fotos de Repuestos Aportados por el Cliente (${(order.galeria_fotos_repuestos || []).length})
+          </div>
+          <label class="btn btn--gold btn--xs" style="cursor:pointer; font-weight:800;">
+            <i class="fas fa-camera"></i> + Subir Fotos HD de Repuestos
+            <input type="file" accept="image/*" multiple style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'repuestos')" />
+          </label>
         </div>
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
-          Soporte visual exclusivo para que el técnico verifique en su mesa con qué guías, válvulas, sellos o empacaduras cuenta físicamente.
+          Soporte visual exclusivo para que el técnico verifique en su mesa con qué guías, válvulas, sellos o empacaduras cuenta físicamente. Toca cualquier foto para ampliarla en pantalla completa con zoom.
         </p>
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
           ${repuestosImgs}
@@ -7424,6 +8006,30 @@ function openDualGalleryInspector(orderId) {
     `,
     footer: `<button type="button" class="btn btn--primary" onclick="closeModal()">Cerrar Visor</button>`
   });
+}
+
+async function handleInspectionMultiUpload(event, orderId, galleryType) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+  showToast(`Procesando ${files.length} foto(s) en alta definición (2K/4K)...`);
+  if (galleryType === "pieza") {
+    if (!order.galeria_fotos_pieza) order.galeria_fotos_pieza = [];
+    for (const file of files) {
+      const dataUrl = await readFileAsCompressedDataUrl(file);
+      order.galeria_fotos_pieza.push(dataUrl);
+    }
+  } else {
+    if (!order.galeria_fotos_repuestos) order.galeria_fotos_repuestos = [];
+    for (const file of files) {
+      const dataUrl = await readFileAsCompressedDataUrl(file);
+      order.galeria_fotos_repuestos.push(dataUrl);
+    }
+  }
+  saveDatabase();
+  openDualGalleryInspector(orderId);
+  showToast(`${files.length} foto(s) agregada(s) exitosamente.`);
 }
 
 let tempCrmPhotoUrl = "";
