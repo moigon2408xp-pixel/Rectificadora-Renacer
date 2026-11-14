@@ -74,12 +74,12 @@
                 id="login-pin-input"
                 type="password"
                 inputmode="numeric"
-                placeholder="PIN numérico (ej. 1234)"
+                placeholder="PIN numérico de acceso"
                 autocomplete="current-password"
               />
             </div>
             <div style="font-size:11px; color:#94a3b8; margin-top:4px;">
-              <i class="fas fa-info-circle"></i> Ingresa tu PIN asignado (o <strong>1234</strong>).
+              <i class="fas fa-info-circle"></i> Ingresa el PIN numérico confidencial de tu perfil.
             </div>
           </div>
 
@@ -93,6 +93,31 @@
           <button type="submit" class="btn btn--gold btn--lg" style="width:100%; justify-content:center; padding:13px; font-size:15px; margin-top:6px;">
             <i class="fas fa-sign-in-alt"></i> Entrar al Sistema Renacer
           </button>
+
+          <!-- ACCESO RÁPIDO POR PERFIL (DISEÑO OFICIAL RENACER) -->
+          <div class="quick-profiles-box">
+            <div class="quick-profiles-title">
+              <i class="fas fa-users"></i> ACCESO RÁPIDO POR PERFIL:
+            </div>
+            <div class="quick-profiles-grid">
+              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Moises Gonzalez', 'USR-MOISES')">
+                <i class="fas fa-user-shield" style="color:var(--renacer-gold);"></i>
+                <span style="font-weight:800; font-size:12.5px;">Moises (Admin)</span>
+              </button>
+              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Jesus Andrade', 'USR-JESUS')">
+                <i class="fas fa-user-tie" style="color:#38bdf8;"></i>
+                <span style="font-weight:800; font-size:12.5px;">Jesús (Jefe)</span>
+              </button>
+              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Recepcion Renacer', 'USR-RECEPCION')">
+                <i class="fas fa-headset" style="color:#4ade80;"></i>
+                <span style="font-weight:800; font-size:12.5px;">Recepción</span>
+              </button>
+              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Havell Bracho', 'USR-HAVELL')">
+                <i class="fas fa-wrench" style="color:#fbbf24;"></i>
+                <span style="font-weight:800; font-size:12.5px;">Havell (Técnico)</span>
+              </button>
+            </div>
+          </div>
 
           <button type="button" class="btn btn--ghost" style="width:100%; border-color:rgba(245,223,0,0.4); color:#fde047; margin-top:8px; font-size:13px; font-weight:800; background:rgba(245,223,0,0.06);" onclick="handleBiometricLogin()">
             <i class="fas fa-fingerprint"></i> Ingresar con Huella Dactilar
@@ -247,7 +272,7 @@
 
   </div>
 
-  <script src="./app.js?v=20261114_2100"></script>
+  <script src="./app.js?v=20261114_2245"></script>
 </body>
 </html>
 
