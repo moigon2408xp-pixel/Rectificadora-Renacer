@@ -1964,6 +1964,63 @@ function quickLoginAs(userId) {
 }
 window.quickLoginAs = quickLoginAs;
 
+function quickSelectUser(nombre, userId) {
+  const user = db.usuarios.find((u) => u.id_usuario === userId || normalizeLoginString(u.nombre) === normalizeLoginString(nombre));
+  const uInput = document.getElementById("login-username-input");
+  const pInput = document.getElementById("login-pin-input");
+  if (uInput && user) uInput.value = user.nombre;
+
+  // Si ya tiene su PIN escrito en la casilla, verificar e iniciar sesión directamente
+  if (pInput && pInput.value.trim()) {
+    handleManualLogin();
+    return;
+  }
+
+  if (!user) {
+    if (pInput) pInput.focus();
+    return;
+  }
+
+  // Solicitar el PIN asignado de forma obligatoria y estricta (sin atajos ni contraseñas maestras)
+  Swal.fire({
+    title: `<i class="fas fa-lock" style="color:var(--renacer-gold);"></i> Acceso: ${user.nombre}`,
+    html: `<div style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">Rol: <strong>${user.rol_label || user.rol}</strong>.<br>Ingresa el PIN numérico de seguridad registrado para este perfil:</div>`,
+    input: "password",
+    inputAttributes: {
+      inputmode: "numeric",
+      autocomplete: "current-password",
+      placeholder: "PIN de seguridad"
+    },
+    showCancelButton: true,
+    confirmButtonText: '<i class="fas fa-sign-in-alt"></i> Entrar',
+    cancelButtonText: "Cancelar",
+    confirmButtonColor: "#182254",
+    background: "#0d1536",
+    color: "#f8fafc",
+    preConfirm: (val) => {
+      const pinVal = String(val || "").trim();
+      const expected = String(user.pin || "").trim();
+      if (!pinVal) {
+        Swal.showValidationMessage("Debes ingresar tu PIN numérico.");
+        return false;
+      }
+      if (pinVal !== expected) {
+        Swal.showValidationMessage("PIN incorrecto. Ingresa la credencial asignada a este usuario.");
+        return false;
+      }
+      return pinVal;
+    }
+  }).then((res) => {
+    if (res.isConfirmed) {
+      if (pInput) pInput.value = res.value;
+      loginSuccess(user);
+    } else {
+      if (pInput) pInput.focus();
+    }
+  });
+}
+window.quickSelectUser = quickSelectUser;
+
 function handleManualLogin(e) {
   if (e && e.preventDefault) e.preventDefault();
   const rawInput = (document.getElementById("login-username-input")?.value || "").trim();
@@ -1997,21 +2054,22 @@ function handleManualLogin(e) {
     return;
   }
 
-  // Validar PIN de forma flexible para evitar bloqueos en el taller
+  // Validación rigurosa de PIN según las credenciales del usuario (sin atajos ni contraseñas genéricas)
   const expectedPin = String(user.pin || "").trim();
-  const isAcceptedPin = (
-    !pinInput ||
-    pinInput === expectedPin ||
-    pinInput === "1234" ||
-    pinInput === "240804" ||
-    pinInput === "123456" ||
-    pinInput === "0000" ||
-    pinInput === "000000"
-  );
-  if (!isAcceptedPin) {
+  if (!pinInput) {
+    Swal.fire({
+      title: "PIN Requerido",
+      text: `Debes ingresar el PIN de acceso para el perfil de ${user.nombre}.`,
+      icon: "warning",
+      confirmButtonColor: "#182254"
+    });
+    return;
+  }
+
+  if (pinInput !== expectedPin) {
     Swal.fire({
       title: "PIN Incorrecto",
-      text: `PIN no reconocido para ${user.nombre}. Puedes usar 1234 o dejarlo en blanco para entrar.`,
+      text: `El PIN ingresado no coincide con el perfil de ${user.nombre}. Por favor ingresa tu credencial correcta.`,
       icon: "error",
       confirmButtonColor: "#182254"
     });
@@ -2401,7 +2459,7 @@ function attemptSwitchUserWithPin(userId) {
     title: `PIN de ${targetUser.nombre}`,
     text: `Ingresa el PIN de acceso para ${targetUser.rol_label}`,
     input: "password",
-    inputPlaceholder: "PIN (ej. 123456)",
+    inputPlaceholder: "PIN de seguridad",
     showCancelButton: true,
     confirmButtonColor: "#182254",
     confirmButtonText: "Entrar",
@@ -2409,7 +2467,8 @@ function attemptSwitchUserWithPin(userId) {
   }).then((res) => {
     if (res.isConfirmed) {
       const entered = String(res.value || "").trim();
-      if (entered === String(targetUser.pin || "123456")) {
+      const expected = String(targetUser.pin || "").trim();
+      if (entered && entered === expected) {
         quickLoginAs(userId);
       } else {
         Swal.fire("PIN Incorrecto", "El código ingresado no coincide con este perfil.", "error");
@@ -9597,7 +9656,7 @@ function renderCommissionsAndStaffScreen() {
         if (ord && ord.codigo_troquel) troquelesSet.add("#" + ord.codigo_troquel);
       });
       const troquelesBadges = Array.from(troquelesSet)
-        .map((tr) => '<span style="background:rgba(245,196,0,0.18); color:var(--text-main); border:1px solid rgba(245,196,0,0.5); padding:2px 7px; border-radius:6px; font-family:''JetBrains Mono'',monospace; font-size:11px; font-weight:800;">' + tr + '</span>')
+        .map((tr) => `<span style="background:rgba(245,196,0,0.18); color:var(--text-main); border:1px solid rgba(245,196,0,0.5); padding:2px 7px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:800;">${tr}</span>`)
         .join(" ");
 
       const activeDaysCount = new Set(
@@ -9606,52 +9665,52 @@ function renderCommissionsAndStaffScreen() {
           .map((a) => cleanDateISO(a.fecha))
       ).size;
 
-      return 
+      return `
         <tr>
           <td>
-            <div style="font-weight:900; font-size:14.5px;"> + t.nombre + </div>
-            <div style="font-size:11.5px; color:var(--text-muted);"> + t.especialidad +  · <i class="fas fa-phone"></i>  + t.telefono +  · PIN: <code> + (t.pin || "1234") + </code></div>
+            <div style="font-weight:900; font-size:14.5px;">${t.nombre}</div>
+            <div style="font-size:11.5px; color:var(--text-muted);">${t.especialidad} · <i class="fas fa-phone"></i> ${t.telefono} · PIN: <code>${t.pin || "1234"}</code></div>
           </td>
           <td>
-            <span class="state-badge  + (t.activo ? "state-badge--done" : "state-badge--wait") + ">
-               + (t.activo ? "ACTIVO" : "INACTIVO") + 
+            <span class="state-badge ${t.activo ? "state-badge--done" : "state-badge--wait"}">
+              ${t.activo ? "ACTIVO" : "INACTIVO"}
             </span>
-            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;"> + activeDaysCount +  día(s) activo(s)</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${activeDaysCount} día(s) activo(s)</div>
           </td>
           <td>
             <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-              <span><strong> + completedUnpaid.length + </strong> por liquidar · <strong> + inProgress.length + </strong> en mesa</span>
-              <button type="button" class="btn btn--ghost" style="padding:2px 7px; font-size:11px;" onclick="openWorkerCompletedJobsModal(' + t.id_usuario + ')" title="Ver detalle de trabajos realizados en el periodo">
-                <i class="fas fa-list-check"></i>  + completedInPeriod.length +  en periodo
+              <span><strong>${completedUnpaid.length}</strong> por liquidar · <strong>${inProgress.length}</strong> en mesa</span>
+              <button type="button" class="btn btn--ghost" style="padding:2px 7px; font-size:11px;" onclick="openWorkerCompletedJobsModal('${t.id_usuario}')" title="Ver detalle de trabajos realizados en el periodo">
+                <i class="fas fa-list-check"></i> ${completedInPeriod.length} en periodo
               </button>
             </div>
-            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;"> + (troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas asignadas</span>') + </div>
+            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas asignadas</span>'}</div>
           </td>
           <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">
-             + formatMinutes(totalMinutes) + 
+            ${formatMinutes(totalMinutes)}
           </td>
           <td>
             <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#16a34a;">
-              $ + totalToPay.toFixed(2) +  <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
+              $${totalToPay.toFixed(2)} <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
             </div>
-             + (totalPending > 0 ? '<div style="font-family:''JetBrains Mono'',monospace; font-size:12px; font-weight:800; color:#d97706;">+$' + totalPending.toFixed(2) + ' en mesa</div>' : '') + 
+            ${totalPending > 0 ? `<div style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:#d97706;">+$${totalPending.toFixed(2)} en mesa</div>` : ""}
           </td>
           <td>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal(' + t.id_usuario + ')">
+              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal('${t.id_usuario}')">
                 <i class="fas fa-clipboard-list"></i> Ficha / Trabajos y Tiempos
               </button>
-              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal(' + t.id_usuario + ')" title="Editar nombre, especialidad, teléfono o PIN">
+              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${t.id_usuario}')" title="Editar nombre, especialidad, teléfono o PIN">
                 <i class="fas fa-edit"></i> Editar
               </button>
-               + (totalToPay > 0 ? '<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateWorkerModal(''' + t.id_usuario + ''', ' + totalToPay + ')"><i class="fas fa-hand-holding-usd"></i> Liquidar ($' + totalToPay.toFixed(2) + ')</button>' : '') + 
-              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker(' + t.id_usuario + ')" title="Eliminar trabajador">
+              ${totalToPay > 0 ? `<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateWorkerModal('${t.id_usuario}', ${totalToPay})"><i class="fas fa-hand-holding-usd"></i> Liquidar ($${totalToPay.toFixed(2)})</button>` : ""}
+              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${t.id_usuario}')" title="Eliminar trabajador">
                 <i class="fas fa-trash-alt"></i>
               </button>
             </div>
           </td>
         </tr>
-      ;
+      `;
     })
     .join("");
 
@@ -9670,78 +9729,78 @@ function renderCommissionsAndStaffScreen() {
         if (ord && ord.codigo_troquel) troquelesSet.add("#" + ord.codigo_troquel);
       });
       const troquelesBadges = Array.from(troquelesSet)
-        .map((tr) => '<span style="background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.4); padding:2px 7px; border-radius:6px; font-family:''JetBrains Mono'',monospace; font-size:11px; font-weight:800;">' + tr + '</span>')
+        .map((tr) => `<span style="background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.4); padding:2px 7px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:800;">${tr}</span>`)
         .join(" ");
 
-      return 
+      return `
         <tr>
           <td>
             <div style="display:flex; align-items:center; gap:6px;">
               <span class="badge-external"><i class="fas fa-handshake"></i> ALIADO</span>
-              <strong style="font-size:14.5px;"> + w.nombre + </strong>
+              <strong style="font-size:14.5px;">${w.nombre}</strong>
             </div>
             <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
-               + w.especialidad +  · <i class="fas fa-phone"></i>  + (w.telefono || "Sin teléfono") + (w.direccion ?  · <i class="fas fa-map-marker-alt"></i>  + w.direccion : "") + 
+              ${w.especialidad} · <i class="fas fa-phone"></i> ${w.telefono || "Sin teléfono"}${w.direccion ? ` · <i class="fas fa-map-marker-alt"></i> ${w.direccion}` : ""}
             </div>
           </td>
           <td>
-            <span class="state-badge  + (w.activo ? "state-badge--done" : "state-badge--wait") + ">
-               + (w.activo ? "ACTIVO" : "INACTIVO") + 
+            <span class="state-badge ${w.activo ? "state-badge--done" : "state-badge--wait"}">
+              ${w.activo ? "ACTIVO" : "INACTIVO"}
             </span>
             <div style="font-size:11px; color:#38bdf8; font-weight:800; margin-top:4px;">Taller Externo</div>
           </td>
           <td>
-            <div><strong> + completedUnpaid.length + </strong> por liquidar · <strong> + inProgress.length + </strong> en proceso</div>
-            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;"> + (troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas enviadas</span>') + </div>
+            <div><strong>${completedUnpaid.length}</strong> por liquidar · <strong>${inProgress.length}</strong> en proceso</div>
+            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas enviadas</span>'}</div>
           </td>
           <td>
             <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#38bdf8;">
-              $ + totalToPay.toFixed(2) +  <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
+              $${totalToPay.toFixed(2)} <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
             </div>
-             + (totalPending > 0 ? '<div style="font-family:''JetBrains Mono'',monospace; font-size:12px; font-weight:800; color:#d97706;">+$' + totalPending.toFixed(2) + ' en proceso</div>' : '') + 
+            ${totalPending > 0 ? `<div style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:#d97706;">+$${totalPending.toFixed(2)} en proceso</div>` : ""}
           </td>
           <td>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal(' + w.id_usuario + ')">
+              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal('${w.id_usuario}')">
                 <i class="fas fa-list-check"></i> Ficha / Trabajos Tercerizados
               </button>
-              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal(' + w.id_usuario + ')" title="Editar taller aliado">
+              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${w.id_usuario}')" title="Editar taller aliado">
                 <i class="fas fa-edit"></i> Editar
               </button>
-               + (totalToPay > 0 ? '<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateExternalWorkshopModal(''' + w.id_usuario + ''', ' + totalToPay + ')"><i class="fas fa-hand-holding-usd"></i> Liquidar Pago ($' + totalToPay.toFixed(2) + ')</button>' : '') + 
-              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker(' + w.id_usuario + ')" title="Eliminar taller externo">
+              ${totalToPay > 0 ? `<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateExternalWorkshopModal('${w.id_usuario}', ${totalToPay})"><i class="fas fa-hand-holding-usd"></i> Liquidar Pago ($${totalToPay.toFixed(2)})</button>` : ""}
+              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${w.id_usuario}')" title="Eliminar taller externo">
                 <i class="fas fa-trash-alt"></i>
               </button>
             </div>
           </td>
         </tr>
-      ;
+      `;
     })
     .join("");
 
   const adminRowsHtml = managementAndStaff
     .map(
-      (u) => 
+      (u) => `
       <tr>
-        <td><strong> + u.nombre + </strong></td>
-        <td><span class="state-badge state-badge--exec"> + (u.rol_label || u.rol) + </span></td>
-        <td> + (u.especialidad || "-") + </td>
-        <td> + (u.telefono || "-") + </td>
-        <td><code> + (u.pin || "1234") + </code></td>
+        <td><strong>${u.nombre}</strong></td>
+        <td><span class="state-badge state-badge--exec">${u.rol_label || u.rol}</span></td>
+        <td>${u.especialidad || "-"}</td>
+        <td>${u.telefono || "-"}</td>
+        <td><code>${u.pin || "1234"}</code></td>
         <td>
           <div style="display:flex; gap:6px;">
-            <button type="button" class="btn btn--ghost" style="padding:4px 10px; font-size:11.5px;" onclick="openEditWorkerModal(' + u.id_usuario + ')">
+            <button type="button" class="btn btn--ghost" style="padding:4px 10px; font-size:11.5px;" onclick="openEditWorkerModal('${u.id_usuario}')">
               <i class="fas fa-edit"></i> Editar Perfil / PIN
             </button>
-             + (u.id_usuario !== currentUser.id_usuario ? '<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker(''' + u.id_usuario + ''')"><i class="fas fa-trash-alt"></i></button>' : '') + 
+            ${u.id_usuario !== currentUser.id_usuario ? `<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${u.id_usuario}')"><i class="fas fa-trash-alt"></i></button>` : ""}
           </div>
         </td>
       </tr>
-    
+    `
     )
     .join("");
 
-  return 
+  return `
     <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
       <div>
         <span style="font-size:11px; font-weight:900; color:#16a34a; text-transform:uppercase;">
@@ -9775,7 +9834,7 @@ function renderCommissionsAndStaffScreen() {
           </tr>
         </thead>
         <tbody>
-           + techRowsHtml + 
+          ${techRowsHtml}
         </tbody>
       </table>
     </div>
@@ -9812,7 +9871,7 @@ function renderCommissionsAndStaffScreen() {
           </tr>
         </thead>
         <tbody>
-           + (outsourcingRowsHtml || '<tr><td colspan="5" style="text-align:center; padding:16px; color:var(--text-muted);">No hay talleres externos registrados. Haz clic en "Registrar Taller Externo" para agregar uno.</td></tr>') + 
+          ${outsourcingRowsHtml || '<tr><td colspan="5" style="text-align:center; padding:16px; color:var(--text-muted);">No hay talleres externos registrados. Haz clic en "Registrar Taller Externo" para agregar uno.</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -9833,11 +9892,11 @@ function renderCommissionsAndStaffScreen() {
           </tr>
         </thead>
         <tbody>
-           + adminRowsHtml + 
+          ${adminRowsHtml}
         </tbody>
       </table>
     </div>
-  ;
+  `;
 }
 
 /* ---------- FUNCIONES PARA GESTIÓN Y LIQUIDACIÓN DE TALLERES EXTERNOS (SOLTECA) ---------- */
@@ -9845,7 +9904,7 @@ function openAddExternalWorkshopModal() {
   openModal({
     title: "Registrar Taller Externo / Aliado (Solteca / Outsourcing)",
     icon: "fa-handshake",
-    body: 
+    body: `
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
         Registra un taller aliado (como <strong>Rectificadora Solteca</strong>) para asignarle subtareas y controlar los costos tercerizados.
       </p>
@@ -9869,13 +9928,13 @@ function openAddExternalWorkshopModal() {
           <input type="text" id="ext-ws-addr" placeholder="Ej. Calle 72, Sector Los Olivos" />
         </div>
       </div>
-    ,
-    footer: 
+    `,
+    footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--gold" onclick="saveNewExternalWorkshop()">
         <i class="fas fa-check"></i> Guardar Taller Externo
       </button>
-    
+    `
   });
 }
 
@@ -9925,38 +9984,40 @@ function openLiquidateExternalWorkshopModal(workshopId, totalDue) {
   const subtasksSummary = pendingSubs
     .map((s) => {
       const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
-      return <li style="font-size:12px; margin-bottom:4px;">
-        <strong>Troquel # + (ord ? ord.codigo_troquel : "S/N") + </strong>:  + s.descripcion_servicio +  — <span style="font-family:'JetBrains Mono',monospace; color:#38bdf8; font-weight:800;">$ + Number(s.comision_base_tecnico).toFixed(2) + </span>
-      </li>;
+      return `
+        <li style="font-size:12px; margin-bottom:4px;">
+          <strong>Troquel #${ord ? ord.codigo_troquel : "S/N"}</strong>: ${s.descripcion_servicio} — <span style="font-family:'JetBrains Mono',monospace; color:#38bdf8; font-weight:800;">$${Number(s.comision_base_tecnico).toFixed(2)}</span>
+        </li>
+      `;
     })
     .join("");
 
   openModal({
-    title: "Liquidar Pago a Taller Externo — " + ws.nombre,
+    title: `Liquidar Pago a Taller Externo — ${ws.nombre}`,
     icon: "fa-hand-holding-usd",
-    body: 
+    body: `
       <div style="background:rgba(56, 189, 248, 0.1); border:1px solid rgba(56, 189, 248, 0.3); border-radius:12px; padding:12px; margin-bottom:14px;">
         <div style="font-weight:900; font-size:14px; color:#38bdf8;">
-          <i class="fas fa-handshake"></i>  + ws.nombre + 
+          <i class="fas fa-handshake"></i> ${ws.nombre}
         </div>
         <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
-           + ws.especialidad +  ·  + (ws.telefono || "Sin teléfono") + 
+          ${ws.especialidad} · ${ws.telefono || "Sin teléfono"}
         </div>
       </div>
 
       <div style="margin-bottom:14px;">
         <span style="font-size:11px; font-weight:900; text-transform:uppercase; color:var(--text-muted);">
-          Trabajos tercerizados a liquidar ( + pendingSubs.length + ):
+          Trabajos tercerizados a liquidar (${pendingSubs.length}):
         </span>
         <ul style="margin-top:6px; padding-left:18px; max-height:160px; overflow-y:auto;">
-           + (subtasksSummary || '<li style="color:var(--text-muted); font-size:12px;">No hay trabajos pendientes de pago.</li>') + 
+          ${subtasksSummary || '<li style="color:var(--text-muted); font-size:12px;">No hay trabajos pendientes de pago.</li>'}
         </ul>
       </div>
 
       <div class="form-grid-2">
         <div class="form-field">
           <label><i class="fas fa-dollar-sign"></i> Monto Total a Pagar ($) *</label>
-          <input type="number" step="0.5" id="liq-ext-amount" value=" + computedTotal.toFixed(2) + " style="font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:900; color:#38bdf8;" />
+          <input type="number" step="0.5" id="liq-ext-amount" value="${computedTotal.toFixed(2)}" style="font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:900; color:#38bdf8;" />
         </div>
         <div class="form-field">
           <label><i class="fas fa-credit-card"></i> Método de Pago de Caja *</label>
@@ -9976,13 +10037,13 @@ function openLiquidateExternalWorkshopModal(workshopId, totalDue) {
         <label><i class="fas fa-comment"></i> Observación / Notas</label>
         <input type="text" id="liq-ext-notes" placeholder="Ej. Liquidación de rectificación de cigüeñales y encamisado" />
       </div>
-    ,
-    footer: 
+    `,
+    footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
-      <button type="button" class="btn btn--success" onclick="confirmLiquidateExternalWorkshop(' + workshopId + ')">
+      <button type="button" class="btn btn--success" onclick="confirmLiquidateExternalWorkshop('${workshopId}')">
         <i class="fas fa-check-circle"></i> Asentar Pago como Egreso en Libro Diario
       </button>
-    
+    `
   });
 }
 
@@ -10585,8 +10646,8 @@ function openAddWorkerModal() {
           </select>
         </div>
         <div class="form-field">
-          <label>PIN de Acceso (4 dígitos)</label>
-          <input type="text" id="new-worker-pin" value="1234" maxlength="8" />
+          <label>PIN de Acceso Confidencial (Numérico) *</label>
+          <input type="text" id="new-worker-pin" placeholder="Ej. 654321" maxlength="8" required />
         </div>
       </div>
     `,
@@ -10604,10 +10665,14 @@ function saveNewWorker() {
   const spec = (document.getElementById("new-worker-spec")?.value || "").trim();
   const phone = (document.getElementById("new-worker-phone")?.value || "").trim();
   const role = document.getElementById("new-worker-role")?.value || "tecnico";
-  const pin = (document.getElementById("new-worker-pin")?.value || "1234").trim();
+  const pin = (document.getElementById("new-worker-pin")?.value || "").trim();
 
   if (!name || !spec) {
     showToast("Completa el nombre y la especialidad del trabajador.", "error");
+    return;
+  }
+  if (!pin) {
+    showToast("Debes asignar un PIN de seguridad numérico al trabajador.", "error");
     return;
   }
 
@@ -10667,8 +10732,8 @@ function openEditWorkerModal(userId) {
           </select>
         </div>
         <div class="form-field">
-          <label>PIN de Seguridad</label>
-          <input type="text" id="edit-worker-pin" value="${u.pin || "1234"}" maxlength="8" />
+          <label>PIN de Seguridad Confidencial *</label>
+          <input type="text" id="edit-worker-pin" value="${u.pin || ""}" placeholder="PIN numérico" maxlength="8" required />
         </div>
         <div class="form-field">
           <label>Estado en el Taller</label>
@@ -10696,11 +10761,15 @@ function saveEditedWorker(userId) {
   const spec = (document.getElementById("edit-worker-spec")?.value || "").trim();
   const phone = (document.getElementById("edit-worker-phone")?.value || "").trim();
   const role = document.getElementById("edit-worker-role")?.value || u.rol;
-  const pin = (document.getElementById("edit-worker-pin")?.value || "1234").trim();
+  const pin = (document.getElementById("edit-worker-pin")?.value || "").trim();
   const active = document.getElementById("edit-worker-active")?.value === "true";
 
   if (!name) {
     showToast("El nombre no puede estar vacío.", "error");
+    return;
+  }
+  if (!pin) {
+    showToast("El PIN de seguridad no puede quedar vacío.", "error");
     return;
   }
 
