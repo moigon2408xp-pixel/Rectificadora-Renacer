@@ -3,10 +3,10 @@
  * RECTIFICADORA RENACER (JOB 8:7) — NÚCLEO OPERATIVO SPA (app.js)
  * FASE 1 + FASE 2 COMPLETA:
  * - Flujo de 6 Estados:
- *   [1. Diagnóstico / Presupuesto] ➔ [2. Esperando Aprobación] ➔ [3. Asignación y Ejecución]
- *   ➔ [4. Terminado] ➔ [5. Control de Calidad] ➔ [6. Entregado (Factura Bloqueada)]
+ *   [1. Diagnóstico / Presupuesto] -> [2. Esperando Aprobación] -> [3. Asignación y Ejecución]
+ *   -> [4. Terminado] -> [5. Control de Calidad] -> [6. Entregado (Factura Bloqueada)]
  * - Módulo de Factura Dinámica Abierta ([ + Agregar Ítem Extra ])
- * - Bucle de Control de Calidad ([ ✔️ Aprobar y Pasar a Entregado ] / [ ❌ Rechazar y Devolver al Técnico ])
+ * - Bucle de Control de Calidad ([ Aprobar y Pasar a Entregado ] / [ Rechazar y Devolver al Técnico ])
  * - Bitácora y Chat Interno Integrado en Tiempo Real con Fotos de Anomalías
  * - Envío de Presupuesto en Texto por WhatsApp con Nro. de Orden y Troquel
  * - Cuentas por Cobrar Estilo Tabla Dinámica Excel (incluyendo "Entregadas y Por Cobrar" + Filtro por Cliente y Fechas)
@@ -23,6 +23,107 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 }
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
+
+const CURRENT_APP_VERSION = "2026.11.14.v17";
+
+const BANCOS_RENACER = [
+  { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
+  { id: "mercantil", nombre: "Banco Mercantil", moneda: "VES", icono: "fa-building-columns", color: "#0284c7", badgeCls: "bank-badge--mercantil" },
+  { id: "bnc", nombre: "Banco Nacional de Crédito (BNC)", moneda: "VES", icono: "fa-landmark", color: "#38bdf8", badgeCls: "bank-badge--bnc" },
+  { id: "banesco", nombre: "Banesco", moneda: "VES", icono: "fa-university", color: "#eab308", badgeCls: "bank-badge--banesco" },
+  { id: "zelle_otro", nombre: "Zelle / Otros", moneda: "USD", icono: "fa-globe", color: "#a855f7", badgeCls: "bank-badge--zelle" }
+];
+
+function getBalancesPorCuenta() {
+  const balances = {
+    efectivo: 0,
+    mercantil: 0,
+    bnc: 0,
+    banesco: 0,
+    zelle_otro: 0
+  };
+
+  (db?.finanzas_movimientos || []).forEach((m) => {
+    const monto = Number(m.monto) || 0;
+    let c = m.cuenta;
+    if (!c || balances[c] === undefined) {
+      if (m.metodo === "pago_movil" || m.metodo === "transferencia") {
+        c = "mercantil";
+      } else {
+        c = "efectivo";
+      }
+    }
+    if (m.tipo === "ingreso") {
+      balances[c] += monto;
+    } else if (m.tipo === "egreso") {
+      balances[c] -= monto;
+    }
+  });
+
+  const totalLiquido = Object.values(balances).reduce((acc, val) => acc + val, 0);
+  return { balances, totalLiquido };
+}
+
+async function fetchLiveExchangeRates(silent = false) {
+  try {
+    const res = await fetch("https://ve.dolarapi.com/v1/dolares", { cache: "no-cache" });
+    if (res.ok) {
+      const data = await res.json();
+      const oficial = Array.isArray(data) ? data.find((d) => d.fuente === "oficial") : null;
+      const paralelo = Array.isArray(data) ? data.find((d) => d.fuente === "paralelo") : null;
+      let changed = false;
+
+      if (!db.config) db.config = {};
+
+      if (oficial && Number(oficial.promedio) > 0) {
+        db.config.tasaBcv = Number(oficial.promedio);
+        changed = true;
+      }
+      if (paralelo && Number(paralelo.promedio) > 0) {
+        db.config.tasaBinance = Number(paralelo.promedio);
+        changed = true;
+      }
+
+      if (changed) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit" });
+        db.config.tasaFechaActualizacion = `${now.toISOString().slice(0, 10)} ${timeStr}`;
+        saveDatabase();
+        renderApp();
+        if (!silent) {
+          showToast(`Tasas actualizadas en vivo: BCV Bs. ${db.config.tasaBcv.toFixed(2)} | Paralelo Bs. ${db.config.tasaBinance.toFixed(2)}`, "info");
+        }
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn("No se pudo obtener tasa en vivo:", err);
+  }
+  return false;
+}
+
+function checkAppVersionAndCache() {
+  const localVer = localStorage.getItem("RENACER_APP_VERSION");
+  if (localVer !== CURRENT_APP_VERSION) {
+    localStorage.setItem("RENACER_APP_VERSION", CURRENT_APP_VERSION);
+    if ("caches" in window) {
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
+    }
+  }
+}
+
+async function triggerRemoteUpdateForAll() {
+  if (!confirm("¿Forzar actualización remota para todos los dispositivos conectados? Esta acción recargará las pantallas de todos los usuarios sin borrar sus datos.")) {
+    return;
+  }
+  const newVer = "FORCED_" + Date.now();
+  if (!db.config) db.config = {};
+  db.config.forzar_actualizacion_version = newVer;
+  saveDatabase();
+  showToast("Enviando orden de actualización a la nube...", "info");
+  await syncToGoogleSheets(true);
+  showToast("Comando de actualización remota transmitido a todos los dispositivos.", "info");
+}
 
 /* ---------- Formateadores de Fecha y Hora Legibles (Sin formato GMT/ISO T04:00:00.000Z) ---------- */
 function cleanDateISO(raw, includeTime = false) {
@@ -111,20 +212,20 @@ function makeSvgPhoto(_title, _subtitle, bg1 = "#182254", bg2 = "#0f172a", accen
 }
 
 const DEMO_PHOTOS = {
-  camaraCorsa: makeSvgPhoto("CÁMARA CHEVROLET CORSA 1.6", "Ingreso: 3 bujías puestas, 1 afuera · Fisura cil. 2", "#182254", "#0f172a", "#f5df00", "⚙️ TROQUEL #5017"),
-  repuestosCorsa: makeSvgPhoto("REPUESTOS DEL CLIENTE (#5017)", "8 Válvulas nuevas, 8 Guías bronce, Sellos y Empacadura", "#1e293b", "#0f172a", "#38bdf8", "🧰 MESA TÉCNICA"),
-  camaraCorolla: makeSvgPhoto("CÁMARA TOYOTA COROLLA 1.8 1ZZ", "Ingreso: 16 Válvulas · Superficie recalentada para aplanar", "#1b2860", "#090d24", "#f5df00", "⚙️ TROQUEL #5018"),
-  repuestosCorolla: makeSvgPhoto("REPUESTOS DEL CLIENTE (#5018)", "Juego 16 gomitas de válvula + Estopera árbol de levas", "#1e293b", "#111827", "#4ade80", "🧰 MESA TÉCNICA"),
-  bloqueFiesta: makeSvgPhoto("CÁMARA FORD FIESTA POWER 1.6", "Ingreso: Trae sensor temperatura puesto y toma de agua", "#31102f", "#0f172a", "#facc15", "⚙️ TROQUEL #5019"),
-  repuestosFiesta: makeSvgPhoto("REPUESTOS DEL CLIENTE (#5019)", "8 Válvulas, 8 Guías, Resortes originales verificados", "#1e293b", "#0f172a", "#fbbf24", "🧰 MESA TÉCNICA"),
-  camaraHilux: makeSvgPhoto("CÁMARA TOYOTA HILUX 2.7 2TR", "Terminada: Aplanada, asentada y calibrada lista para revisión", "#064e3b", "#0f172a", "#4ade80", "✅ TROQUEL #1507"),
-  camaraRunner: makeSvgPhoto("CÁMARAS TOYOTA 4RUNNER V6", "Servicio completo de rectificación, guías y calibración", "#1e1b4b", "#0f172a", "#f5df00", "⚙️ TROQUEL #1510"),
-  camaraAstra: makeSvgPhoto("CÁMARA CHEVROLET ASTRA 1.8", "Rectificación de asientos, lavado químico y cepillado", "#1e293b", "#0f172a", "#38bdf8", "⚙️ TROQUEL #1509"),
-  pagoMovilCapture: makeSvgPhoto("COMPROBANTE PAGO MÓVIL / EFECTIVO", "Referencia #948271 · Verificado en Recepción Renacer", "#065f46", "#022c22", "#fde047", "💵 SOPORTE PAGO"),
-  evidenciaTerminado: makeSvgPhoto("EVIDENCIA TRABAJO TERMINADO", "Superficie cepillada al espejo + Guías y válvulas asentadas", "#14532d", "#052e16", "#f5df00", "📸 FOTO TÉCNICO"),
-  repuestosCliente: makeSvgPhoto("REPUESTOS DEL CLIENTE", "8 Válvulas nuevas, 8 Guías bronce, Sellos y Empacadura", "#1e293b", "#0f172a", "#38bdf8", "🧰 MESA TÉCNICA"),
-  comprobantePago: makeSvgPhoto("COMPROBANTE PAGO MÓVIL / EFECTIVO", "Referencia #948271 · Verificado en Recepción Renacer", "#065f46", "#022c22", "#fde047", "💵 SOPORTE PAGO"),
-  trabajoTerminado: makeSvgPhoto("EVIDENCIA TRABAJO TERMINADO", "Superficie cepillada al espejo + Guías y válvulas asentadas", "#14532d", "#052e16", "#f5df00", "📸 FOTO TÉCNICO")
+  camaraCorsa: makeSvgPhoto("CÁMARA CHEVROLET CORSA 1.6", "Ingreso: 3 bujías puestas, 1 afuera · Fisura cil. 2", "#182254", "#0f172a", "#f5df00", "TROQUEL #5017"),
+  repuestosCorsa: makeSvgPhoto("REPUESTOS DEL CLIENTE (#5017)", "8 Válvulas nuevas, 8 Guías bronce, Sellos y Empacadura", "#1e293b", "#0f172a", "#38bdf8", "MESA TÉCNICA"),
+  camaraCorolla: makeSvgPhoto("CÁMARA TOYOTA COROLLA 1.8 1ZZ", "Ingreso: 16 Válvulas · Superficie recalentada para aplanar", "#1b2860", "#090d24", "#f5df00", "TROQUEL #5018"),
+  repuestosCorolla: makeSvgPhoto("REPUESTOS DEL CLIENTE (#5018)", "Juego 16 gomitas de válvula + Estopera árbol de levas", "#1e293b", "#111827", "#4ade80", "MESA TÉCNICA"),
+  bloqueFiesta: makeSvgPhoto("CÁMARA FORD FIESTA POWER 1.6", "Ingreso: Trae sensor temperatura puesto y toma de agua", "#31102f", "#0f172a", "#facc15", "TROQUEL #5019"),
+  repuestosFiesta: makeSvgPhoto("REPUESTOS DEL CLIENTE (#5019)", "8 Válvulas, 8 Guías, Resortes originales verificados", "#1e293b", "#0f172a", "#fbbf24", "MESA TÉCNICA"),
+  camaraHilux: makeSvgPhoto("CÁMARA TOYOTA HILUX 2.7 2TR", "Terminada: Aplanada, asentada y calibrada lista para revisión", "#064e3b", "#0f172a", "#4ade80", "TROQUEL #1507"),
+  camaraRunner: makeSvgPhoto("CÁMARAS TOYOTA 4RUNNER V6", "Servicio completo de rectificación, guías y calibración", "#1e1b4b", "#0f172a", "#f5df00", "TROQUEL #1510"),
+  camaraAstra: makeSvgPhoto("CÁMARA CHEVROLET ASTRA 1.8", "Rectificación de asientos, lavado químico y cepillado", "#1e293b", "#0f172a", "#38bdf8", "TROQUEL #1509"),
+  pagoMovilCapture: makeSvgPhoto("COMPROBANTE PAGO MÓVIL / EFECTIVO", "Referencia #948271 · Verificado en Recepción Renacer", "#065f46", "#022c22", "#fde047", "SOPORTE PAGO"),
+  evidenciaTerminado: makeSvgPhoto("EVIDENCIA TRABAJO TERMINADO", "Superficie cepillada al espejo + Guías y válvulas asentadas", "#14532d", "#052e16", "#f5df00", "FOTO EVIDENCIA"),
+  repuestosCliente: makeSvgPhoto("REPUESTOS DEL CLIENTE", "8 Válvulas nuevas, 8 Guías bronce, Sellos y Empacadura", "#1e293b", "#0f172a", "#38bdf8", "MESA TÉCNICA"),
+  comprobantePago: makeSvgPhoto("COMPROBANTE PAGO MÓVIL / EFECTIVO", "Referencia #948271 · Verificado en Recepción Renacer", "#065f46", "#022c22", "#fde047", "SOPORTE PAGO"),
+  trabajoTerminado: makeSvgPhoto("EVIDENCIA TRABAJO TERMINADO", "Superficie cepillada al espejo + Guías y válvulas asentadas", "#14532d", "#052e16", "#f5df00", "FOTO EVIDENCIA")
 };
 
 /* ---------- Base de Datos Inicial de Demostración (Fase 1 + Fase 2) ---------- */
@@ -233,6 +334,52 @@ function getInitialDatabase() {
         telefono: "0414-6778899",
         activo: true,
         modalidad_horario: "Jornada Completa (8am-1pm / 3pm-8pm)"
+      },
+      {
+        id_usuario: "USR-HAVELL",
+        nombre: "Havell Bracho",
+        rol: "tecnico",
+        rol_label: "Técnico Especialista de Cámaras",
+        especialidad: "Servicio de Cámara, Cepillada y Armado",
+        pin: "000000",
+        telefono: "0412-5551122",
+        activo: true,
+        modalidad_horario: "Jornada Completa"
+      },
+      {
+        id_usuario: "USR-ANGEL",
+        nombre: "Angel",
+        rol: "tecnico",
+        rol_label: "Técnico Lavado y Químico",
+        especialidad: "Lavado Químico y Descarbonizado",
+        pin: "000000",
+        telefono: "0414-5552233",
+        activo: true,
+        modalidad_horario: "Jornada Completa"
+      },
+      {
+        id_usuario: "USR-JOSE",
+        nombre: "Jose Villasmil",
+        rol: "tecnico",
+        rol_label: "Técnico Calibración y Válvulas",
+        especialidad: "Calibración, Asientos y Válvulas",
+        pin: "000000",
+        telefono: "0424-5553344",
+        activo: true,
+        modalidad_horario: "Jornada Completa"
+      },
+      {
+        id_usuario: "USR-SOLTECA",
+        nombre: "Rectificadora Solteca",
+        rol: "outsourcing",
+        tipo: "taller_externo",
+        rol_label: "Taller Externo Aliado (Outsourcing)",
+        especialidad: "Rectificación de Cigüeñal, Bancadas y Encamisado Especial",
+        pin: "000000",
+        telefono: "0414-SOLTECA",
+        activo: true,
+        es_externo: true,
+        modalidad_horario: "Tercerizado Externo"
       }
     ],
     catalogo: [
@@ -905,6 +1052,61 @@ function normalizeDatabaseSchema(d) {
       moises.rol = "admin";
       moises.rol_label = "Administrador del Sistema";
     }
+
+    // Asegurar trabajadores de taller (Havell, Angel, Jose) y Outsourcing (Rectificadora Solteca)
+    const defaultWorkers = [
+      {
+        id_usuario: "USR-HAVELL",
+        nombre: "Havell Bracho",
+        rol: "tecnico",
+        rol_label: "Técnico Especialista de Cámaras",
+        especialidad: "Servicio de Cámara, Cepillada y Armado",
+        pin: "000000",
+        telefono: "0412-5551122",
+        activo: true,
+        modalidad_horario: "Jornada Completa"
+      },
+      {
+        id_usuario: "USR-ANGEL",
+        nombre: "Angel",
+        rol: "tecnico",
+        rol_label: "Técnico Lavado y Químico",
+        especialidad: "Lavado Químico y Descarbonizado",
+        pin: "000000",
+        telefono: "0414-5552233",
+        activo: true,
+        modalidad_horario: "Jornada Completa"
+      },
+      {
+        id_usuario: "USR-JOSE",
+        nombre: "Jose Villasmil",
+        rol: "tecnico",
+        rol_label: "Técnico Calibración y Válvulas",
+        especialidad: "Calibración, Asientos y Válvulas",
+        pin: "000000",
+        telefono: "0424-5553344",
+        activo: true,
+        modalidad_horario: "Jornada Completa"
+      },
+      {
+        id_usuario: "USR-SOLTECA",
+        nombre: "Rectificadora Solteca",
+        rol: "outsourcing",
+        tipo: "taller_externo",
+        rol_label: "Taller Externo Aliado (Outsourcing)",
+        especialidad: "Rectificación de Cigüeñal, Bancadas y Encamisado Especial",
+        pin: "000000",
+        telefono: "0414-SOLTECA",
+        activo: true,
+        es_externo: true,
+        modalidad_horario: "Tercerizado Externo"
+      }
+    ];
+    defaultWorkers.forEach((dw) => {
+      if (!d.usuarios.some((u) => u.id_usuario === dw.id_usuario || (u.nombre && u.nombre.toLowerCase().trim() === dw.nombre.toLowerCase().trim()))) {
+        d.usuarios.push(dw);
+      }
+    });
   }
 
   d.usuarios.forEach((u) => {
@@ -941,6 +1143,7 @@ function normalizeDatabaseSchema(d) {
       ],
       egresos: [
         "Pago de Nómina / Comisiones",
+        "Pago a Talleres Externos (Solteca / Outsourcing)",
         "Compra de Insumos y Químicos",
         "Herramientas y Piedras de Rectificar",
         "Servicios Básicos e Internet",
@@ -1381,7 +1584,7 @@ async function pushToGoogleSheets(silent = true) {
     if (json && json.success) {
       const stamp = (json.data && json.data.savedAt) || new Date().toLocaleTimeString();
       updateCloudSyncBadge("online", stamp);
-      if (!silent) showToast(`✅ Datos guardados en Google Sheets (${stamp})`);
+      if (!silent) showToast(`Datos guardados en Google Sheets (${stamp})`);
       return true;
     }
     throw new Error((json && json.error) || "Respuesta no válida de Sheets");
@@ -1400,6 +1603,19 @@ async function syncFromGoogleSheets(silent = false) {
     const res = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
     const json = await res.json();
     if (json && json.success && json.data) {
+      // Verificación de actualización remota obligatoria para todos los equipos
+      if (json.data.config && json.data.config.forzar_actualizacion_version) {
+        const remoteForcedVer = json.data.config.forzar_actualizacion_version;
+        const localForcedVer = localStorage.getItem("RENACER_FORCED_VERSION");
+        if (localForcedVer && remoteForcedVer !== localForcedVer) {
+          localStorage.setItem("RENACER_FORCED_VERSION", remoteForcedVer);
+          showToast("Actualización del sistema enviada desde Administración. Aplicando cambios...", "info");
+          setTimeout(() => forceAppRefresh(), 600);
+          return true;
+        }
+        localStorage.setItem("RENACER_FORCED_VERSION", remoteForcedVer);
+      }
+
       const hasInitializedCatalogOrUsers =
         (Array.isArray(json.data.usuarios) && json.data.usuarios.length > 0) ||
         (Array.isArray(json.data.catalogo) && json.data.catalogo.length > 0);
@@ -1414,7 +1630,7 @@ async function syncFromGoogleSheets(silent = false) {
           renderApp();
         }
         updateCloudSyncBadge("online", json.data.serverTime || new Date().toLocaleTimeString());
-        if (!silent) showToast(`☁️ Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
+        if (!silent) showToast(`Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
         return true;
       } else {
         await pushToGoogleSheets(silent);
@@ -1446,7 +1662,7 @@ function openCloudSyncModal() {
             Última sincronización: <strong>${lastCloudSyncTime}</strong> · Órdenes actuales: <strong>${db.ordenes.length}</strong>
           </div>
         </div>
-        <span class="state-badge state-badge--done">${cloudSyncStatus === "online" ? "🟢 CONECTADO" : cloudSyncStatus === "syncing" ? "🔄 SINCRONIZANDO" : "🟡 LOCAL"}</span>
+        <span class="state-badge state-badge--done">${cloudSyncStatus === "online" ? "CONECTADO" : cloudSyncStatus === "syncing" ? "SINCRONIZANDO" : "LOCAL"}</span>
       </div>
 
       <div class="form-field" style="margin-bottom:14px;">
@@ -1461,10 +1677,23 @@ function openCloudSyncModal() {
 
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin-bottom:16px;">
         <button type="button" class="btn btn--primary btn--lg" style="justify-content:center;" onclick="syncFromGoogleSheets(false); closeModal();">
-          <i class="fas fa-cloud-download-alt"></i> ⬇️ Traer Datos de Google Sheets
+          <i class="fas fa-cloud-arrow-down"></i> Traer Datos de Google Sheets
         </button>
         <button type="button" class="btn btn--gold btn--lg" style="justify-content:center;" onclick="pushToGoogleSheets(false); closeModal();">
-          <i class="fas fa-cloud-upload-alt"></i> ⬆️ Guardar Todo en Sheets Ahora
+          <i class="fas fa-cloud-arrow-up"></i> Guardar Todo en Sheets Ahora
+        </button>
+      </div>
+
+      <!-- Control de Actualización Remota Forzada (Sin borrar caché manual) -->
+      <div class="form-section-box" style="border-color:rgba(245,223,0,0.35); margin-bottom:14px; background:rgba(24,34,84,0.25);">
+        <div class="form-section-title" style="color:var(--renacer-gold);">
+          <i class="fas fa-satellite-dish"></i> Despliegue y Actualización Remota para Todos los Dispositivos
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px; line-height:1.45;">
+          Fuerza de manera instantánea a todos los teléfonos de mecánicos, computadoras y tablets conectados a recargar la versión más reciente del sistema, sin que nadie tenga que borrar caché manualmente.
+        </p>
+        <button type="button" class="btn btn--gold" onclick="triggerRemoteUpdateForAll(); closeModal();">
+          <i class="fas fa-arrows-rotate"></i> Forzar Actualización Remota para Todos
         </button>
       </div>
 
@@ -1477,10 +1706,10 @@ function openCloudSyncModal() {
         </p>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <button type="button" class="btn btn--danger" onclick="clearAllTestOrders()">
-            <i class="fas fa-trash-alt"></i> 🧹 Limpiar Pedidos de Prueba (Dejar en Cero)
+            <i class="fas fa-trash-alt"></i> Limpiar Pedidos de Prueba (Dejar en Cero)
           </button>
           <button type="button" class="btn btn--ghost" onclick="closeModal(); resetDemoDatabase();">
-            <i class="fas fa-redo"></i> 🔄 Restaurar Órdenes de Ejemplo
+            <i class="fas fa-rotate"></i> Restaurar Órdenes de Ejemplo
           </button>
         </div>
       </div>
@@ -1513,7 +1742,7 @@ function clearAllTestOrders() {
       saveDatabase();
       closeModal();
       if (currentUser) renderApp();
-      showToast("🧹 Todas las órdenes de prueba fueron eliminadas y sincronizadas con Google Sheets.");
+      showToast("Todas las órdenes de prueba fueron eliminadas y sincronizadas con Google Sheets.");
     }
   });
 }
@@ -1538,7 +1767,7 @@ function deleteOrder(orderId) {
       saveDatabase();
       closeModal();
       renderApp();
-      showToast(`🗑️ Orden / Troquel #${ord.codigo_troquel} eliminada.`);
+      showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada.`);
     }
   });
 }
@@ -1820,7 +2049,7 @@ async function togglePushNotifications() {
   }
 
   if (Notification.permission === "granted") {
-    sendPushNotification("🔔 Renacer (Job 8:7) — Notificaciones Activas", {
+    sendPushNotification("Renacer (Job 8:7) — Notificaciones Activas", {
       body: "El sistema de notificaciones está operativo para CRM, Órdenes, Pagos y Comisiones.",
       tag: "test-notification"
     });
@@ -1831,7 +2060,7 @@ async function togglePushNotifications() {
   const perm = await Notification.requestPermission();
   if (perm === "granted") {
     initPushNotifications();
-    sendPushNotification("✅ Notificaciones Push Activadas", {
+    sendPushNotification("Notificaciones Push Activadas", {
       body: "Recibirás avisos en tiempo real para eventos de taller, chat de bitácora y pagos.",
       tag: "welcome-notification"
     });
@@ -1870,7 +2099,7 @@ function openInteractiveProfileModal(userId) {
   const isJefe = u.rol === "jefe_taller" || u.rol === "admin";
 
   openModal({
-    title: `👤 Mi Perfil & Seguridad — ${u.nombre}`,
+    title: `Mi Perfil & Seguridad — ${u.nombre}`,
     icon: "fa-user-circle",
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -2103,7 +2332,7 @@ function togglePinSecurityOnSwitch(enabled) {
   db.config_taller.exigir_pin_cambio_perfil = Boolean(enabled);
   saveDatabase();
   openSwitchUserModal();
-  showToast(enabled ? "🔒 Seguridad por PIN activada al cambiar de perfil." : "🔓 Modo prueba rápida activado (cambio directo).");
+  showToast(enabled ? "Seguridad por PIN activada al cambiar de perfil." : "Modo prueba rápida activado (cambio directo).");
 }
 
 function attemptSwitchUserWithPin(userId) {
@@ -2384,6 +2613,9 @@ function renderScreen() {
 function renderDashboardScreen() {
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
   const tasaBinance = Number(db.config?.tasaBinance) || 52.40;
+  const balancesInfo = getBalancesPorCuenta();
+  const balances = balancesInfo.balances;
+  const cajaDisponible = balancesInfo.totalLiquido;
 
   // 1. Ingresos y Egresos Reales desde el Libro Diario
   const totalIngresos = (db.finanzas_movimientos || [])
@@ -2394,8 +2626,6 @@ function renderDashboardScreen() {
     .filter((m) => m.tipo === "egreso")
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
-  const cajaDisponible = Math.max(0, totalIngresos - totalEgresos);
-
   // 2. Cuentas por Cobrar Independientes (Órdenes en Taller con saldo + Facturas entregadas a crédito)
   const ordenesPorCobrar = db.ordenes.filter(
     (o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado" && o.estado_actual !== "diagnostico_presupuesto"
@@ -2403,14 +2633,11 @@ function renderDashboardScreen() {
   const totalCuentasPorCobrar = ordenesPorCobrar.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
   const countCuentasPorCobrar = ordenesPorCobrar.length;
 
-  // 3. Activos Totales del Taller
-  // Valor de piezas / motores en producción activa en taller (excluye entregados y anulados)
+  // 3. Activos Totales del Taller: Valor de piezas en producción activa (Informativo de planta)
   const piezasEnTaller = db.ordenes.filter(
     (o) => o.estado_actual !== "entregado" && o.estado_actual !== "anulado"
   );
   const valorPiezasEnTaller = piezasEnTaller.reduce((acc, o) => acc + (Number(o.monto_total) || 0), 0);
-  // Total Activos = Caja líquida + Motores en taller + Cuentas por cobrar confirmadas
-  const totalActivos = cajaDisponible + valorPiezasEnTaller + totalCuentasPorCobrar;
 
   // Cuentas por Pagar (Pasivos / Préstamos de maquinaria)
   const cxpActivas = (db.cuentas_por_pagar || []).filter((c) => c.estado === "activa");
@@ -2470,29 +2697,37 @@ function renderDashboardScreen() {
           <div style="display:flex; align-items:center; gap:8px;">
             <i class="fas fa-coins" style="font-size:20px; color:var(--renacer-gold);"></i>
             <div>
-              <div style="font-size:13px; font-weight:900; color:#fff;">CONTROL DE TIPO DE CAMBIO DIARIO</div>
-              <div style="font-size:11px; color:#94a3b8;">Monitorea la tasa oficial y paralelo para proteger los ingresos del taller</div>
+              <div style="font-size:13px; font-weight:900; color:#fff;">CONTROL DE TIPO DE CAMBIO EN VIVO</div>
+              <div style="font-size:11px; color:#94a3b8;">
+                Tasas oficiales para facturación y cobros del taller
+                ${db.config?.tasaFechaActualizacion ? `· <i class="fas fa-clock"></i> ${db.config.tasaFechaActualizacion}` : ""}
+              </div>
             </div>
           </div>
           <div class="currency-rate-box">
-            <span class="currency-rate-label">🏛️ Tasa Oficial BCV:</span>
+            <span class="currency-rate-label"><i class="fas fa-university" style="color:var(--renacer-gold); margin-right:4px;"></i> Tasa Oficial BCV:</span>
             <span class="currency-rate-value">${tasaBcv.toFixed(2)} Bs/$</span>
           </div>
           <div class="currency-rate-box">
-            <span class="currency-rate-label">⚡ Binance P2P / Paralelo:</span>
+            <span class="currency-rate-label"><i class="fas fa-bolt" style="color:#38bdf8; margin-right:4px;"></i> Binance P2P / Paralelo:</span>
             <span class="currency-rate-value">${tasaBinance.toFixed(2)} Bs/$</span>
           </div>
           <div style="font-size:11.5px; color:#cbd5e1;">
             Diferencial cambiario: <strong style="color:#fde047;">${(((tasaBinance - tasaBcv) / tasaBcv) * 100).toFixed(1)}%</strong>
           </div>
         </div>
-        <button type="button" class="btn btn--gold btn--xs" onclick="openEditExchangeRatesModal()" style="padding:6px 14px; font-weight:900;">
-          <i class="fas fa-edit"></i> Actualizar Tasas del Día
-        </button>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn btn--ghost btn--xs" onclick="fetchLiveExchangeRates(false)" style="padding:6px 12px; font-weight:800; border-color:rgba(245,223,0,0.4); color:#fde047;" title="Consultar última tasa en línea">
+            <i class="fas fa-rotate"></i> Actualizar en Vivo
+          </button>
+          <button type="button" class="btn btn--gold btn--xs" onclick="openEditExchangeRatesModal()" style="padding:6px 14px; font-weight:900;">
+            <i class="fas fa-edit"></i> Ajustar Manual
+          </button>
+        </div>
       </div>
 
-      <!-- 4 PANELES FINANCIEROS INDEPENDIENTES (INGRESOS, EGRESOS, CUENTAS POR COBRAR, ACTIVOS TOTALES) -->
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px;">
+      <!-- 5 PANELES FINANCIEROS INDEPENDIENTES (INGRESOS, EGRESOS, CXC, CXP, DISPONIBILIDAD TOTAL) -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px;">
         
         <!-- Panel 1: Ingresos Totales -->
         <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1px solid rgba(255,255,255,0.08); box-shadow:0 4px 20px rgba(0,0,0,0.25);">
@@ -2502,7 +2737,7 @@ function renderDashboardScreen() {
             </div>
             <i class="fas fa-arrow-down" style="color:#22c55e;"></i>
           </div>
-          <div style="font-size:30px; font-weight:900; color:#22c55e; font-family:'JetBrains Mono',monospace; margin-top:4px;">
+          <div style="font-size:28px; font-weight:900; color:#22c55e; font-family:'JetBrains Mono',monospace; margin-top:4px;">
             $${totalIngresos.toFixed(2)}
           </div>
           <div style="font-size:12px; color:#fde047; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
@@ -2521,7 +2756,7 @@ function renderDashboardScreen() {
             </div>
             <i class="fas fa-arrow-up" style="color:#ef4444;"></i>
           </div>
-          <div style="font-size:30px; font-weight:900; color:#ef4444; font-family:'JetBrains Mono',monospace; margin-top:4px;">
+          <div style="font-size:28px; font-weight:900; color:#ef4444; font-family:'JetBrains Mono',monospace; margin-top:4px;">
             $${totalEgresos.toFixed(2)}
           </div>
           <div style="font-size:12px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
@@ -2532,50 +2767,87 @@ function renderDashboardScreen() {
           </div>
         </div>
 
-        <!-- Panel 3: Cuentas por Cobrar (Independiente) -->
-        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1.5px solid rgba(245, 158, 11, 0.4); box-shadow:0 4px 20px rgba(0,0,0,0.25);">
+        <!-- Panel 3: Cuentas por Cobrar (En la Calle) -->
+        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1.5px solid rgba(245, 158, 11, 0.4); box-shadow:0 4px 20px rgba(0,0,0,0.25); cursor:pointer;" onclick="navigateTab('accounts_receivable')" title="Ver detalle de cuentas por cobrar">
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#fbbf24;">
-              CUENTAS POR COBRAR (EN LA CALLE)
+              CUENTAS POR COBRAR (CALLE)
             </div>
             <span style="font-size:11px; padding:2px 8px; border-radius:99px; background:rgba(245, 158, 11, 0.2); color:#fde047; font-weight:800;">
               ${countCuentasPorCobrar} Facturas
             </span>
           </div>
-          <div style="font-size:30px; font-weight:900; color:#f59e0b; font-family:'JetBrains Mono',monospace; margin-top:4px;">
+          <div style="font-size:28px; font-weight:900; color:#f59e0b; font-family:'JetBrains Mono',monospace; margin-top:4px;">
             $${totalCuentasPorCobrar.toFixed(2)}
           </div>
           <div style="font-size:12px; color:#fef08a; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
             ≈ ${(totalCuentasPorCobrar * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
           </div>
           <div style="font-size:11px; color:#cbd5e1; margin-top:4px; line-height:1.3;">
-            <i class="fas fa-info-circle"></i> <em>Independiente: No se deduce de los activos líquidos de caja.</em>
+            <i class="fas fa-info-circle"></i> <em>Saldos en calle. No computable en caja.</em>
           </div>
         </div>
 
-        <!-- Panel 4: Activos Totales del Taller -->
-        <div class="kpi-card--assets" style="border-radius:16px; padding:18px 20px; box-shadow:0 4px 20px rgba(0,0,0,0.25);">
+        <!-- Panel 4: Cuentas por Pagar (Pasivos / Deudas) -->
+        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1.5px solid rgba(239, 68, 68, 0.4); box-shadow:0 4px 20px rgba(0,0,0,0.25); cursor:pointer;" onclick="openNewAccountPayableModal()" title="Gestionar Cuentas por Pagar">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#f87171;">
+              CUENTAS POR PAGAR (PASIVOS)
+            </div>
+            <span style="font-size:11px; padding:2px 8px; border-radius:99px; background:rgba(239, 68, 68, 0.18); color:#fca5a5; font-weight:800;">
+              ${cxpActivas.length} Activas
+            </span>
+          </div>
+          <div style="font-size:28px; font-weight:900; color:#ef4444; font-family:'JetBrains Mono',monospace; margin-top:4px;">
+            $${totalCxpPendiente.toFixed(2)}
+          </div>
+          <div style="font-size:12px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
+            ≈ ${(totalCxpPendiente * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
+          </div>
+          <div style="font-size:11px; color:#cbd5e1; margin-top:4px; line-height:1.3;">
+            <i class="fas fa-file-invoice-dollar"></i> <em>Maquinaria, préstamos y proveedores.</em>
+          </div>
+        </div>
+
+        <!-- Panel 5: Disponibilidad Total en Cuentas y Caja Líquida (Desglose Real por Banco) -->
+        <div class="kpi-card--assets" style="border-radius:16px; padding:18px 20px; box-shadow:0 4px 20px rgba(0,0,0,0.25); border:1.5px solid rgba(56, 189, 248, 0.45);">
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#93c5fd;">
-              ACTIVOS TOTALES DEL TALLER
+              DISPONIBILIDAD TOTAL (CUENTAS Y CAJA)
             </div>
             <i class="fas fa-vault" style="color:#60a5fa;"></i>
           </div>
-          <div style="font-size:30px; font-weight:900; color:#38bdf8; font-family:'JetBrains Mono',monospace; margin-top:4px;">
-            $${totalActivos.toFixed(2)}
+          <div style="font-size:28px; font-weight:900; color:#38bdf8; font-family:'JetBrains Mono',monospace; margin-top:4px;">
+            $${cajaDisponible.toFixed(2)}
+          </div>
+          <div style="font-size:12px; color:#7dd3fc; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
+            ≈ ${(cajaDisponible * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
           </div>
           <div style="margin-top:8px;">
             <div class="kpi-breakdown-row">
-              <span>💵 Caja Líquida Disponible:</span>
-              <strong style="color:#4ade80;">$${cajaDisponible.toFixed(2)}</strong>
+              <span><i class="fas fa-money-bill-wave" style="color:#4ade80;"></i> Efectivo Físico / Caja:</span>
+              <strong style="color:#4ade80;">$${balances.efectivo.toFixed(2)}</strong>
             </div>
             <div class="kpi-breakdown-row">
-              <span>⚙️ Motores / Piezas en Taller:</span>
+              <span><i class="fas fa-building-columns" style="color:#38bdf8;"></i> Banco Mercantil:</span>
+              <strong style="color:#38bdf8;">$${balances.mercantil.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.mercantil * tasaBcv).toFixed(0)} Bs)</span></strong>
+            </div>
+            <div class="kpi-breakdown-row">
+              <span><i class="fas fa-landmark" style="color:#7dd3fc;"></i> Banco BNC:</span>
+              <strong style="color:#7dd3fc;">$${balances.bnc.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.bnc * tasaBcv).toFixed(0)} Bs)</span></strong>
+            </div>
+            <div class="kpi-breakdown-row">
+              <span><i class="fas fa-university" style="color:#fde047;"></i> Banesco:</span>
+              <strong style="color:#fde047;">$${balances.banesco.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.banesco * tasaBcv).toFixed(0)} Bs)</span></strong>
+            </div>
+            ${balances.zelle_otro ? `
+            <div class="kpi-breakdown-row">
+              <span><i class="fas fa-globe" style="color:#c084fc;"></i> Zelle / Otros:</span>
+              <strong style="color:#c084fc;">$${balances.zelle_otro.toFixed(2)}</strong>
+            </div>` : ""}
+            <div class="kpi-breakdown-row" style="margin-top:4px; padding-top:4px; border-top:1px dashed rgba(255,255,255,0.12); opacity:0.85;">
+              <span><i class="fas fa-gears" style="color:var(--renacer-gold);"></i> Motores / Piezas en Taller:</span>
               <strong style="color:var(--renacer-gold);">$${valorPiezasEnTaller.toFixed(2)}</strong>
-            </div>
-            <div class="kpi-breakdown-row">
-              <span>📋 Por Cobrar Confirmado:</span>
-              <strong style="color:#f59e0b;">$${totalCuentasPorCobrar.toFixed(2)}</strong>
             </div>
           </div>
         </div>
@@ -2585,16 +2857,16 @@ function renderDashboardScreen() {
       <!-- BOTONERA DE ACCIÓN EJECUTIVA (DISEÑO JESÚS ANDRADE) -->
       <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
         <button type="button" class="btn btn--gold" onclick="openNewOrderModal()" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-plus-circle"></i> + Nueva Orden
+          <i class="fas fa-plus-circle"></i> Nueva Orden
         </button>
         <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-plus-circle"></i> + Ingreso
+          <i class="fas fa-plus-circle"></i> Registrar Ingreso
         </button>
         <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-minus-circle"></i> + Egreso
+          <i class="fas fa-minus-circle"></i> Registrar Egreso
         </button>
         <button type="button" class="btn btn--ghost" onclick="openNewAccountPayableModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(239, 68, 68, 0.4); color:#f87171;">
-          <i class="fas fa-file-invoice"></i> + Cuenta por Pagar / Préstamo
+          <i class="fas fa-file-invoice"></i> Cuenta por Pagar / Préstamo
         </button>
         <button type="button" class="btn btn--ghost" onclick="navigateTab('finances_ledger')" style="padding:10px 18px; border-radius:99px; border-color:var(--border-color);">
           <i class="fas fa-wallet"></i> Libro Diario
@@ -2645,15 +2917,15 @@ function renderDashboardScreen() {
 
               <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; background:rgba(0,0,0,0.2); padding:10px 12px; border-radius:10px; margin-bottom:12px;">
                 <div style="display:flex; justify-content:space-between;">
-                  <span>💼 Salario Fijo Semanal:</span>
+                  <span><i class="fas fa-briefcase" style="color:#94a3b8; margin-right:4px;"></i> Salario Fijo Semanal:</span>
                   <strong style="color:#cbd5e1;">+$${p.salarioFijo.toFixed(2)}</strong>
                 </div>
                 <div style="display:flex; justify-content:space-between;">
-                  <span>⚙️ Trabajos Extras (${p.extraSubsCount} tareas):</span>
+                  <span><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:4px;"></i> Trabajos Extras (${p.extraSubsCount} tareas):</span>
                   <strong style="color:var(--renacer-gold);">+$${p.totalExtras.toFixed(2)}</strong>
                 </div>
                 <div style="display:flex; justify-content:space-between;">
-                  <span>🔻 Adelantos Tomados (${p.adelantosCount} retiros):</span>
+                  <span><i class="fas fa-arrow-down" style="color:#f87171; margin-right:4px;"></i> Adelantos Tomados (${p.adelantosCount} retiros):</span>
                   <strong style="color:#f87171;">-$${p.totalAdelantos.toFixed(2)}</strong>
                 </div>
               </div>
@@ -2769,7 +3041,7 @@ function openEditExchangeRatesModal() {
   const curBinance = Number(db.config?.tasaBinance) || 52.40;
 
   openModal({
-    title: "🏛️ Actualizar Tasas de Cambio del Día",
+    title: "Actualizar Tasas de Cambio del Día",
     icon: "fa-coins",
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -2829,7 +3101,7 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
 
   openModal({
-    title: "💸 Registrar Adelanto / Retiro de Socio o Jefe",
+    title: "Registrar Adelanto / Retiro de Socio o Jefe",
     icon: "fa-hand-holding-usd",
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -2862,6 +3134,12 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
             </select>
           </div>
           <div class="form-field">
+            <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
+            <select id="adv-partner-account" style="font-weight:800;">
+              ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+            </select>
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
             <label><i class="fas fa-comment-alt"></i> Concepto o Motivo del Retiro *</label>
             <input type="text" id="adv-partner-concept" placeholder="Ej: Adelanto personal / Compras urgentes" value="Adelanto personal semanal" required />
           </div>
@@ -2890,6 +3168,7 @@ function savePartnerAdvance() {
   const userId = document.getElementById("adv-partner-user")?.value;
   const amount = Number(document.getElementById("adv-partner-amount")?.value) || 0;
   const method = document.getElementById("adv-partner-method")?.value || "efectivo";
+  const cuenta = document.getElementById("adv-partner-account")?.value || (method === "efectivo" ? "efectivo" : "mercantil");
   const concept = (document.getElementById("adv-partner-concept")?.value || "").trim() || "Adelanto personal de jefe";
 
   if (amount <= 0) {
@@ -2909,6 +3188,7 @@ function savePartnerAdvance() {
     concepto: `${concept} — ${user.nombre}`,
     monto: amount,
     metodo: method,
+    cuenta: cuenta,
     orden_id: "ADELANTO",
     codigo_troquel: "-",
     usuario_id: user.id_usuario,
@@ -2923,7 +3203,7 @@ function savePartnerAdvance() {
   closeModal();
   renderApp();
 
-  sendPushNotification(`🔻 Adelanto de Caja Registrado`, {
+  sendPushNotification(`Adelanto de Caja Registrado`, {
     body: `$${amount.toFixed(2)} entregados a ${user.nombre} (${concept}).`,
     tag: "partner-advance"
   });
@@ -2953,7 +3233,7 @@ function openLiquidatePartnerWeeklyModal(userId) {
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
 
   openModal({
-    title: `💰 Liquidación Semanal — ${p.nombre}`,
+    title: `Liquidación Semanal — ${p.nombre}`,
     icon: "fa-hand-holding-usd",
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -2961,15 +3241,15 @@ function openLiquidatePartnerWeeklyModal(userId) {
           <h4 style="font-size:16px; font-weight:900; color:#fff; margin-bottom:8px;">Balance de Cierre Semanal</h4>
           <div style="display:flex; flex-direction:column; gap:6px; font-size:13px;">
             <div style="display:flex; justify-content:space-between;">
-              <span>💼 Salario Fijo Semanal:</span>
+              <span><i class="fas fa-briefcase"></i> Salario Fijo Semanal:</span>
               <strong style="color:#22c55e;">+$${salarioFijo.toFixed(2)}</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
-              <span>⚙️ Trabajos Extras Realizados (${extraSubs.length} subtareas):</span>
+              <span><i class="fas fa-cogs"></i> Trabajos Extras Realizados (${extraSubs.length} subtareas):</span>
               <strong style="color:var(--renacer-gold);">+$${totalExtras.toFixed(2)}</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
-              <span>🔻 Adelantos Tomados (${adelantosMovs.length} retiros registrados):</span>
+              <span><i class="fas fa-arrow-down" style="color:#ef4444;"></i> Adelantos Tomados (${adelantosMovs.length} retiros registrados):</span>
               <strong style="color:#ef4444;">-$${totalAdelantos.toFixed(2)}</strong>
             </div>
             <div style="border-top:1.5px solid rgba(255,255,255,0.15); padding-top:8px; margin-top:4px; display:flex; justify-content:space-between; align-items:baseline;">
@@ -2980,6 +3260,13 @@ function openLiquidatePartnerWeeklyModal(userId) {
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="form-field">
+          <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen del Pago *</label>
+          <select id="liq-partner-account" style="font-weight:800;">
+            ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+          </select>
         </div>
 
         <!-- Evidencia Fotográfica Obligatoria de Billetes o Pago Móvil -->
@@ -3032,6 +3319,7 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
   if (!p) return;
 
   const photo = tempPartnerLiquidatePhoto || DEMO_PHOTOS.pagoMovilCapture;
+  const cuenta = document.getElementById("liq-partner-account")?.value || "efectivo";
   const nowStr = new Date().toISOString().slice(0, 10);
 
   // Marcar subtareas extras como pagadas
@@ -3063,7 +3351,8 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
       categoria: "Pago de Nómina / Comisiones",
       concepto: `Liquidación Neta Semanal — ${p.nombre}`,
       monto: Number(neto),
-      metodo: "efectivo",
+      metodo: cuenta === "efectivo" ? "efectivo" : "pago_movil",
+      cuenta: cuenta,
       orden_id: "NOMINA_SOCIO",
       codigo_troquel: "-",
       usuario_id: userId,
@@ -3077,7 +3366,7 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
   closeModal();
   renderApp();
 
-  sendPushNotification(`💰 Liquidación de Socio Completada`, {
+  sendPushNotification(`Liquidación de Socio Completada`, {
     body: `Semana liquidada a ${p.nombre} por un neto de $${Number(neto).toFixed(2)}.`,
     tag: "partner-liquidation"
   });
@@ -3093,7 +3382,7 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
 /* ---------- Cuentas por Pagar y Préstamos de Maquinaria ---------- */
 function openNewAccountPayableModal() {
   openModal({
-    title: "📝 Registrar Cuenta por Pagar / Préstamo de Maquinaria",
+    title: "Registrar Cuenta por Pagar / Préstamo de Maquinaria",
     icon: "fa-industry",
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -3190,7 +3479,7 @@ function openPayAccountPayableModal(cxpId) {
   if (!cxp) return;
 
   openModal({
-    title: `💳 Abonar a Deuda — ${cxp.acreedor}`,
+    title: `Abonar a Deuda — ${cxp.acreedor}`,
     icon: "fa-hand-holding-dollar",
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -3202,7 +3491,7 @@ function openPayAccountPayableModal(cxpId) {
           </div>
         </div>
 
-        <div class="form-grid-2">
+        <div class="form-grid-3">
           <div class="form-field">
             <label><i class="fas fa-dollar-sign"></i> Monto a Abonar ($ USD) *</label>
             <input type="number" step="5" min="1" max="${cxp.saldo_pendiente}" id="pay-cxp-amount" value="${cxp.saldo_pendiente}" required />
@@ -3213,6 +3502,12 @@ function openPayAccountPayableModal(cxpId) {
               <option value="efectivo">Efectivo ($ USD)</option>
               <option value="pago_movil">Pago Móvil (Bs.)</option>
               <option value="transferencia">Transferencia Bancaria</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
+            <select id="pay-cxp-account" style="font-weight:800;">
+              ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
             </select>
           </div>
           <div class="form-field" style="grid-column:1/-1;">
@@ -3238,6 +3533,7 @@ function saveAccountPayableAbono(cxpId) {
 
   const amount = Number(document.getElementById("pay-cxp-amount")?.value) || 0;
   const method = document.getElementById("pay-cxp-method")?.value || "efectivo";
+  const cuenta = document.getElementById("pay-cxp-account")?.value || (method === "efectivo" ? "efectivo" : "mercantil");
   const ref = (document.getElementById("pay-cxp-ref")?.value || "").trim();
 
   if (amount <= 0) {
@@ -3257,6 +3553,7 @@ function saveAccountPayableAbono(cxpId) {
     fecha: new Date().toISOString().slice(0, 10),
     monto: amount,
     metodo: method,
+    cuenta: cuenta,
     referencia: ref,
     registrado_por: currentUser ? currentUser.nombre : "Sistema"
   });
@@ -3270,6 +3567,7 @@ function saveAccountPayableAbono(cxpId) {
     concepto: `Abono a deuda de ${cxp.acreedor} (${cxp.concepto})`,
     monto: amount,
     metodo: method,
+    cuenta: cuenta,
     referencia: ref,
     orden_id: cxp.id_cxp,
     codigo_troquel: "-",
@@ -3390,7 +3688,7 @@ function renderEnriqueHub() {
         </div>
         <div>
           <div class="giant-tile-title">4 y 5. Terminado y Control de Calidad</div>
-          <div class="giant-tile-desc">Evaluar tolerancias: ✔️ Aprobar y Pasar a Entregado (congelando factura) o ❌ Rechazar y Devolver al Técnico con motivo.</div>
+          <div class="giant-tile-desc">Evaluar tolerancias: Aprobar y Pasar a Entregado (congelando factura) o Rechazar y Devolver al Técnico con motivo.</div>
         </div>
       </div>
 
@@ -3552,13 +3850,13 @@ function renderPipelineScreen(forcedState) {
         </div>
         <div class="admin-context-actions">
           <button type="button" class="btn btn--warning btn--xs" onclick="setPhaseFilter('aprobacion')">
-            ⏳ Por Aprobar (${counts.aprobacion})
+            <i class="fas fa-hourglass-half"></i> Por Aprobar (${counts.aprobacion})
           </button>
           <button type="button" class="btn btn--primary btn--xs" onclick="setPhaseFilter('calidad')">
-            🛡️ Calidad (${counts.calidad})
+            <i class="fas fa-shield-alt"></i> Calidad (${counts.calidad})
           </button>
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('accounts_receivable')">
-            💵 Por Cobrar
+            <i class="fas fa-hand-holding-dollar"></i> Por Cobrar
           </button>
         </div>
       </div>
@@ -3575,7 +3873,7 @@ function renderPipelineScreen(forcedState) {
           Seguimiento de Órdenes y Producción (Por Código de Troquel)
         </h2>
         <p style="font-size:12.5px; color:var(--text-muted);">
-          Flujo de 6 etapas del taller: 1. Recepción ➔ 2. Diagnóstico ➔ 3. Aprobación ➔ 4. Servicio ➔ 5. Calidad ➔ 6. Entrega.
+          Flujo de 6 etapas del taller: 1. Recepción -> 2. Diagnóstico -> 3. Aprobación -> 4. Servicio -> 5. Calidad -> 6. Entrega.
         </p>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -3593,7 +3891,7 @@ function renderPipelineScreen(forcedState) {
           Activas en Taller (${counts.all})
         </button>
         <button type="button" class="btn btn--gold" onclick="openNewOrderModal()">
-          <i class="fas fa-plus"></i> + Nueva Orden
+          <i class="fas fa-plus"></i> Nueva Orden
         </button>
       </div>
     </div>
@@ -3633,10 +3931,10 @@ function renderPipelineScreen(forcedState) {
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px; background:var(--bg-card); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); flex-wrap:wrap;">
           <span style="font-size:12px; font-weight:800; color:var(--text-muted);">Filtrar Historial:</span>
           <button type="button" class="btn ${pipelineWarrantySubfilter === "all" ? "btn--primary" : "btn--ghost"}" style="padding:4px 10px; font-size:11.5px; border-radius:99px;" onclick="setWarrantySubfilter('all')">
-            Todas las Archivadas (${counts.archivados})
+            <i class="fas fa-boxes-packing"></i> Todas las Archivadas (${counts.archivados})
           </button>
           <button type="button" class="btn ${pipelineWarrantySubfilter === "active_warranty" ? "btn--danger" : "btn--ghost"}" style="padding:4px 10px; font-size:11.5px; border-radius:99px;" onclick="setWarrantySubfilter('active_warranty')">
-            <i class="fas fa-shield-alt"></i> 🛡️ Garantías Activas (${counts.garantias})
+            <i class="fas fa-shield-alt"></i> Garantías Activas (${counts.garantias})
           </button>
         </div>
       `
@@ -3678,7 +3976,7 @@ function renderOrdersCompactTable(orders) {
       if (isEntregado) {
         const expStr = o.fecha_garantia_hasta || "";
         const daysLeft = expStr ? Math.ceil((new Date(expStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : 0;
-        statusBadge = `<span class="warranty-badge ${daysLeft > 0 ? "warranty-badge--valid" : "warranty-badge--expired"}">🛡️ ${daysLeft > 0 ? `${daysLeft}d garantía` : "Garantía exp."}</span>`;
+        statusBadge = `<span class="warranty-badge ${daysLeft > 0 ? "warranty-badge--valid" : "warranty-badge--expired"}"><i class="fas fa-shield-alt"></i> ${daysLeft > 0 ? `${daysLeft}d garantía` : "Garantía exp."}</span>`;
       } else if (isAnulado) {
         statusBadge = `<span class="state-badge" style="background:rgba(239,68,68,0.2); color:#ef4444; border-color:#ef4444;">ANULADA</span>`;
       }
@@ -3765,7 +4063,7 @@ async function cancelOrderWithReason(orderId) {
   if (!o) return;
 
   const { value: reason } = await Swal.fire({
-    title: `🚫 Anular Orden — Troquel #${o.codigo_troquel}`,
+    title: `Anular Orden — Troquel #${o.codigo_troquel}`,
     html: `
       <div style="text-align:left; font-size:13px; color:var(--text-muted); margin-bottom:12px;">
         Esta acción marcará la orden como <strong>ANULADA</strong>. El número de troquel (#${o.codigo_troquel}) y el cliente permanecerán en el historial de auditoría permanente sin generar cobro.
@@ -3798,7 +4096,7 @@ async function cancelOrderWithReason(orderId) {
       autor_nombre: currentUser ? currentUser.nombre : "Administración",
       autor_rol: currentUser ? currentUser.rol_label || "Jefe de Taller" : "Admin",
       tipo_evento: "anulacion",
-      mensaje: `🚫 ORDEN ANULADA. Motivo: ${o.motivo_anulacion}. El troquel #${o.codigo_troquel} queda archivado en auditoría.`,
+      mensaje: `ORDEN ANULADA. Motivo: ${o.motivo_anulacion}. El troquel #${o.codigo_troquel} queda archivado en auditoría.`,
       foto_adjunta_url: "",
       fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
     });
@@ -3806,7 +4104,7 @@ async function cancelOrderWithReason(orderId) {
     saveDatabase();
     renderApp();
 
-    sendPushNotification("🚫 Orden Anulada en Taller", {
+    sendPushNotification("Orden Anulada en Taller", {
       body: `Troquel #${o.codigo_troquel} anulado por ${currentUser?.nombre}. Motivo: ${o.motivo_anulacion}`,
       tag: "order-canceled"
     });
@@ -3844,7 +4142,7 @@ function renderOrderCardTelegramStyle(order) {
     control_calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
     entrega: { label: "6. Entrega", cls: "state-badge--done", icon: "fa-truck" },
     entregado: { label: "6. Entrega", cls: "state-badge--done", icon: "fa-truck" },
-    archivado: { label: "📦 Archivado", cls: "state-badge--archive", icon: "fa-archive" },
+    archivado: { label: "Archivado", cls: "state-badge--archive", icon: "fa-box-archive" },
     anulado: { label: "Anulada", cls: "state-badge--danger", icon: "fa-ban" }
   };
   const st = stateMap[order.estado_actual] || stateMap.recepcion;
@@ -3857,42 +4155,114 @@ function renderOrderCardTelegramStyle(order) {
   };
   const finBadge = finBadgeMap[order.tipo_condicion_pago] || finBadgeMap.pendiente_definir;
 
-  const subtasksListHtml = subtasks
-    .map((s) => {
-      const stateText =
-        s.estado_subtarea === "terminado"
-          ? "✅ Terminado"
-          : s.estado_subtarea === "empezado"
-          ? "🔨 En Proceso"
-          : s.estado_subtarea === "pausado"
-          ? "⏸️ Pausado / Imprevisto"
-          : "⏳ Por Hacer / Pendiente";
-      const timerBadge =
-        s.estado_subtarea === "empezado"
-          ? `<span style="color:#0284c7; font-family:'JetBrains Mono',monospace; font-weight:800; margin-left:6px;" data-live-subtask-id="${s.id_subtarea}">⏱️ ${formatLiveSubtaskTimer(s)}</span>`
-          : (s.minutos_acumulados || s.tiempo_neto_min) > 0
-          ? `<span style="color:var(--text-muted); margin-left:6px;">⏱️ ${formatMinutes(s.minutos_acumulados || s.tiempo_neto_min)}</span>`
-          : "";
-      return `
-        <div class="subtask-mini-item ${s.estado_subtarea === "terminado" ? "done" : ""}">
+  const subtasksListHtml = subtasks.length
+    ? subtasks
+        .map((s) => {
+          const stateText =
+            s.estado_subtarea === "terminado"
+              ? '<i class="fas fa-check-circle" style="color:#22c55e;"></i> Terminado'
+              : s.estado_subtarea === "empezado"
+              ? '<i class="fas fa-wrench" style="color:#0284c7;"></i> En Proceso'
+              : s.estado_subtarea === "pausado"
+              ? '<i class="fas fa-pause-circle" style="color:#f59e0b;"></i> Pausado'
+              : '<i class="fas fa-clock" style="color:#94a3b8;"></i> Por Hacer';
+          const timerBadge =
+            s.estado_subtarea === "empezado"
+              ? `<span style="color:#0284c7; font-family:'JetBrains Mono',monospace; font-weight:800; margin-left:6px;" data-live-subtask-id="${s.id_subtarea}"><i class="fas fa-stopwatch"></i> ${formatLiveSubtaskTimer(s)}</span>`
+              : (s.minutos_acumulados || s.tiempo_neto_min) > 0
+              ? `<span style="color:var(--text-muted); margin-left:6px;"><i class="fas fa-stopwatch"></i> ${formatMinutes(s.minutos_acumulados || s.tiempo_neto_min)}</span>`
+              : "";
+          return `
+            <div class="order-service-entry ${s.estado_subtarea === "terminado" ? "done" : ""}">
+              <div style="flex:1;">
+                <div style="font-weight:800; font-size:12.5px; color:var(--text-main);">
+                  ${s.descripcion_servicio} ${s.es_item_extra ? '<span style="font-size:10px; color:var(--renacer-gold); font-weight:900;">(Ítem Extra)</span>' : ""}
+                </div>
+                <div style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:2px;">
+                  <span>Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong></span>
+                  ${canManage ? `<button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-size:10.5px; margin-left:4px; font-weight:800;" onclick="openAssignSubtaskModal('${s.id_subtarea}', '${order.id_orden}')" title="Asignar o cambiar técnico">[<i class="fas fa-user-plus"></i> ${s.tecnico_id ? "Cambiar" : "Asignar"}]</button>` : ""}
+                  ${canManage && s.tecnico_id ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:4px; font-weight:800;" onclick="unassignTechnicianFromOrderCard('${s.id_subtarea}', '${order.id_orden}')" title="Quitar asignación">[<i class="fas fa-user-minus"></i> Quitar]</button>` : ""}
+                  ${canManage && !isEntregado ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:6px; font-weight:800;" onclick="removeSubtaskFromOrder('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar ítem">[<i class="fas fa-trash-alt"></i>]</button>` : ""}
+                  <span>·</span>
+                  <span>${stateText}</span>
+                  ${timerBadge}
+                </div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:13px; color:var(--text-main);">$${Number(s.monto_servicio).toFixed(2)}</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#22c55e; font-weight:800;">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
+              </div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div style="font-size:11.5px; color:var(--text-muted); padding:8px 0; text-align:center;">No hay servicios presupuestados aún.</div>`;
+
+  // Agrupación de destajo y tercerización para el Bloque 2 (Diseño Imagen 6)
+  const techMap = {};
+  subtasks.forEach((s) => {
+    const tId = s.tecnico_id || "unassigned";
+    const tName = s.nombre_tecnico || "Sin asignar";
+    if (!techMap[tId]) {
+      const u = db.usuarios.find(
+        (user) => user.id_usuario === tId || (user.nombre && user.nombre.toLowerCase().trim() === tName.toLowerCase().trim())
+      );
+      const isExt = Boolean(u && (u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo));
+      techMap[tId] = {
+        id: tId,
+        nombre: tName,
+        isExternal: isExt,
+        servicios: [],
+        totalComm: 0
+      };
+    }
+    techMap[tId].servicios.push(s.descripcion_servicio);
+    techMap[tId].totalComm += Number(s.comision_base_tecnico || 0);
+  });
+
+  const assignedTechKeys = Object.keys(techMap).filter((k) => k !== "unassigned");
+  const unassignedSubs = techMap["unassigned"] ? techMap["unassigned"].servicios : [];
+
+  let assignmentsHtml = "";
+  if (assignedTechKeys.length > 0) {
+    assignmentsHtml = assignedTechKeys
+      .map((k) => {
+        const t = techMap[k];
+        return `
+        <div class="order-assignee-card ${t.isExternal ? "order-assignee-card--external" : ""}">
           <div style="flex:1;">
-            <strong>${s.descripcion_servicio}</strong>
-            <div style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:2px;">
-              <span>Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong></span>
-              ${canManage && s.tecnico_id ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:4px; font-weight:800;" onclick="unassignTechnicianFromOrderCard('${s.id_subtarea}', '${order.id_orden}')" title="Quitar asignación de técnico">[✕ Quitar]</button>` : ""}
-              <span>·</span>
-              <span>${stateText}</span>
-              ${timerBadge}
+            <div style="font-weight:900; font-size:13px; color:var(--text-main);">
+              ${t.isExternal ? '<span class="badge-external"><i class="fas fa-handshake"></i> EXTERNO</span> ' : '<i class="fas fa-user-gear" style="color:var(--renacer-gold); font-size:12px;"></i> '}
+              ${t.nombre}
+            </div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px; line-height:1.35;">
+              ${t.servicios.join(", ")}
             </div>
           </div>
-          <div style="text-align:right;">
-            <div style="font-weight:900; font-size:12.5px;">$${Number(s.monto_servicio).toFixed(2)}</div>
-            <div style="font-size:10px; color:#16a34a; font-weight:800;">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
+          <div style="text-align:right; margin-left:8px;">
+            <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">
+              ${t.isExternal ? "Costo Tercero" : "Comisión"}
+            </div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:${t.isExternal ? "#38bdf8" : "#22c55e"};">
+              $${t.totalComm.toFixed(2)}
+            </div>
           </div>
         </div>
       `;
-    })
-    .join("");
+      })
+      .join("");
+  }
+  if (unassignedSubs.length > 0) {
+    assignmentsHtml += `
+      <div style="font-size:11.5px; color:var(--text-muted); padding:6px 10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px dashed var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+        <span><i class="fas fa-clock" style="color:#f59e0b;"></i> ${unassignedSubs.length} tarea(s) pendientes de asignar</span>
+        ${canManage ? `<button type="button" class="btn btn--gold btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')">Asignar Ahora</button>` : ""}
+      </div>
+    `;
+  }
+  if (!assignedTechKeys.length && !unassignedSubs.length) {
+    assignmentsHtml = `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">Sin subtareas registradas en esta orden.</div>`;
+  }
 
   // Botón de acción según el flujo de las 6 etapas oficiales de Jesús Andrade
   let primaryActionBtn = "";
@@ -3903,7 +4273,7 @@ function renderOrderCardTelegramStyle(order) {
           <i class="fas fa-hand-holding-usd"></i> Presupuesto / Abono
         </button>
         <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'diagnostico')">
-          Pasar a 2. Diagnóstico ➔
+          Pasar a 2. Diagnóstico <i class="fas fa-arrow-right"></i>
         </button>
       </div>
     `;
@@ -3914,7 +4284,7 @@ function renderOrderCardTelegramStyle(order) {
           <i class="fas fa-pen"></i> Ajustar Presupuesto
         </button>
         <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'aprobacion')">
-          Enviar a 3. Aprobación ➔
+          Enviar a 3. Aprobación <i class="fas fa-arrow-right"></i>
         </button>
       </div>
     `;
@@ -3926,7 +4296,7 @@ function renderOrderCardTelegramStyle(order) {
         </button>
         ${canManage ? `
           <button type="button" class="btn btn--gold" onclick="openSubtaskAssignmentModal('${order.id_orden}')">
-            <i class="fas fa-user-check"></i> Asignar a 4. Servicio ➔
+            <i class="fas fa-user-check"></i> Asignar a 4. Servicio <i class="fas fa-arrow-right"></i>
           </button>
         ` : ""}
       </div>
@@ -3938,7 +4308,7 @@ function renderOrderCardTelegramStyle(order) {
           <i class="fas fa-users-cog"></i> Matriz / Reasignar
         </button>
         <button type="button" class="btn btn--success" onclick="moveOrderToQualityControl('${order.id_orden}')">
-          <i class="fas fa-shield-alt"></i> 🛡️ Enviar a 5. Calidad ➔
+          <i class="fas fa-shield-alt"></i> Enviar a 5. Calidad <i class="fas fa-arrow-right"></i>
         </button>
       </div>
     `;
@@ -3946,10 +4316,10 @@ function renderOrderCardTelegramStyle(order) {
     primaryActionBtn = `
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
         <button type="button" class="btn btn--danger" style="padding:7px 10px;" onclick="promptRejectQualityControl('${order.id_orden}')">
-          ❌ Devolver a Servicio
+          <i class="fas fa-rotate-left"></i> Devolver a Servicio
         </button>
         <button type="button" class="btn btn--success" style="padding:7px 11px;" onclick="openQualityAndDeliveryModal('${order.id_orden}')">
-          ✔️ Aprobar y Pasar a 6. Entrega ➔
+          <i class="fas fa-check-circle"></i> Aprobar y Pasar a 6. Entrega <i class="fas fa-arrow-right"></i>
         </button>
       </div>
     `;
@@ -3962,7 +4332,7 @@ function renderOrderCardTelegramStyle(order) {
           </button>
         ` : `<span class="state-badge state-badge--done" style="font-size:11px; padding:6px 10px;"><i class="fas fa-check"></i> 100% Pagada</span>`}
         <button type="button" class="btn btn--gold" onclick="archiveOrder('${order.id_orden}')" title="Mover orden a histórico y garantía">
-          <i class="fas fa-archive"></i> 📦 Archivar Orden
+          <i class="fas fa-box-archive"></i> Archivar Orden
         </button>
       </div>
     `;
@@ -3979,9 +4349,9 @@ function renderOrderCardTelegramStyle(order) {
     } else {
       primaryActionBtn = `
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <span class="state-badge state-badge--archive"><i class="fas fa-archive"></i> Archivada</span>
+          <span class="state-badge state-badge--archive"><i class="fas fa-box-archive"></i> Archivada</span>
           <button type="button" class="btn btn--warning" onclick="openWarrantyClaimModal('${order.id_orden}')" title="Reingresar pieza bajo garantía de 1 año">
-            <i class="fas fa-shield-halved"></i> 🛡️ Activar Garantía
+            <i class="fas fa-shield-halved"></i> Activar Garantía
           </button>
         </div>
       `;
@@ -4003,7 +4373,7 @@ function renderOrderCardTelegramStyle(order) {
           </span>
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
-          ${order.prioridad_alta ? `<span class="priority-fire-badge" title="Pago Total 100%">🔥 Prioridad</span>` : ""}
+          ${order.prioridad_alta ? `<span class="priority-fire-badge" title="Prioridad Alta"><i class="fas fa-bolt"></i> Prioridad</span>` : ""}
           <span class="state-badge ${st.cls}">
             <i class="fas ${st.icon}"></i> ${st.label}
           </span>
@@ -4015,7 +4385,7 @@ function renderOrderCardTelegramStyle(order) {
         ${
           order.estado_actual === "anulado"
             ? `<div style="background:rgba(239,68,68,0.14); border:1px solid #ef4444; color:#fca5a5; padding:8px 12px; border-radius:10px; font-size:12px; font-weight:700; margin-bottom:8px;">
-                🚫 <strong>ORDEN ANULADA:</strong> ${order.motivo_anulacion || "Sin motivo especificado"}
+                <i class="fas fa-ban"></i> <strong>ORDEN ANULADA:</strong> ${order.motivo_anulacion || "Sin motivo especificado"}
                 <div style="font-size:10.5px; opacity:0.85; margin-top:2px;">El número de Troquel #${order.codigo_troquel} se conserva en auditoría sin deuda.</div>
               </div>`
             : ""
@@ -4037,7 +4407,7 @@ function renderOrderCardTelegramStyle(order) {
         ${
           order.devuelto_calidad && order.motivo_rechazo_qc
             ? `<div style="background:rgba(220,38,38,0.12); border:1px solid #dc2626; color:#f87171; padding:8px 10px; border-radius:10px; font-size:12px; font-weight:700;">
-                ❌ <strong>Devuelto por Calidad:</strong> ${order.motivo_rechazo_qc}
+                <i class="fas fa-times-circle"></i> <strong>Devuelto por Calidad:</strong> ${order.motivo_rechazo_qc}
               </div>`
             : ""
         }
@@ -4066,7 +4436,7 @@ function renderOrderCardTelegramStyle(order) {
           const allImgs = [...(order.galeria_fotos_pieza || []), ...(order.galeria_fotos_repuestos || [])];
           if (!allImgs.length) return "";
           return `
-            <div style="display:flex; align-items:center; gap:6px; margin:6px 0; overflow-x:auto; padding-bottom:2px;">
+            <div style="display:flex; align-items:center; gap:6px; margin:4px 0; overflow-x:auto; padding-bottom:2px;">
               ${allImgs.slice(0, 4).map((u, idx) => `
                 <img
                   src="${u}"
@@ -4085,43 +4455,53 @@ function renderOrderCardTelegramStyle(order) {
           `;
         })()}
 
-        <!-- Resumen Financiero -->
-        <div class="order-finance-strip">
-          <div class="finance-cell">
-            <span>Total</span>
-            <strong>$${Number(order.monto_total).toFixed(2)}</strong>
-          </div>
-          <div class="finance-cell">
-            <span>Abonado</span>
-            <strong style="color:#22c55e;">$${Number(order.monto_abonado).toFixed(2)}</strong>
-          </div>
-          <div class="finance-cell">
-            <span>Resto</span>
-            <strong style="color:${order.saldo_pendiente > 0 ? "#f87171" : "#22c55e"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
-          </div>
-        </div>
-
-        <!-- Servicios / Factura Dinámica -->
-        <div>
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:6px;">
-            <span style="font-size:11px; font-weight:800; text-transform:uppercase; color:var(--text-muted);">
-              ${isEntregado ? "🔒 Factura Cerrada" : "Subtareas y Destajo (" + subtasks.length + ")"}
-            </span>
+        <!-- BLOQUE 1: SERVICIOS Y PRESUPUESTO CLIENTE (DISEÑO IMAGEN 6) -->
+        <div class="order-section-block">
+          <div class="order-section-title">
+            <span><i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> Servicios:</span>
             ${
               !isEntregado && canManage
                 ? `<div style="display:flex; gap:5px;">
-                    <button type="button" class="btn btn--gold" style="padding:3px 8px; font-size:11px; border-radius:7px;" onclick="openQuickExtraItemModal('${order.id_orden}')">
-                      + Ítem Extra
-                    </button>
-                    <button type="button" class="btn btn--ghost" style="padding:3px 7px; font-size:11px; border-radius:7px;" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar presupuesto y comisiones">
-                      <i class="fas fa-pen"></i>
-                    </button>
+                    <button type="button" class="btn btn--gold btn--xs" onclick="openQuickExtraItemModal('${order.id_orden}')" title="Añadir ítem extra">+ Ítem Extra</button>
+                    <button type="button" class="btn btn--ghost btn--xs" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar presupuesto y comisiones"><i class="fas fa-pen"></i></button>
                   </div>`
                 : ""
             }
           </div>
+
           <div class="subtasks-mini-list">
             ${subtasksListHtml}
+          </div>
+
+          <!-- Resumen Financiero Total / Abonado / Resto -->
+          <div class="order-finance-strip" style="margin-top:6px;">
+            <div class="finance-cell">
+              <span>TOTAL</span>
+              <strong>$${Number(order.monto_total).toFixed(2)}</strong>
+            </div>
+            <div class="finance-cell">
+              <span>ABONADO</span>
+              <strong style="color:#22c55e;">$${Number(order.monto_abonado).toFixed(2)}</strong>
+            </div>
+            <div class="finance-cell">
+              <span>RESTO</span>
+              <strong style="color:${order.saldo_pendiente > 0 ? "#f87171" : "#22c55e"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- BLOQUE 2: ASIGNACIONES / COMISIONES Y TERCERIZADOS (DISEÑO IMAGEN 6) -->
+        <div class="order-section-block">
+          <div class="order-section-title">
+            <span><i class="fas fa-users-cog" style="color:var(--renacer-gold);"></i> Asignaciones / Comisiones:</span>
+            ${
+              canManage
+                ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Abrir matriz de asignación"><i class="fas fa-sliders-h"></i> Matriz</button>`
+                : ""
+            }
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            ${assignmentsHtml}
           </div>
         </div>
       </div>
@@ -4135,7 +4515,10 @@ function renderOrderCardTelegramStyle(order) {
           <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px;" onclick="openOrderCrmModal('${order.id_orden}')" title="Abrir bitácora y chat de la orden">
             <i class="fas fa-comments"></i> ${chatMessages.length}
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar por WhatsApp con Políticas">
+          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#38bdf8;" onclick="openWhatsAppTermsOnlyModal('${order.id_orden}')" title="Enviar Términos y Comprobante de Recepción por WhatsApp (Sin Precios)">
+            <i class="fas fa-file-contract"></i>
+          </button>
+          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar Presupuesto Oficial Detallado por WhatsApp">
             <i class="fab fa-whatsapp"></i>
           </button>
           <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#38bdf8;" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket de Recepción (4 Políticas)">
@@ -4265,12 +4648,135 @@ function deleteSubtaskDirect(subtaskId, orderId) {
       saveDatabase();
       if (document.getElementById("live-assignment-totals-box")) {
         openSubtaskAssignmentModal(orderId);
+      } else if (document.getElementById("edit-subtasks-list")) {
+        openEditBudgetModal(orderId);
       } else {
         renderScreen();
       }
       showToast("Subtarea eliminada correctamente.");
     }
   });
+}
+
+function removeSubtaskFromOrder(subtaskId, orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (order && (order.estado_actual === "entregado" || order.factura_bloqueada)) {
+    showToast("No se pueden eliminar ítems de una orden ya entregada y con factura cerrada.", "error");
+    return;
+  }
+  deleteSubtaskDirect(subtaskId, orderId);
+}
+
+function openAssignSubtaskModal(subtaskId, orderId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!sub || !order) return;
+
+  const techs = db.usuarios.filter(
+    (u) => (u.rol === "tecnico" || u.rol === "jefe_taller" || u.rol === "admin" || u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo) && u.activo
+  );
+  const optionsHtml = techs.map((u) => {
+    const isExt = Boolean(u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo);
+    return `
+      <option value="${u.id_usuario}" ${sub.tecnico_id === u.id_usuario ? "selected" : ""}>
+        ${isExt ? "[EXTERNO] " : ""}${u.nombre} (${u.rol_label || u.rol})
+      </option>
+    `;
+  }).join("");
+
+  openModal({
+    title: `Asignar Técnico / Taller Externo — Troquel #${order.codigo_troquel}`,
+    icon: "fa-user-check",
+    body: `
+      <div style="background:var(--bg-card); padding:12px; border-radius:10px; margin-bottom:12px; border:1px solid var(--border-color);">
+        <div style="font-weight:900; font-size:14px; color:#fff;">${sub.descripcion_servicio}</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:3px; display:flex; gap:14px; flex-wrap:wrap;">
+          <span>Precio Cliente: <strong>$${Number(sub.monto_servicio).toFixed(2)}</strong></span>
+          <span style="color:#22c55e;">Comisión / Costo Base: <strong>$${Number(sub.comision_base_tecnico).toFixed(2)}</strong></span>
+        </div>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label><i class="fas fa-user"></i> Técnico o Taller Externo (Solteca) *</label>
+          <select id="assign-sub-user">
+            <option value="">-- Sin Asignar --</option>
+            ${optionsHtml}
+          </select>
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-tasks"></i> Estado del Trabajo *</label>
+          <select id="assign-sub-status">
+            <option value="pendiente" ${sub.estado_subtarea === "pendiente" ? "selected" : ""}>Por Hacer / Pendiente</option>
+            <option value="empezado" ${sub.estado_subtarea === "empezado" ? "selected" : ""}>En Proceso</option>
+            <option value="terminado" ${sub.estado_subtarea === "terminado" ? "selected" : ""}>Terminado (Listo)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-dollar-sign"></i> Comisión al Técnico o Costo Tercerizado ($) *</label>
+        <input type="number" step="0.5" id="assign-sub-comm" value="${Number(sub.comision_base_tecnico) || 0}" style="font-family:'JetBrains Mono',monospace; font-weight:900;" />
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveAssignSubtask('${subtaskId}', '${orderId}')">
+        <i class="fas fa-check"></i> Guardar Asignación
+      </button>
+    `
+  });
+}
+
+function saveAssignSubtask(subtaskId, orderId) {
+  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!sub || !order) return;
+
+  const userId = document.getElementById("assign-sub-user")?.value;
+  const newStatus = document.getElementById("assign-sub-status")?.value || "pendiente";
+  const commVal = Number(document.getElementById("assign-sub-comm")?.value);
+
+  if (!isNaN(commVal) && commVal >= 0) {
+    sub.comision_base_tecnico = commVal;
+  }
+
+  if (userId) {
+    const user = db.usuarios.find((u) => u.id_usuario === userId);
+    sub.tecnico_id = user.id_usuario;
+    sub.nombre_tecnico = user.nombre;
+    sub.es_outsourcing = Boolean(user && (user.rol === "outsourcing" || user.tipo === "taller_externo" || user.es_externo));
+  } else {
+    sub.tecnico_id = null;
+    sub.nombre_tecnico = "Sin asignar";
+    sub.es_outsourcing = false;
+  }
+
+  sub.estado_subtarea = newStatus;
+  if (newStatus === "terminado") {
+    sub.inicio_activo_ts = null;
+    if (!sub.minutos_acumulados || sub.minutos_acumulados <= 0) {
+      sub.minutos_acumulados = 15;
+    }
+  }
+
+  const nowStr = cleanDateISO(new Date().toISOString(), true);
+  db.bitacora.push({
+    id_mensaje: "MSG-" + Date.now(),
+    orden_id: order.id_orden,
+    codigo_troquel: order.codigo_troquel,
+    autor_id: currentUser ? currentUser.id_usuario : "USR-SYS",
+    autor_nombre: currentUser ? currentUser.nombre : "Sistema",
+    autor_rol: currentUser ? currentUser.rol_label : "Admin",
+    tipo_evento: "asignacion_rapida",
+    mensaje: `Subtarea "${sub.descripcion_servicio}" asignada a ${sub.nombre_tecnico} (Estado: ${newStatus}).`,
+    foto_adjunta_url: "",
+    fecha_hora: nowStr
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Subtarea asignada a ${sub.nombre_tecnico}.`);
 }
 
 function archiveOrder(orderId) {
@@ -4283,7 +4789,7 @@ function archiveOrder(orderId) {
         La orden con <strong>Troquel #${order.codigo_troquel}</strong> (${order.nombre_cliente} · ${order.datos_motor.marca} ${order.datos_motor.modelo}) saldrá del flujo activo de <strong>6. Entrega</strong> y pasará a <strong>Archivados & Garantía</strong>.
       </p>
       <div style="font-size:12px; color:#fde047; background:rgba(245,223,0,0.1); padding:8px 12px; border-radius:8px; border:1px solid rgba(245,223,0,0.3);">
-        🛡️ Se mantendrá disponible en el histórico bajo póliza de garantía de 1 año.
+        <i class="fas fa-shield-alt"></i> Se mantendrá disponible en el histórico bajo póliza de garantía de 1 año.
       </div>
     `,
     icon: "question",
@@ -4319,7 +4825,7 @@ function openWarrantyClaimModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
   Swal.fire({
-    title: `🛡️ Activar Garantía (Reingreso) — Troquel #${order.codigo_troquel}`,
+    title: `Activar Garantía (Reingreso) — Troquel #${order.codigo_troquel}`,
     html: `
       <p style="font-size:13px; color:#cbd5e1; margin-bottom:12px;">
         Registra el motivo por el cual el cliente <strong>${order.nombre_cliente}</strong> reingresa la pieza (${order.datos_motor.marca} ${order.datos_motor.modelo}) bajo garantía.
@@ -4352,7 +4858,7 @@ function openWarrantyClaimModal(orderId) {
         autor_nombre: currentUser.nombre,
         autor_rol: currentUser.rol_label,
         tipo_evento: "garantia",
-        mensaje: `⚠️ Reingreso por Garantía activado por ${currentUser.nombre}. Motivo: ${res.value}`,
+        mensaje: `Reingreso por Garantía activado por ${currentUser.nombre}. Motivo: ${res.value}`,
         foto_adjunta_url: "",
         fecha_hora: nowStr
       });
@@ -4886,7 +5392,7 @@ function openNewOrderModal() {
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                   <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11px;" onclick="addDemoPhotoToTempOrder('pieza')" title="Cargar foto de prueba">
-                    🧪 Foto Prueba
+                    Foto de Prueba
                   </button>
                   <label class="btn btn--primary" style="cursor:pointer; padding:6px 10px; font-size:11.5px;">
                     <i class="fas fa-upload"></i> Subir Fotos
@@ -4901,7 +5407,7 @@ function openNewOrderModal() {
               <div class="gallery-upload-header">
                 <div>
                   <h4 style="font-size:13.5px; font-weight:900; color:#b45309;">
-                    📷 Galería B: Fotos de Repuestos del Cliente
+                    <i class="fas fa-camera"></i> Galería B: Fotos de Repuestos del Cliente
                   </h4>
                   <p style="font-size:11.5px; color:var(--text-muted);">
                     Solo soporte visual de guías, válvulas, sellos o empacaduras traídas por el cliente (sin conteo de inventario).
@@ -4909,7 +5415,7 @@ function openNewOrderModal() {
                 </div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
                   <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11px;" onclick="addDemoPhotoToTempOrder('repuestos')" title="Cargar foto de repuestos de prueba">
-                    🧪 Foto Prueba
+                    Foto de Prueba
                   </button>
                   <label class="btn btn--gold" style="cursor:pointer; padding:6px 10px; font-size:11.5px;">
                     <i class="fas fa-camera"></i> Subir Fotos
@@ -5319,7 +5825,25 @@ function saveNewOrder() {
   saveDatabase();
   closeModal();
   renderApp();
-  showToast(`Troquel #${cleanTroquel} registrado en 1. Diagnóstico / Presupuesto.`);
+
+  if (clientObj && clientObj.telefono) {
+    Swal.fire({
+      title: `¡Troquel #${cleanTroquel} Registrado!`,
+      text: `¿Deseas enviar el comprobante de recepción con los Términos y Condiciones por WhatsApp a ${clientObj.nombre_completo} (sin precios)?`,
+      icon: "success",
+      showCancelButton: true,
+      confirmButtonColor: "#22c55e",
+      cancelButtonColor: "#64748b",
+      confirmButtonText: '<i class="fab fa-whatsapp"></i> Enviar Términos por WhatsApp',
+      cancelButtonText: 'Continuar en el Taller'
+    }).then((res) => {
+      if (res.isConfirmed) {
+        openWhatsAppTermsOnlyModal(newOrderId);
+      }
+    });
+  } else {
+    showToast(`Troquel #${cleanTroquel} registrado en 1. Diagnóstico / Presupuesto.`);
+  }
 }
 
 /* ============================================================================
@@ -5366,7 +5890,7 @@ function openFinancialApprovalModal(orderId) {
       <!-- Selector de las 3 Opciones Financieras -->
       <div class="fin-options-grid">
         <div id="fin-card-pago_total" class="fin-option-card" onclick="selectFinCondition('pago_total', ${order.monto_total})">
-          <span class="fin-option-badge" style="background:rgba(22,163,74,0.16); color:#15803d;">OPCIÓN A · PRIORIDAD ALTA 🔥</span>
+          <span class="fin-option-badge" style="background:rgba(22,163,74,0.16); color:#15803d;">OPCIÓN A · PRIORIDAD ALTA</span>
           <h4>Pago Total (100%)</h4>
           <p>El cliente liquida el 100% ($${Number(order.monto_total).toFixed(2)}) antes de iniciar. Marca automáticamente la orden con <strong>Prioridad Alta</strong>.</p>
         </div>
@@ -5438,9 +5962,9 @@ function selectFinCondition(optionKey, montoTotal) {
 
   detailsBox.innerHTML = `
     <div class="form-section-title">
-      <i class="fas fa-receipt"></i> Detalle del ${optionKey === "pago_total" ? "Pago Total (100%)" : "Abono Inicial"} y Soporte Fotográfico Obligatorio
+      <i class="fas fa-receipt"></i> Detalle del ${optionKey === "pago_total" ? "Pago Total (100%)" : "Abono Inicial"} y Soporte Multimedia
     </div>
-    <div class="form-grid-3">
+    <div class="form-grid-2">
       <div class="form-field">
         <label>Monto Recibido ($) *</label>
         <input
@@ -5466,18 +5990,28 @@ function selectFinCondition(optionKey, montoTotal) {
         />
       </div>
       <div class="form-field">
+        <label>Cuenta / Banco de Ingreso *</label>
+        <select id="fin-input-cuenta">
+          <option value="efectivo">Efectivo Físico / Caja ($)</option>
+          <option value="mercantil">Banco Mercantil (Pago Móvil / Transf.)</option>
+          <option value="bnc">Banco Nacional de Crédito (BNC)</option>
+          <option value="banesco">Banesco</option>
+          <option value="zelle_otro">Zelle / Otros ($)</option>
+        </select>
+      </div>
+      <div class="form-field">
         <label>Método de Pago *</label>
         <select id="fin-input-metodo">
           <option value="pago_movil">Transferencia / Pago Móvil</option>
-          <option value="efectivo">Efectivo (Billetes)</option>
-          <option value="transferencia">Zelle / Divisas Digital</option>
+          <option value="efectivo">Efectivo (Billetes Físicos)</option>
+          <option value="transferencia">Zelle / Transferencia Digital</option>
         </select>
       </div>
     </div>
 
     <div style="margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--bg-card); padding:12px; border-radius:12px; border:1.5px dashed var(--border-color);">
       <div>
-        <div style="font-size:13px; font-weight:900;">📸 Soporte Multimedia Obligatorio (Capture o Foto de Billetes)</div>
+        <div style="font-size:13px; font-weight:900;"><i class="fas fa-camera"></i> Soporte Multimedia Obligatorio (Capture o Foto de Billetes)</div>
         <div style="font-size:11.5px; color:var(--text-muted);">Adjunta la captura de la transferencia/Pago Móvil o la foto de los billetes recibidos en efectivo.</div>
       </div>
       <div style="display:flex; align-items:center; gap:10px;">
@@ -5517,6 +6051,7 @@ function confirmFinancialCondition() {
   const opt = tempFinConditionState.selectedOption;
   const abonoInput = document.getElementById("fin-input-abono");
   const metodoInput = document.getElementById("fin-input-metodo");
+  const cuentaInput = document.getElementById("fin-input-cuenta")?.value || "efectivo";
   const nuevoAbono = opt === "pago_total" ? Number(order.monto_total) : Math.max(0, Number(abonoInput?.value) || 0);
   const diferenciaAbono = Math.max(0, nuevoAbono - (Number(order.monto_abonado) || 0));
 
@@ -5529,6 +6064,7 @@ function confirmFinancialCondition() {
   order.monto_abonado = nuevoAbono;
   order.saldo_pendiente = Math.max(0, Number(order.monto_total) - nuevoAbono);
   order.metodo_pago = opt === "credito" && nuevoAbono === 0 ? "n/a" : metodoInput?.value || "pago_movil";
+  order.cuenta_pago = opt === "credito" && nuevoAbono === 0 ? "" : cuentaInput;
   order.comprobante_pago_foto = opt === "credito" && nuevoAbono === 0 ? "" : tempFinConditionState.proofPhotoDataUrl;
   order.prioridad_alta = opt === "pago_total";
 
@@ -5546,6 +6082,7 @@ function confirmFinancialCondition() {
       concepto: `${opt === "pago_total" ? "Pago Total 100%" : "Abono"} ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
       monto: diferenciaAbono,
       metodo: order.metodo_pago,
+      cuenta: cuentaInput,
       orden_id: order.id_orden
     });
   }
@@ -5559,7 +6096,7 @@ function confirmFinancialCondition() {
     autor_rol: currentUser.rol_label,
     tipo_evento: "finanzas",
     mensaje: `Condición financiera registrada: ${opt.toUpperCase()}. Abonado: $${nuevoAbono.toFixed(2)} | Resto: $${order.saldo_pendiente.toFixed(2)}. ${
-      order.prioridad_alta ? "🔥 Marcada con PRIORIDAD ALTA." : ""
+      order.prioridad_alta ? "Marcada con PRIORIDAD ALTA." : ""
     }`,
     foto_adjunta_url: order.comprobante_pago_foto || "",
     fecha_hora: nowStr
@@ -5654,22 +6191,36 @@ function openSubtaskAssignmentModal(orderId) {
   }
 
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
-  const technicians = db.usuarios.filter((u) => u.rol === "tecnico" && u.activo);
+  const assignableWorkers = db.usuarios.filter(
+    (u) => (u.rol === "tecnico" || u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo) && u.activo
+  );
+  const internalTechs = assignableWorkers.filter((u) => u.rol === "tecnico");
+  const externalWorkshops = assignableWorkers.filter((u) => u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo);
 
-  const techOptionsHtml = (selectedId) =>
-    `<option value="">-- Sin Asignar / Quitar Técnico --</option>` +
-    technicians
-      .map(
-        (t) =>
-          `<option value="${t.id_usuario}" ${t.id_usuario === selectedId ? "selected" : ""}>${t.nombre} (${t.especialidad})</option>`
-      )
-      .join("");
+  const techOptionsHtml = (selectedId) => {
+    let opts = `<option value="">-- Sin Asignar / Quitar Técnico --</option>`;
+    if (internalTechs.length) {
+      opts += `<optgroup label="Técnicos Internos (Destajo Taller)">`;
+      internalTechs.forEach((t) => {
+        opts += `<option value="${t.id_usuario}" ${t.id_usuario === selectedId ? "selected" : ""}>[Interno] ${t.nombre} (${t.especialidad})</option>`;
+      });
+      opts += `</optgroup>`;
+    }
+    if (externalWorkshops.length) {
+      opts += `<optgroup label="Talleres Externos (Outsourcing)">`;
+      externalWorkshops.forEach((w) => {
+        opts += `<option value="${w.id_usuario}" ${w.id_usuario === selectedId ? "selected" : ""}>[Externo] ${w.nombre} (${w.especialidad})</option>`;
+      });
+      opts += `</optgroup>`;
+    }
+    return opts;
+  };
 
   const stateBadgeLabel = (st) => {
-    if (st === "terminado") return `<span class="state-badge state-badge--done">✅ Terminado</span>`;
-    if (st === "empezado") return `<span class="state-badge state-badge--exec">🔨 En Proceso</span>`;
-    if (st === "pausado") return `<span class="state-badge state-badge--wait">⏸️ Pausado / Imprevisto</span>`;
-    return `<span class="state-badge state-badge--diag">⏳ Por Hacer / Pendiente</span>`;
+    if (st === "terminado") return `<span class="state-badge state-badge--done"><i class="fas fa-check-circle"></i> Terminado</span>`;
+    if (st === "empezado") return `<span class="state-badge state-badge--exec"><i class="fas fa-wrench"></i> En Proceso</span>`;
+    if (st === "pausado") return `<span class="state-badge state-badge--wait"><i class="fas fa-pause-circle"></i> Pausado</span>`;
+    return `<span class="state-badge state-badge--diag"><i class="fas fa-clock"></i> Por Hacer</span>`;
   };
 
   const rowsHtml = subtasks
@@ -5719,7 +6270,7 @@ function openSubtaskAssignmentModal(orderId) {
           <div style="display:flex; gap:4px; justify-content:center;">
             ${s.tecnico_id ? `
               <button type="button" class="btn btn--danger btn--xs" style="padding:4px 7px; font-size:10px; font-weight:800;" onclick="unassignSubtaskInModalDirect('${s.id_subtarea}', '${order.id_orden}')" title="Quitar técnico asignado">
-                ✕ Quitar
+                <i class="fas fa-times"></i> Quitar
               </button>
             ` : ""}
             <button type="button" class="btn btn--ghost btn--xs" style="padding:4px 6px; font-size:10.5px; color:#ef4444;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar subtarea">
@@ -5732,7 +6283,8 @@ function openSubtaskAssignmentModal(orderId) {
     )
     .join("");
 
-  const quickAssignButtons = technicians
+  const quickAssignButtons = internalTechs
+    .slice(0, 6)
     .map(
       (t) => `
       <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px;" onclick="assignAllSubtasksInModalTo('${t.id_usuario}', '${order.id_orden}')">
@@ -5765,8 +6317,8 @@ function openSubtaskAssignmentModal(orderId) {
           <div style="display:flex; gap:10px; align-items:center;">
             <img src="${(order.galeria_fotos_pieza && order.galeria_fotos_pieza[0]) || DEMO_PHOTOS.camaraCorsa}" style="width:74px; height:58px; object-fit:cover; border-radius:8px; border:1px solid var(--border-color);" />
             <div style="font-size:12px;">
-              <div>📸 <strong>${(order.galeria_fotos_pieza || []).length} foto(s)</strong> estado inicial de la pieza</div>
-              <div>📷 <strong>${(order.galeria_fotos_repuestos || []).length} foto(s)</strong> repuestos en mesa</div>
+              <div><i class="fas fa-camera"></i> <strong>${(order.galeria_fotos_pieza || []).length} foto(s)</strong> estado inicial de la pieza</div>
+              <div><i class="fas fa-camera"></i> <strong>${(order.galeria_fotos_repuestos || []).length} foto(s)</strong> repuestos en mesa</div>
               <button type="button" class="btn btn--ghost" style="margin-top:4px; padding:4px 8px; font-size:11px;" onclick="openDualGalleryInspector('${order.id_orden}')">
                 <i class="fas fa-expand"></i> Ver / Subir Fotos
               </button>
@@ -5885,7 +6437,7 @@ function updateLiveAssignmentTotals(orderId) {
     .map(
       (info) => `
       <div style="background:var(--bg-card); border:1px solid rgba(22,163,74,0.4); border-radius:10px; padding:8px 12px; font-size:12px;">
-        <strong>🔧 ${info.nombre}</strong> (${info.tareasCount} tarea/s)<br/>
+        <strong>[Interno] ${info.nombre}</strong> (${info.tareasCount} tarea/s)<br/>
         <span>En esta orden: <strong style="color:#16a34a;">+$${info.enEstaOrden.toFixed(2)}</strong></span> ·
         <span style="color:var(--text-muted);">Acumulado semanal proyectado: <strong>$${(info.acumuladoPrevio + info.enEstaOrden).toFixed(2)}</strong></span>
       </div>
@@ -5950,11 +6502,13 @@ function confirmSubtaskAssignments(orderId) {
       const tech = db.usuarios.find((u) => u.id_usuario === sel.value);
       s.tecnico_id = sel.value;
       s.nombre_tecnico = tech ? tech.nombre : "Asignado";
+      s.es_outsourcing = Boolean(tech && (tech.rol === "outsourcing" || tech.tipo === "taller_externo" || tech.es_externo));
       if (!s.estado_subtarea) s.estado_subtarea = "pendiente"; // Por Hacer / Pendiente por defecto
       assignedCount++;
     } else {
       s.tecnico_id = null;
       s.nombre_tecnico = "Sin asignar";
+      s.es_outsourcing = false;
     }
   });
 
@@ -6110,7 +6664,7 @@ function saveQuickExtraItem(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "presupuesto_abierto",
-    mensaje: `➕ Ítem Extra añadido a la factura abierta: "${desc}" (+$${price.toFixed(2)}). Nuevo Total Factura: $${order.monto_total.toFixed(2)} | Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
+    mensaje: `Ítem Extra añadido a la factura abierta: "${desc}" (+$${price.toFixed(2)}). Nuevo Total Factura: $${order.monto_total.toFixed(2)} | Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -6135,10 +6689,13 @@ function openEditBudgetModal(orderId) {
   const itemsHtml = subtasks
     .map(
       (s) => `
-      <div style="display:grid; grid-template-columns: 1fr 120px 120px; gap:8px; align-items:center; margin-bottom:8px;">
+      <div style="display:grid; grid-template-columns: 1fr 110px 110px 42px; gap:8px; align-items:center; margin-bottom:8px;">
         <input type="text" id="edit-sub-desc-${s.id_subtarea}" value="${s.descripcion_servicio}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;" />
         <input type="number" step="0.5" id="edit-sub-price-${s.id_subtarea}" value="${s.monto_servicio}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:900;" />
         <input type="number" step="0.5" id="edit-sub-comm-${s.id_subtarea}" value="${s.comision_base_tecnico}" style="padding:8px; border-radius:8px; border:1px solid rgba(22,163,74,0.4); font-weight:900; color:#15803d;" />
+        <button type="button" class="btn btn--danger" style="padding:8px; border-radius:8px; justify-content:center;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar este ítem del presupuesto">
+          <i class="fas fa-trash-alt"></i>
+        </button>
       </div>
     `
     )
@@ -6150,12 +6707,13 @@ function openEditBudgetModal(orderId) {
     wide: true,
     body: `
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Edita los montos de los servicios o registra un nuevo abono parcial del cliente. La factura permanece abierta hasta el estado 6. Entregado.
+        Edita los montos de los servicios, agrega ítems extras o elimina renglones que no se realizarán. El total y resto se recalculan en tiempo real.
       </p>
-      <div style="display:grid; grid-template-columns: 1fr 120px 120px; gap:8px; font-size:11px; font-weight:900; color:var(--text-muted); margin-bottom:6px;">
+      <div style="display:grid; grid-template-columns: 1fr 110px 110px 42px; gap:8px; font-size:11px; font-weight:900; color:var(--text-muted); margin-bottom:6px;">
         <span>SERVICIO / SUBTAREA</span>
         <span>MONTO CLIENTE ($)</span>
         <span>COMISIÓN TÉCNICO ($)</span>
+        <span></span>
       </div>
       <div id="edit-subtasks-list">${itemsHtml}</div>
       <button type="button" class="btn btn--ghost" style="margin-top:6px;" onclick="addExtraSubtaskToExistingOrder('${order.id_orden}')">
@@ -6272,7 +6830,7 @@ function moveOrderToTerminado(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "terminado",
-    mensaje: `🏁 Trabajo marcado como 4. Terminado por ${currentUser.nombre}. Pieza enviada a revisión de Control de Calidad.`,
+    mensaje: `Trabajo marcado como 4. Terminado por ${currentUser.nombre}. Pieza enviada a revisión de Control de Calidad.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -6298,7 +6856,7 @@ function moveOrderToQualityControl(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "control_calidad",
-    mensaje: `🔍 Orden en 5. Control de Calidad para evaluación de tolerancia y acabado.`,
+    mensaje: `Orden en 5. Control de Calidad para evaluación de tolerancia y acabado.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -6323,10 +6881,10 @@ function renderQualityAndDeliveryScreen() {
         <span style="font-size:11px; font-weight:900; color:#6d28d9; text-transform:uppercase;">
           FASE 2 · ESTADOS 4, 5 Y 6: BUCLE DE CONTROL DE CALIDAD Y CIERRE DE FACTURA
         </span>
-        <h2 style="font-size:20px; font-weight:900;">4. Terminado ➔ 5. Control de Calidad ➔ 6. Entregado</h2>
+        <h2 style="font-size:20px; font-weight:900;">4. Terminado -> 5. Control de Calidad -> 6. Entregado</h2>
         <p style="font-size:13px; color:var(--text-muted);">
-          <strong>Opción A:</strong> [ ✔️ Aprobar y Pasar a Entregado ] congela la factura y registra el ingreso en caja.<br/>
-          <strong>Opción B:</strong> [ ❌ Rechazar y Devolver al Técnico ] exige motivo del fallo, regresa la orden a <em>3. Asignación y Ejecución</em> y notifica al chat del técnico.
+          <strong>Opción A:</strong> [ Aprobar y Pasar a Entregado ] congela la factura y registra el ingreso en caja.<br/>
+          <strong>Opción B:</strong> [ Rechazar y Devolver al Técnico ] exige motivo del fallo, regresa la orden a <em>3. Asignación y Ejecución</em> y notifica al chat del técnico.
         </p>
       </div>
       <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-color); display:flex; align-items:center; gap:10px;">
@@ -6363,7 +6921,7 @@ function toggleQcStandbyMode(enabled) {
   );
 }
 
-/* ---------- OPCIÓN B DE FASE 2: [ ❌ Rechazar y Devolver al Técnico ] ---------- */
+/* ---------- OPCIÓN B DE FASE 2: [ Rechazar y Devolver al Técnico ] ---------- */
 function promptRejectQualityControl(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
@@ -6372,7 +6930,7 @@ function promptRejectQualityControl(orderId) {
   const techNames = [...new Set(subtasks.map((s) => s.nombre_tecnico).filter(Boolean))].join(", ") || "Técnico asignado";
 
   openModal({
-    title: `❌ Rechazar Control de Calidad y Devolver al Técnico — Troquel #${order.codigo_troquel}`,
+    title: `Rechazar Control de Calidad y Devolver al Técnico — Troquel #${order.codigo_troquel}`,
     icon: "fa-times-circle",
     body: `
       <div style="background:rgba(220,38,38,0.1); border:1.5px solid rgba(220,38,38,0.4); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px; color:#b91c1c;">
@@ -6397,7 +6955,7 @@ function promptRejectQualityControl(orderId) {
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--danger btn--lg" onclick="rejectQualityControlAndReturn('${order.id_orden}')">
-        ❌ Confirmar Rechazo y Devolver a 3. Asignación y Ejecución
+        <i class="fas fa-undo"></i> Confirmar Rechazo y Devolver a 3. Asignación y Ejecución
       </button>
     `
   });
@@ -6434,7 +6992,7 @@ function rejectQualityControlAndReturn(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "rechazo_calidad",
-    mensaje: `❌ RECHAZADO EN CONTROL DE CALIDAD — Devuelto a 3. Asignación y Ejecución. Motivo del fallo / corrección: "${reason}"`,
+    mensaje: `RECHAZADO EN CONTROL DE CALIDAD — Devuelto a 3. Asignación y Ejecución. Motivo del fallo / corrección: "${reason}"`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -6445,13 +7003,13 @@ function rejectQualityControlAndReturn(orderId) {
   showToast(`Orden ${order.id_orden} devuelta a 3. Asignación y Ejecución y notificada al chat del técnico.`, "error");
 }
 
-/* ---------- OPCIÓN A DE FASE 2: [ ✔️ Aprobar y Pasar a Entregado ] ---------- */
+/* ---------- OPCIÓN A DE FASE 2: [ Aprobar y Pasar a Entregado ] ---------- */
 function openQualityAndDeliveryModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
   openModal({
-    title: `✔️ Control de Calidad y Paso a 6. Entregado — Troquel #${order.codigo_troquel}`,
+    title: `Control de Calidad y Paso a 6. Entregado — Troquel #${order.codigo_troquel}`,
     icon: "fa-shield-alt",
     wide: true,
     body: `
@@ -6483,7 +7041,7 @@ function openQualityAndDeliveryModal(orderId) {
         ${
           order.saldo_pendiente > 0
             ? `
-            <div class="form-grid-2">
+            <div class="form-grid-3">
               <div class="form-field">
                 <label>Modalidad al Entregar la Pieza</label>
                 <select id="qc-delivery-pay-mode" onchange="toggleDeliveryPayAmount(this.value, ${order.saldo_pendiente})">
@@ -6492,8 +7050,14 @@ function openQualityAndDeliveryModal(orderId) {
                 </select>
               </div>
               <div class="form-field">
-                <label>Monto Cobrado en Caja al Entregar ($)</label>
+                <label>Monto Cobrado en Caja ($)</label>
                 <input type="number" id="qc-collect-amount" value="${order.saldo_pendiente}" min="0" max="${order.saldo_pendiente}" step="0.5" style="font-weight:900; color:#16a34a;" />
+              </div>
+              <div class="form-field">
+                <label>Cuenta / Caja Destino</label>
+                <select id="qc-collect-account" style="font-weight:800;">
+                  ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+                </select>
               </div>
             </div>
           `
@@ -6512,10 +7076,10 @@ function openQualityAndDeliveryModal(orderId) {
     `,
     footer: `
       <button type="button" class="btn btn--danger" onclick="promptRejectQualityControl('${order.id_orden}')">
-        ❌ Rechazar y Devolver al Técnico
+        <i class="fas fa-times-circle"></i> Rechazar y Devolver al Técnico
       </button>
       <button type="button" class="btn btn--success btn--lg" onclick="approveAndDeliverOrder('${order.id_orden}')">
-        ✔️ Aprobar y Pasar a 6. Entregado (Bloquear Factura)
+        <i class="fas fa-check-circle"></i> Aprobar y Pasar a 6. Entregado (Bloquear Factura)
       </button>
     `
   });
@@ -6537,6 +7101,7 @@ function approveAndDeliverOrder(orderId) {
 
   const collectEl = document.getElementById("qc-collect-amount");
   const collected = collectEl ? Math.max(0, Number(collectEl.value) || 0) : 0;
+  const cuentaDestino = document.getElementById("qc-collect-account")?.value || "efectivo";
   const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
 
   if (collected > 0) {
@@ -6552,7 +7117,8 @@ function approveAndDeliverOrder(orderId) {
       categoria: "Liquidación en Entrega",
       concepto: `Cobro en entrega de ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
       monto: collected,
-      metodo: "pago_movil",
+      metodo: cuentaDestino === "efectivo" ? "efectivo" : "pago_movil",
+      cuenta: cuentaDestino,
       orden_id: order.id_orden
     });
   }
@@ -6581,7 +7147,7 @@ function approveAndDeliverOrder(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "entrega",
-    mensaje: `✔️ Control de Calidad APROBADO por ${currentUser.nombre}. Orden en estado 6. Entregado y Factura Bloqueada definitivamente ($${Number(order.monto_total).toFixed(2)}). Póliza de garantía de 1 año activada hasta ${order.fecha_garantia_hasta}. ${
+    mensaje: `Control de Calidad APROBADO por ${currentUser.nombre}. Orden en estado 6. Entregado y Factura Bloqueada definitivamente ($${Number(order.monto_total).toFixed(2)}). Póliza de garantía de 1 año activada hasta ${order.fecha_garantia_hasta}. ${
       order.saldo_pendiente > 0 ? `Saldo pendiente en Cuentas por Cobrar: $${order.saldo_pendiente.toFixed(2)}.` : "Factura pagada al 100%."
     }`,
     foto_adjunta_url: "",
@@ -6615,30 +7181,106 @@ function buildWhatsAppBudgetPlainText(order) {
   };
 
   return (
-    `⚙️ *RECTIFICADORA RENACER (JOB 8:7)*\n` +
-    `📋 *ORDEN DE SERVICIO / PRESUPUESTO*\n` +
+    `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
+    `*ORDEN DE SERVICIO / PRESUPUESTO*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🔢 *Nro. de Orden:* ${order.id_orden}\n` +
-    `🏷️ *CÓDIGO DE TROQUEL (Nro. Pieza):* #${order.codigo_troquel}\n` +
-    `👤 *Cliente:* ${order.nombre_cliente} (${order.documento_cliente})\n` +
-    `🚗 *Pieza / Motor:* ${order.datos_motor.tipo_pieza} — ${order.datos_motor.marca} ${order.datos_motor.modelo}\n` +
-    `📌 *Estado Actual:* ${stateNames[order.estado_actual] || order.estado_actual}\n` +
+    `*Nro. de Orden:* ${order.id_orden}\n` +
+    `*CÓDIGO DE TROQUEL (Nro. Pieza):* #${order.codigo_troquel}\n` +
+    `*Cliente:* ${order.nombre_cliente} (${order.documento_cliente})\n` +
+    `*Pieza / Motor:* ${order.datos_motor.tipo_pieza} — ${order.datos_motor.marca} ${order.datos_motor.modelo}\n` +
+    `*Estado Actual:* ${stateNames[order.estado_actual] || order.estado_actual}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🛠️ *DESGLOSE DE TRABAJOS:*\n` +
+    `*DESGLOSE DE TRABAJOS:*\n` +
     `${itemsLines}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💵 *TOTAL PRESUPUESTO:* $${Number(order.monto_total).toFixed(2)}\n` +
-    `✅ *MONTO ABONADO:* $${Number(order.monto_abonado).toFixed(2)}\n` +
+    `*TOTAL PRESUPUESTO:* $${Number(order.monto_total).toFixed(2)}\n` +
+    `*MONTO ABONADO:* $${Number(order.monto_abonado).toFixed(2)}\n` +
     `⏳ *RESTO PENDIENTE:* $${Number(order.saldo_pendiente).toFixed(2)}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `⚖️ *TÉRMINOS Y POLÍTICAS DEL TALLER:*\n` +
+    `*TÉRMINOS Y POLÍTICAS DEL TALLER:*\n` +
     `1️⃣ El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
     `2️⃣ La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un mes sin concretar o finalizar el trabajo.\n` +
     `3️⃣ El trabajo solo podrá ser retirado si se ha cancelado en su totalidad.\n` +
     `4️⃣ Existe la posibilidad de modificaciones del presupuesto debido a afectaciones adicionales encontradas en el proceso de limpieza; el cliente será informado previamente.\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `📍 _Conserve su Nro. de Troquel (#${order.codigo_troquel}) para cualquier consulta o retiro._`
+    `_Conserve su Nro. de Troquel (#${order.codigo_troquel}) para cualquier consulta o retiro._`
   );
+}
+
+function buildWhatsAppTermsOnlyPlainText(order) {
+  const troquel = order.codigo_troquel;
+  const motor = `${order.datos_motor.tipo_pieza || "Pieza"} — ${order.datos_motor.marca || ""} ${order.datos_motor.modelo || ""}`.trim();
+  const fecha = formatDateHuman(order.fecha_ingreso, false);
+
+  return (
+    `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
+    `*COMPROBANTE DE RECEPCIÓN Y POLÍTICAS DEL TALLER*\n` +
+    `_«Aunque tu principio haya sido pequeño, tu postrer estado será muy grande.»_\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `Estimado(a) *${order.nombre_cliente}* (${order.documento_cliente}), confirmamos el ingreso formal de su pieza a nuestras instalaciones para evaluación y diagnóstico:\n\n` +
+    `*Nro. de Orden:* ${order.id_orden}\n` +
+    `*CÓDIGO DE TROQUEL:* #${troquel}\n` +
+    `*Pieza / Motor:* ${motor}\n` +
+    `*Fecha de Ingreso:* ${fecha}\n` +
+    `*Estado Actual:* Recepción e Inspección Técnica en Proceso\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `*TÉRMINOS Y CONDICIONES OBLIGATORIAS DEL SERVICIO:*\n` +
+    `1️⃣ *Plazo de Aprobación / Retiro:* El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
+    `2️⃣ *Custodia de Piezas:* La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un (1) mes sin concretar o finalizar el trabajo.\n` +
+    `3️⃣ *Retiro del Trabajo:* El trabajo solo podrá ser retirado si se ha cancelado en su totalidad (100%).\n` +
+    `4️⃣ *Ajustes por Lavado y Limpieza:* Existe la posibilidad de modificaciones del presupuesto debido a afectaciones adicionales encontradas en el proceso de limpieza y desengrase químico; el cliente será informado previamente antes de ejecutar cualquier trabajo extra.\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `*Próximo Paso:* Nuestro personal técnico evaluará las tolerancias de su pieza y en breve le enviaremos el presupuesto formal detallado renglón por renglón para su aprobación.\n\n` +
+    `_Conserve su Código de Troquel (#${troquel}) para cualquier consulta._\n` +
+    `¡Gracias por confiar en Rectificadora Renacer!`
+  );
+}
+
+function openWhatsAppTermsOnlyModal(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+
+  const textMsg = buildWhatsAppTermsOnlyPlainText(order);
+  const cleanPhone = (order.telefono_cliente || "").replace(/\D/g, "");
+  const intlPhone = cleanPhone.startsWith("0") ? "58" + cleanPhone.slice(1) : cleanPhone;
+  const waUrl = `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}`;
+
+  openModal({
+    title: `Términos y Comprobante de Recepción — Troquel #${order.codigo_troquel}`,
+    icon: "fa-file-contract",
+    wide: true,
+    body: `
+      <!-- Banner Informativo -->
+      <div style="background:rgba(2,132,199,0.08); border:1.5px solid rgba(2,132,199,0.4); border-radius:12px; padding:12px 14px; margin-bottom:12px;">
+        <div style="font-size:12.5px; font-weight:900; color:#38bdf8; display:flex; align-items:center; gap:6px;">
+          <i class="fas fa-file-contract"></i> Notificación de Recepción y Políticas de Servicio (Sin Estimación de Precio)
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:6px; line-height:1.45;">
+          Este mensaje confirma al cliente <strong>${order.nombre_cliente}</strong> la custodia de su pieza con el <strong>Troquel #${order.codigo_troquel}</strong> y las 4 políticas del taller, <strong>sin montos ni precios</strong>. Ideal para enviar justo al recibir la pieza antes del presupuesto formal.
+        </p>
+      </div>
+
+      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
+        Mensaje listo para enviar al WhatsApp <strong>${order.telefono_cliente}</strong>:
+      </p>
+      <textarea
+        id="wa-terms-textarea"
+        rows="14"
+        style="width:100%; padding:12px; border-radius:12px; border:1.5px solid var(--border-color); font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.45; background:var(--bg-input); color:var(--text-main);"
+      >${textMsg}</textarea>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket Físico">
+        <i class="fas fa-print"></i> Imprimir Ticket
+      </button>
+      <button type="button" class="btn btn--ghost" onclick="copyTextToClipboard(document.getElementById('wa-terms-textarea').value)">
+        <i class="fas fa-copy"></i> Copiar Texto
+      </button>
+      <a href="${waUrl}" target="_blank" rel="noopener" class="btn btn--success btn--lg" style="text-decoration:none;">
+        <i class="fab fa-whatsapp"></i> Enviar Términos por WhatsApp
+      </a>
+    `
+  });
 }
 
 function openWhatsAppBudgetTextModal(orderId) {
@@ -6848,7 +7490,7 @@ function printOrderReceptionTicket(orderId) {
       </div>
 
       <div class="no-print" style="margin-top:20px; text-align:center;">
-        <button onclick="window.print()" style="padding:8px 16px; font-weight:bold; cursor:pointer;">🖨️ Imprimir Ticket</button>
+        <button onclick="window.print()" style="padding:8px 16px; font-weight:bold; cursor:pointer;"><i class="fas fa-print"></i> Imprimir Ticket</button>
       </div>
 
       <script>
@@ -6882,7 +7524,7 @@ function renderAccountsReceivableScreen() {
     (o) => o.estado_actual !== "anulado" && Number(o.saldo_pendiente) > 0
   );
 
-  const tasaBcv = Number(db.configuracion?.tasaBcv) || 45.80;
+  const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
   const totalGeneralResto = allPendingOrders.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
   const totalGeneralFacturado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
   const totalGeneralAbonado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0);
@@ -6948,13 +7590,13 @@ function renderAccountsReceivableScreen() {
       .join("");
 
   const stateBadgeLabel = (st) => {
-    if (st === "entregado" || st === "entrega") return `<span class="state-badge state-badge--done">📦 6. Entrega (En Calle)</span>`;
-    if (st === "recepcion" || st === "diagnostico_presupuesto") return `<span class="state-badge state-badge--recep">1. Recepción</span>`;
-    if (st === "diagnostico") return `<span class="state-badge state-badge--diag">2. Diagnóstico</span>`;
-    if (st === "aprobacion" || st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait">3. Aprobación</span>`;
-    if (st === "servicio" || st === "asignacion_ejecucion") return `<span class="state-badge state-badge--exec">4. Servicio</span>`;
-    if (st === "terminado") return `<span class="state-badge state-badge--term">4. Servicio (Listo)</span>`;
-    if (st === "calidad" || st === "control_calidad") return `<span class="state-badge state-badge--qc">5. Calidad</span>`;
+    if (st === "entregado" || st === "entrega") return `<span class="state-badge state-badge--done"><i class="fas fa-truck"></i> 6. Entrega (En Calle)</span>`;
+    if (st === "recepcion" || st === "diagnostico_presupuesto") return `<span class="state-badge state-badge--recep"><i class="fas fa-clipboard-check"></i> 1. Recepción</span>`;
+    if (st === "diagnostico") return `<span class="state-badge state-badge--diag"><i class="fas fa-microscope"></i> 2. Diagnóstico</span>`;
+    if (st === "aprobacion" || st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait"><i class="fas fa-hourglass-half"></i> 3. Aprobación</span>`;
+    if (st === "servicio" || st === "asignacion_ejecucion") return `<span class="state-badge state-badge--exec"><i class="fas fa-wrench"></i> 4. Servicio</span>`;
+    if (st === "terminado") return `<span class="state-badge state-badge--term"><i class="fas fa-check-double"></i> 4. Servicio (Listo)</span>`;
+    if (st === "calidad" || st === "control_calidad") return `<span class="state-badge state-badge--qc"><i class="fas fa-shield-alt"></i> 5. Calidad</span>`;
     return `<span class="state-badge">${st.replace(/_/g, " ")}</span>`;
   };
 
@@ -6997,7 +7639,7 @@ function renderAccountsReceivableScreen() {
             <tr class="ar-client-group-row">
               <td colspan="5">
                 <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                  <span style="font-size:15px; font-weight:900;">👤 ${grp.nombre_cliente}</span>
+                  <span style="font-size:15px; font-weight:900;"><i class="fas fa-user-circle" style="color:var(--renacer-gold);"></i> ${grp.nombre_cliente}</span>
                   <span style="font-size:11.5px; color:var(--text-muted); font-weight:700;">(${grp.documento_cliente})</span>
                   <a href="tel:${grp.telefono_cliente}" class="btn btn--ghost" style="padding:3px 9px; font-size:11px; text-decoration:none;">
                     <i class="fas fa-phone"></i> ${grp.telefono_cliente}
@@ -7042,13 +7684,13 @@ function renderAccountsReceivableScreen() {
 
         <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
           <div style="background:var(--bg-input); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">📦 EN CALLE (CRÉDITO)</span>
+            <span style="font-size:11px; color:var(--text-muted); font-weight:800;"><i class="fas fa-hand-holding-dollar" style="color:#b45309;"></i> EN CALLE (CRÉDITO)</span>
             <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#b45309;">
               $${sumEnCalle.toFixed(2)} <span style="font-size:11px; font-weight:700; color:var(--text-muted);">(${enCalle.length} pz)</span>
             </div>
           </div>
           <div style="background:var(--bg-input); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">🔨 EN TALLER (RETENIDAS)</span>
+            <span style="font-size:11px; color:var(--text-muted); font-weight:800;"><i class="fas fa-warehouse" style="color:#0284c7;"></i> EN TALLER (RETENIDAS)</span>
             <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#0284c7;">
               $${sumEnTaller.toFixed(2)} <span style="font-size:11px; font-weight:700; color:var(--text-muted);">(${enTaller.length} pz)</span>
             </div>
@@ -7063,10 +7705,10 @@ function renderAccountsReceivableScreen() {
           Todas (${allPendingOrders.length})
         </button>
         <button type="button" class="btn ${arFilterState === "entregadas_por_cobrar" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'entregadas_por_cobrar')">
-          📦 En Calle / Crédito (${enCalle.length})
+          <i class="fas fa-hand-holding-dollar"></i> En Calle / Crédito (${enCalle.length})
         </button>
         <button type="button" class="btn ${arFilterState === "en_taller" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'en_taller')">
-          🔨 En Taller (${enTaller.length})
+          <i class="fas fa-warehouse"></i> En Taller (${enTaller.length})
         </button>
 
         <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -7133,6 +7775,10 @@ function openCollectReceivableModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
+  const bankOptions = BANCOS_RENACER.map(
+    (b) => `<option value="${b.id}">${b.nombre} (${b.moneda})</option>`
+  ).join("");
+
   openModal({
     title: `Registrar Abono o Liquidar Resto — Troquel #${order.codigo_troquel}`,
     icon: "fa-hand-holding-dollar",
@@ -7150,17 +7796,23 @@ function openCollectReceivableModal(orderId) {
         </div>
       </div>
 
-      <div class="form-grid-2">
+      <div class="form-grid-3">
         <div class="form-field">
-          <label>Monto a Cobrar Ahora ($) *</label>
-          <input type="number" id="ar-collect-amount" value="${order.saldo_pendiente}" min="1" max="${order.saldo_pendiente}" step="0.5" style="font-weight:900; font-size:17px; color:#16a34a;" />
+          <label>Monto a Cobrar ($) *</label>
+          <input type="number" id="ar-collect-amount" value="${order.saldo_pendiente}" min="0.5" max="${order.saldo_pendiente}" step="0.5" style="font-weight:900; font-size:17px; color:#16a34a;" />
         </div>
         <div class="form-field">
           <label>Método de Pago *</label>
-          <select id="ar-collect-method">
+          <select id="ar-collect-method" onchange="suggestAccountForArMethod(this.value)">
             <option value="pago_movil">Pago Móvil / Transferencia</option>
             <option value="efectivo">Efectivo (Divisas)</option>
-            <option value="transferencia">Zelle / Otro</option>
+            <option value="transferencia">Zelle / Transferencia Ext.</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Cuenta / Caja Destino *</label>
+          <select id="ar-collect-account" style="font-weight:800;">
+            ${bankOptions}
           </select>
         </div>
       </div>
@@ -7174,12 +7826,21 @@ function openCollectReceivableModal(orderId) {
   });
 }
 
+function suggestAccountForArMethod(metodo) {
+  const accSel = document.getElementById("ar-collect-account");
+  if (!accSel) return;
+  if (metodo === "efectivo") accSel.value = "efectivo";
+  else if (metodo === "pago_movil") accSel.value = "mercantil";
+  else if (metodo === "transferencia") accSel.value = "zelle_otro";
+}
+
 function confirmCollectReceivable(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
   const amount = Math.max(0, Number(document.getElementById("ar-collect-amount")?.value) || 0);
   const method = document.getElementById("ar-collect-method")?.value || "pago_movil";
+  const cuenta = document.getElementById("ar-collect-account")?.value || (method === "efectivo" ? "efectivo" : "mercantil");
 
   if (amount <= 0) {
     showToast("Ingresa un monto válido.", "error");
@@ -7206,8 +7867,12 @@ function confirmCollectReceivable(orderId) {
     concepto: `Cobro de Resto en ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
     monto: amount,
     metodo: method,
+    cuenta: cuenta,
     orden_id: order.id_orden
   });
+
+  const bObj = BANCOS_RENACER.find((b) => b.id === cuenta);
+  const nombreCuenta = bObj ? bObj.nombre : cuenta;
 
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
@@ -7217,7 +7882,7 @@ function confirmCollectReceivable(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "cobro_resto",
-    mensaje: `💵 Pago recibido por $${amount.toFixed(2)} (${method}). Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
+    mensaje: `Pago recibido por $${amount.toFixed(2)} (${method} - ${nombreCuenta}). Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -7225,7 +7890,7 @@ function confirmCollectReceivable(orderId) {
   saveDatabase();
   closeModal();
   renderApp();
-  showToast(`Pago de $${amount.toFixed(2)} registrado en caja. Resto actual: $${order.saldo_pendiente.toFixed(2)}.`);
+  showToast(`Pago de $${amount.toFixed(2)} registrado en ${nombreCuenta}. Resto actual: $${order.saldo_pendiente.toFixed(2)}.`);
 }
 
 function sendClientStatementWhatsApp(clientId) {
@@ -7242,13 +7907,13 @@ function sendClientStatementWhatsApp(clientId) {
     .join("\n");
 
   const msg =
-    `⚙️ *RECTIFICADORA RENACER (JOB 8:7)*\n` +
-    `📄 *RELACIÓN DE SALDO PENDIENTE*\n` +
-    `👤 *Cliente:* ${client.nombre_completo}\n` +
+    `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
+    `*RELACIÓN DE SALDO PENDIENTE*\n` +
+    `*Cliente:* ${client.nombre_completo}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `${lines}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *TOTAL RESTANTE POR LIQUIDAR: $${totalDebt.toFixed(2)}*\n` +
+    `*TOTAL RESTANTE POR LIQUIDAR: $${totalDebt.toFixed(2)}*\n` +
     `Quedamos atentos a su comprobante de pago. ¡Gracias por su confianza!`;
 
   const cleanPhone = (client.telefono || "").replace(/\D/g, "");
@@ -7325,182 +7990,267 @@ function renderWorkerPanelScreen() {
       : "";
 
   const substateLabelMap = {
-    pendiente: "⏳ POR HACER / PENDIENTE",
-    empezado: "🔨 EN PROCESO (CRONÓMETRO ACTIVO)",
-    pausado: "⏸️ PAUSADO / IMPREVISTO",
-    terminado: "✅ TERMINADO (EN CONTROL DE CALIDAD)"
+    pendiente: "POR HACER / PENDIENTE",
+    empezado: "EN PROCESO (CRONÓMETRO ACTIVO)",
+    pausado: "PAUSADO / IMPREVISTO",
+    terminado: "TERMINADO (EN CONTROL DE CALIDAD)"
   };
 
-  const tasksHtml = visibleSubtasks.length
-    ? visibleSubtasks
-        .map((sub) => {
-          const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
+  // AGRUPACIÓN OFICIAL POR TAPA / TROQUEL (FEEDBACK JESÚS ANDRADE: 1 TARJETA POR PIEZA FÍSICA CON CHECKLIST BASE)
+  const groupedOrdersMap = {};
+  visibleSubtasks.forEach((sub) => {
+    if (!groupedOrdersMap[sub.orden_id]) {
+      const parentOrder = db.ordenes.find((o) => o.id_orden === sub.orden_id);
+      if (!parentOrder) return;
+      groupedOrdersMap[sub.orden_id] = {
+        order: parentOrder,
+        subtasks: []
+      };
+    }
+    groupedOrdersMap[sub.orden_id].subtasks.push(sub);
+  });
+  const orderGroups = Object.values(groupedOrdersMap);
+
+  const tasksHtml = orderGroups.length
+    ? orderGroups
+        .map((group) => {
+          const ord = group.order;
+          const mySubtasks = group.subtasks;
+          const totalTasks = mySubtasks.length;
+          const completedTasks = mySubtasks.filter((s) => s.estado_subtarea === "terminado").length;
+          const isAllDone = totalTasks > 0 && completedTasks === totalTasks;
+          const totalWorkerCommission = mySubtasks.reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
+          const earnedCommission = mySubtasks
+            .filter((s) => s.estado_subtarea === "terminado")
+            .reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
+
           const cover = (ord.galeria_fotos_pieza && ord.galeria_fotos_pieza[0]) || DEMO_PHOTOS.camaraCorsa;
           const sparesCover = (ord.galeria_fotos_repuestos && ord.galeria_fotos_repuestos[0]) || null;
 
+          // Otras tareas en esta misma tapa asignadas a otros maquinistas de taller
+          const otherTasks = db.subtareas.filter((s) => s.orden_id === ord.id_orden && s.tecnico_id !== activeWorkerId);
+          const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
           return `
-            <div class="worker-task-card" style="${ord.devuelto_calidad ? "border:2px solid #dc2626;" : ""}">
-              <div class="worker-task-header">
-                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <div class="worker-tapa-card ${isAllDone ? "worker-tapa-card--done" : ""} ${ord.devuelto_calidad ? "worker-tapa-card--rejected" : ""}">
+              <!-- CABECERA PRINCIPAL DE LA PIEZA / TROQUEL -->
+              <div class="worker-tapa-header">
+                <div class="worker-tapa-brand">
                   <span class="troquel-badge-lg">TROQUEL #${ord.codigo_troquel}</span>
                   <div>
-                    <div style="font-weight:900; font-size:15px;">${sub.descripcion_servicio}</div>
-                    <div style="font-size:12px; color:var(--text-muted);">${ord.datos_motor.tipo_pieza} · ${ord.datos_motor.marca} ${ord.datos_motor.modelo} · Ingreso: ${formatDateHuman(ord.fecha_ingreso, false)}</div>
+                    <div class="worker-tapa-title">${ord.datos_motor.tipo_pieza || "Cámara / Culata"} · ${ord.datos_motor.marca} ${ord.datos_motor.modelo}</div>
+                    <div class="worker-tapa-meta">
+                      <span><i class="fas fa-barcode"></i> Serial: <strong>${ord.datos_motor.serial || "S/N"}</strong></span>
+                      <span>·</span>
+                      <span><i class="fas fa-calendar-alt"></i> Ingreso: ${formatDateHuman(ord.fecha_ingreso, false)}</span>
+                      <span>·</span>
+                      <span><i class="fas fa-user"></i> Cliente: ${ord.cliente_nombre || "Taller Aliado"}</span>
+                    </div>
                   </div>
                 </div>
-                <div style="text-align:right;">
-                  <span style="font-size:10px; font-weight:800; color:var(--text-muted); display:block;">COMISIÓN ASIGNADA</span>
-                  <strong style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#16a34a;">
-                    +$${Number(sub.comision_base_tecnico).toFixed(2)}
-                  </strong>
+
+                <div class="worker-tapa-comm-box">
+                  <span class="worker-comm-caption">TU COMISIÓN EN ESTA TAPA</span>
+                  <div class="worker-comm-total">
+                    +$${totalWorkerCommission.toFixed(2)}
+                  </div>
+                  <span class="worker-comm-status-pill ${isAllDone ? "comm-status--full" : ""}">
+                    ${isAllDone ? `<i class="fas fa-check-circle" style="color:#22c55e;"></i> $${earnedCommission.toFixed(2)} acumulada al destajo` : `<i class="fas fa-clock" style="color:#f59e0b;"></i> $${earnedCommission.toFixed(2)} de $${totalWorkerCommission.toFixed(2)} ganada`}
+                  </span>
                 </div>
               </div>
 
+              <!-- ALERTA SI LA PIEZA FUE DEVUELTA POR CONTROL DE CALIDAD -->
               ${
                 ord.devuelto_calidad && ord.motivo_rechazo_qc
-                  ? `<div style="margin:12px 18px 0; background:rgba(220,38,38,0.12); border:1.5px solid #dc2626; color:#dc2626; padding:10px 12px; border-radius:10px; font-size:12.5px; font-weight:800;">
-                      ❌ <strong>DEVUELTO POR CONTROL DE CALIDAD:</strong> ${ord.motivo_rechazo_qc}
+                  ? `<div class="worker-tapa-qc-alert">
+                      <i class="fas fa-exclamation-triangle"></i>
+                      <div>
+                        <strong>DEVUELTO POR CONTROL DE CALIDAD:</strong> ${ord.motivo_rechazo_qc}
+                      </div>
                     </div>`
                   : ""
               }
 
-              <div class="worker-task-body">
-                <!-- 3.A SOPORTE VISUAL: GALERÍA DE PIEZA Y REPUESTOS EN MESA -->
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
-                  <div style="background:var(--bg-input); padding:10px; border-radius:12px; display:flex; gap:10px; align-items:center; cursor:pointer;" onclick="openDualGalleryInspector('${ord.id_orden}')">
-                    <img src="${cover}" style="width:68px; height:54px; object-fit:cover; border-radius:8px;" />
-                    <div style="font-size:12px;">
-                      <strong>📸 Fotos Iniciales Pieza (${(ord.galeria_fotos_pieza || []).length})</strong>
-                      <div style="color:var(--text-muted); font-size:11px;">Ampliar estado físico de la tapa</div>
-                    </div>
-                  </div>
-
-                  <div style="background:rgba(245,196,0,0.08); border:1px solid rgba(245,196,0,0.35); padding:10px; border-radius:12px; display:flex; gap:10px; align-items:center; cursor:pointer;" onclick="openDualGalleryInspector('${ord.id_orden}')">
-                    ${
-                      sparesCover
-                        ? `<img src="${sparesCover}" style="width:68px; height:54px; object-fit:cover; border-radius:8px;" />`
-                        : `<div style="width:68px; height:54px; border-radius:8px; background:rgba(0,0,0,0.06); display:grid; place-items:center;"><i class="fas fa-toolbox"></i></div>`
-                    }
-                    <div style="font-size:12px;">
-                      <strong>📷 Repuestos en Mesa (${(ord.galeria_fotos_repuestos || []).length})</strong>
-                      <div style="color:var(--text-muted); font-size:11px;">Ver válvulas/guías del cliente</div>
-                    </div>
+              <!-- SOPORTE VISUAL DE LA PIEZA: FOTOS INICIALES Y REPUESTOS EN MESA -->
+              <div class="worker-tapa-photos-strip">
+                <div class="worker-photo-pill" onclick="openDualGalleryInspector('${ord.id_orden}')" title="Ver fotos de recepción inicial de la pieza">
+                  <img src="${cover}" class="worker-photo-thumb" />
+                  <div class="worker-photo-info">
+                    <strong><i class="fas fa-camera"></i> Inspección Inicial (${(ord.galeria_fotos_pieza || []).length} fotos)</strong>
+                    <span>Toca para ver estado físico previo de la tapa</span>
                   </div>
                 </div>
 
-                <!-- BARRA DE ESTADO EN TIEMPO REAL + CRONÓMETRO EN VIVO + CHAT ACTIVO -->
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; font-size:12.5px; background:var(--bg-input); padding:10px 14px; border-radius:10px;">
-                  <span>Sub-estado actual: <strong>${substateLabelMap[sub.estado_subtarea] || sub.estado_subtarea.toUpperCase()}</strong></span>
-                  <span
-                    data-live-subtask-id="${sub.id_subtarea}"
-                    style="font-family:'JetBrains Mono',monospace; font-weight:900; color:${sub.estado_subtarea === "empezado" ? "#0284c7" : "var(--text-main)"};"
-                  >
-                    <i class="fas fa-stopwatch"></i> ${formatLiveSubtaskTimer(sub)}
+                <div class="worker-photo-pill ${sparesCover ? "worker-photo-pill--spares" : ""}" onclick="openDualGalleryInspector('${ord.id_orden}')" title="Ver repuestos aportados por el cliente en mesa">
+                  ${
+                    sparesCover
+                      ? `<img src="${sparesCover}" class="worker-photo-thumb" />`
+                      : `<div class="worker-photo-thumb-empty"><i class="fas fa-toolbox"></i></div>`
+                  }
+                  <div class="worker-photo-info">
+                    <strong><i class="fas fa-boxes"></i> Repuestos en Mesa (${(ord.galeria_fotos_repuestos || []).length})</strong>
+                    <span>Válvulas, guías, empacaduras o retenes aportados</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- BARRA DE PROGRESO DE LA TAPA -->
+              <div class="worker-tapa-progress-bar-wrap">
+                <div class="worker-progress-header">
+                  <span style="font-weight:800; font-size:12px; color:var(--text-secondary);">
+                    <i class="fas fa-tasks"></i> LISTA BASE DE TRABAJOS EN TU MESA (${completedTasks} de ${totalTasks} listos)
                   </span>
-                  <button type="button" class="btn btn--ghost" style="padding:5px 12px; font-size:11.5px;" onclick="openOrderCrmModal('${ord.id_orden}')">
-                    <i class="fas fa-comments"></i> Bitácora / Chat Activo con Gerencia
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:${isAllDone ? "#16a34a" : "var(--renacer-gold)"};">
+                    ${progressPercent}% COMPLETADO
+                  </span>
+                </div>
+                <div class="worker-progress-track">
+                  <div class="worker-progress-fill" style="width: ${progressPercent}%; background:${isAllDone ? "#22c55e" : "var(--renacer-gold)"};"></div>
+                </div>
+              </div>
+
+              <!-- LISTICA BASE DE SUBTAREAS ASIGNADAS A ESTE TÉCNICO EN ESTA TAPA -->
+              <div class="worker-subtasks-checklist">
+                ${mySubtasks
+                  .map((sub, sIdx) => {
+                    const isTerminado = sub.estado_subtarea === "terminado";
+                    const isEmpezado = sub.estado_subtarea === "empezado";
+                    const isPausado = sub.estado_subtarea === "pausado";
+                    const isPendiente = sub.estado_subtarea === "pendiente";
+
+                    return `
+                      <div class="worker-checklist-row ${isTerminado ? "checklist-row--done" : isEmpezado ? "checklist-row--active" : isPausado ? "checklist-row--paused" : ""}">
+                        <!-- Columna izquierda: Número, Nombre y Comisión -->
+                        <div class="checklist-row-left">
+                          <span class="checklist-index-badge ${isTerminado ? "badge--done" : isEmpezado ? "badge--active" : ""}">
+                            ${isTerminado ? "✓" : `#${sIdx + 1}`}
+                          </span>
+                          <div class="checklist-desc-wrap">
+                            <div class="checklist-subtask-name">${sub.descripcion_servicio}</div>
+                            <div class="checklist-subtask-meta">
+                              <span class="checklist-comm-tag">+$${Number(sub.comision_base_tecnico).toFixed(2)}</span>
+                              <span class="checklist-substate-pill substate--${sub.estado_subtarea}">
+                                ${
+                                  isPendiente
+                                    ? '<i class="fas fa-clock"></i> En Cola'
+                                    : isEmpezado
+                                    ? '<i class="fas fa-wrench"></i> En Proceso'
+                                    : isPausado
+                                    ? '<i class="fas fa-pause-circle"></i> Pausado'
+                                    : '<i class="fas fa-check-circle"></i> Listo en Mesa'
+                                }
+                              </span>
+                              <span class="checklist-stopwatch ${isEmpezado ? "stopwatch--live" : ""}" data-live-subtask-id="${sub.id_subtarea}">
+                                <i class="fas fa-stopwatch"></i> ${formatLiveSubtaskTimer(sub)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <!-- Columna derecha: Acciones directas y foto -->
+                        <div class="checklist-row-actions">
+                          ${
+                            isPendiente
+                              ? `
+                              <button
+                                type="button"
+                                class="btn btn--primary btn--sm checklist-btn-action"
+                                onclick="startSubtaskWork('${sub.id_subtarea}')"
+                                title="Iniciar trabajo en máquina y activar cronómetro"
+                              >
+                                <i class="fas fa-play"></i> Iniciar
+                              </button>
+                            `
+                              : isEmpezado
+                              ? `
+                              <button
+                                type="button"
+                                class="btn btn--warning btn--sm checklist-btn-action"
+                                onclick="openPauseSubtaskModal('${sub.id_subtarea}')"
+                                title="Pausar trabajo y reportar novedad al chat"
+                              >
+                                <i class="fas fa-pause"></i> Pausar
+                              </button>
+                              <button
+                                type="button"
+                                class="btn btn--success btn--sm checklist-btn-action"
+                                onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
+                                title="Subir foto obligatoria y terminar tarea"
+                              >
+                                <i class="fas fa-camera"></i> Terminar (Foto)
+                              </button>
+                            `
+                              : isPausado
+                              ? `
+                              <button
+                                type="button"
+                                class="btn btn--primary btn--sm checklist-btn-action"
+                                onclick="startSubtaskWork('${sub.id_subtarea}')"
+                                title="Reanudar cronómetro y continuar trabajo"
+                              >
+                                <i class="fas fa-play"></i> Reanudar
+                              </button>
+                              <button
+                                type="button"
+                                class="btn btn--success btn--sm checklist-btn-action"
+                                onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
+                                title="Subir foto y finalizar"
+                              >
+                                <i class="fas fa-camera"></i> Terminar (Foto)
+                              </button>
+                            `
+                              : `
+                              <div class="checklist-finished-pill">
+                                <i class="fas fa-check-circle" style="color:#16a34a; font-size:15px;"></i>
+                                <span style="font-size:11.5px; font-weight:800; color:#15803d;">Listo</span>
+                                ${
+                                  sub.foto_terminado_url
+                                    ? `<img src="${sub.foto_terminado_url}" class="checklist-finish-photo" onclick="openPhotoLightbox('${sub.foto_terminado_url}', 'Troquel #${ord.codigo_troquel} - ${sub.descripcion_servicio}')" title="Click para ver foto final en HD 4K" />`
+                                    : ""
+                                }
+                              </div>
+                            `
+                          }
+                        </div>
+                      </div>
+                    `;
+                  })
+                  .join("")}
+              </div>
+
+              <!-- PIE DE TARJETA: TRANSPARENCIA DE OTROS COMPAÑEROS Y BOTONES DE APOYO -->
+              <div class="worker-tapa-footer">
+                <div class="worker-other-tasks">
+                  ${
+                    otherTasks.length
+                      ? `<i class="fas fa-users-cog"></i> <span>Otras tareas en esta tapa: ${otherTasks
+                          .map((t) => `<strong>${t.descripcion_servicio}</strong> (${t.nombre_tecnico})`)
+                          .join(" · ")}</span>`
+                      : `<i class="fas fa-user-check"></i> <span>Eres el único técnico asignado a esta tapa física.</span>`
+                  }
+                </div>
+
+                <div class="worker-footer-btns">
+                  <button type="button" class="btn btn--ghost btn--sm" onclick="openDualGalleryInspector('${ord.id_orden}')">
+                    <i class="fas fa-images"></i> Fotos Recepción
+                  </button>
+                  <button type="button" class="btn btn--ghost btn--sm" style="border-color:rgba(245,223,0,0.4); color:var(--renacer-gold);" onclick="openOrderCrmModal('${ord.id_orden}')">
+                    <i class="fas fa-comments"></i> Bitácora / Chat Tapa
                   </button>
                 </div>
-
-                ${
-                  sub.estado_subtarea !== "terminado"
-                    ? `
-                    <!-- 4. CONTROL OPERATIVO Y CRONÓMETRO EXACTO DEL TÉCNICO -->
-                    <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-top:4px;">
-                      Flujo Operativo en Mesa de Trabajo:
-                    </div>
-                    ${
-                      sub.estado_subtarea === "pendiente"
-                        ? `
-                        <div style="display:flex; flex-direction:column; gap:8px;">
-                          <div style="background:rgba(2,132,199,0.08); border:1px solid rgba(2,132,199,0.3); border-radius:10px; padding:10px 14px; display:flex; align-items:center; justify-content:space-between;">
-                            <span style="font-size:12.5px; font-weight:700; color:#0284c7;">
-                              <i class="fas fa-clock"></i> Tarea en cola de estación (Reloj en 00:00:00)
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            class="btn btn--primary btn--lg"
-                            style="width:100%; justify-content:center; padding:12px 16px; font-size:14px; font-weight:800;"
-                            onclick="startSubtaskWork('${sub.id_subtarea}')"
-                          >
-                            <i class="fas fa-play-circle"></i> Iniciar Trabajo en Máquina (Activar Cronómetro)
-                          </button>
-                        </div>
-                      `
-                        : sub.estado_subtarea === "empezado"
-                        ? `
-                        <div style="display:grid; grid-template-columns: 1fr 1.3fr; gap:8px;">
-                          <button
-                            type="button"
-                            class="btn btn--warning"
-                            style="justify-content:center; padding:12px 10px; font-size:12.5px; font-weight:800;"
-                            onclick="openPauseSubtaskModal('${sub.id_subtarea}')"
-                          >
-                            <i class="fas fa-pause-circle"></i> Pausar (Imprevisto)
-                          </button>
-                          <button
-                            type="button"
-                            class="btn btn--success btn--lg"
-                            style="justify-content:center; padding:12px 12px; font-size:13px; font-weight:800;"
-                            onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
-                          >
-                            <i class="fas fa-camera"></i> Terminar (Subir Foto)
-                          </button>
-                        </div>
-                      `
-                        : sub.estado_subtarea === "pausado"
-                        ? `
-                        <div style="display:flex; flex-direction:column; gap:8px;">
-                          <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.4); border-radius:10px; padding:8px 12px; font-size:12px; color:#d97706; font-weight:700;">
-                            <i class="fas fa-pause-circle"></i> Trabajo detenido temporalmente · Cronómetro congelado con precisión de segundos.
-                          </div>
-                          <div style="display:grid; grid-template-columns: 1fr 1.3fr; gap:8px;">
-                            <button
-                              type="button"
-                              class="btn btn--primary btn--lg"
-                              style="justify-content:center; padding:12px 10px; font-size:12.5px; font-weight:800;"
-                              onclick="startSubtaskWork('${sub.id_subtarea}')"
-                            >
-                              <i class="fas fa-play"></i> Reanudar Trabajo
-                            </button>
-                            <button
-                              type="button"
-                              class="btn btn--success btn--lg"
-                              style="justify-content:center; padding:12px 12px; font-size:13px; font-weight:800;"
-                              onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
-                            >
-                              <i class="fas fa-camera"></i> Terminar (Subir Foto)
-                            </button>
-                          </div>
-                        </div>
-                      `
-                        : ""
-                    }
-                  `
-                    : `
-                    <div style="background:rgba(22,163,74,0.12); border:1px solid rgba(22,163,74,0.35); border-radius:12px; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-                      <div style="font-size:13px; font-weight:800; color:#15803d;">
-                        <i class="fas fa-check-circle"></i> ¡Tarea Terminada con Fotografía Obligatoria! Enviada a Control de Calidad · Comisión +$${Number(sub.comision_base_tecnico).toFixed(2)} (${formatMinutes(sub.minutos_acumulados)} invertidos).
-                      </div>
-                      ${
-                        sub.foto_terminado_url
-                          ? `<img src="${sub.foto_terminado_url}" style="width:58px; height:44px; object-fit:cover; border-radius:6px; border:1.5px solid #16a34a;" />`
-                          : ""
-                      }
-                    </div>
-                  `
-                }
               </div>
             </div>
           `;
         })
         .join("")
     : `
-      <div style="text-align:center; padding:42px 20px; background:var(--bg-card); border-radius:18px;">
-        <i class="fas fa-mug-hot" style="font-size:36px; color:var(--text-muted); margin-bottom:10px;"></i>
-        <h3>No tienes subtareas asignadas activas en este momento</h3>
-        <p style="font-size:13px; color:var(--text-muted);">Las órdenes en Diagnóstico o Esperando Aprobación permanecen ocultas hasta que el Jefe de Taller confirme la Matriz de Asignación.</p>
+      <div style="text-align:center; padding:48px 20px; background:var(--bg-card); border-radius:18px; border:1px solid var(--border-subtle);">
+        <i class="fas fa-mug-hot" style="font-size:40px; color:var(--text-muted); margin-bottom:12px;"></i>
+        <h3 style="font-size:18px; font-weight:800;">No tienes piezas ni subtareas asignadas activas en este momento</h3>
+        <p style="font-size:13px; color:var(--text-muted); max-width:500px; margin:8px auto 0;">
+          Las órdenes en Diagnóstico o Esperando Aprobación permanecen en cola técnica hasta que el Jefe de Taller confirme la Matriz de Asignación.
+        </p>
       </div>
     `;
 
@@ -7551,7 +8301,7 @@ function setSubtaskToPending(subtaskId) {
 
   saveDatabase();
   renderApp();
-  showToast(`⏳ Subtarea "${sub.descripcion_servicio}" marcada como Por Hacer / Pendiente.`);
+  showToast(`Subtarea "${sub.descripcion_servicio}" marcada como Por Hacer / Pendiente.`);
 }
 
 function registerWorkerActiveDayProject(workerId, workerName, troquelCode, serviceDesc) {
@@ -7601,7 +8351,7 @@ function startSubtaskWork(subtaskId) {
 
   saveDatabase();
   renderApp();
-  showToast(`🔨 Trabajo "${sub.descripcion_servicio}" EN PROCESO. Cronómetro en tiempo real activado.`);
+  showToast(`Trabajo "${sub.descripcion_servicio}" EN PROCESO. Cronómetro en tiempo real activado.`);
 }
 
 /* ---------- FASE 3 PUNTO 4: PAUSADO / IMPREVISTO CON NOTA OBLIGATORIA AL CHAT ---------- */
@@ -7621,10 +8371,10 @@ function openPauseSubtaskModal(subtaskId) {
       <div style="margin-bottom:10px;">
         <span style="font-size:11.5px; font-weight:800; color:var(--text-muted); display:block; margin-bottom:6px;">Motivos rápidos frecuentes (Toca para autocompletar):</span>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='⚡ Ausencia de energía eléctrica en estación de maquinado.'">⚡ Ausencia de energía</button>
-          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='🔧 Herramienta / buril averiado, requiere ajuste.'">🔧 Herramienta averiada</button>
-          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='🔍 Se detectó fisura oculta o poro profundo en la pieza, esperando directriz de gerencia.'">🔍 Fisura oculta detectada</button>
-          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='❓ Duda técnica sobre medida de guías/válvulas aportadas por el cliente.'">❓ Duda técnica / Repuesto</button>
+          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='Ausencia de energía eléctrica en estación de maquinado.'"><i class="fas fa-bolt"></i> Ausencia de energía</button>
+          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='Herramienta / buril averiado, requiere ajuste.'"><i class="fas fa-wrench"></i> Herramienta averiada</button>
+          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='Se detectó fisura oculta o poro profundo en la pieza, esperando directriz de gerencia.'"><i class="fas fa-search"></i> Fisura oculta detectada</button>
+          <button type="button" class="btn btn--ghost" style="font-size:11.5px; padding:5px 10px;" onclick="document.getElementById('pause-reason-input').value='Duda técnica sobre medida de guías/válvulas aportadas por el cliente.'"><i class="fas fa-question-circle"></i> Duda técnica / Repuesto</button>
         </div>
       </div>
 
@@ -7697,7 +8447,7 @@ function openCompleteSubtaskModal(subtaskId) {
   tempFinishSubtaskPhoto = "";
 
   openModal({
-    title: `📸 Terminar Tarea y Enviar a Control de Calidad — Troquel #${ord ? ord.codigo_troquel : ""}`,
+    title: `Terminar Tarea y Enviar a Control de Calidad — Troquel #${ord ? ord.codigo_troquel : ""}`,
     icon: "fa-camera",
     body: `
       <div style="background:rgba(22,163,74,0.1); border:1px solid rgba(22,163,74,0.35); border-radius:12px; padding:12px; margin-bottom:14px; font-size:13px;">
@@ -7718,12 +8468,12 @@ function openCompleteSubtaskModal(subtaskId) {
         <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
           <span><i class="fas fa-camera"></i> Fotografía Obligatoria del Artículo Finalizado *</span>
           <button type="button" class="btn btn--ghost" style="padding:4px 10px; font-size:11px;" onclick="useDemoFinishSubtaskPhoto()">
-            🧪 Usar Foto de Prueba Rápida
+            <i class="fas fa-flask"></i> Usar Foto de Prueba Rápida
           </button>
         </div>
 
         <div id="finish-photo-status-banner" style="background:rgba(220,38,38,0.1); color:#dc2626; padding:8px 12px; border-radius:8px; font-size:12px; font-weight:800; margin-bottom:12px;">
-          🔒 Pendiente: Debes tomar o subir la foto de la pieza terminada para desbloquear el envío a Control de Calidad.
+          <i class="fas fa-lock"></i> Pendiente: Debes tomar o subir la foto de la pieza terminada para desbloquear el envío a Control de Calidad.
         </div>
 
         <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
@@ -7767,7 +8517,7 @@ function unlockFinishSubtaskButton(photoUrl) {
   if (banner) {
     banner.style.background = "rgba(22,163,74,0.12)";
     banner.style.color = "#15803d";
-    banner.innerHTML = "✅ Fotografía del artículo finalizado validada. Ya puedes confirmar y enviar a Control de Calidad.";
+    banner.innerHTML = "<i class=\"fas fa-check-circle\" style=\"color:#22c55e;\"></i> Fotografía del artículo finalizado validada. Ya puedes confirmar y enviar a Control de Calidad.";
   }
   const box = document.getElementById("finish-photo-validation-box");
   if (box) {
@@ -7842,9 +8592,9 @@ function confirmSubtaskCompletion(subtaskId) {
       autor_nombre: sub.nombre_tecnico || currentUser.nombre,
       autor_rol: "Técnico",
       tipo_evento: "terminado",
-      mensaje: `✅ Tarea "${sub.descripcion_servicio}" FINALIZADA con fotografía obligatoria (Tiempo invertido: ${formatMinutes(sub.minutos_acumulados)}). ${
+      mensaje: `Tarea "${sub.descripcion_servicio}" FINALIZADA con fotografía obligatoria (Tiempo invertido: ${formatMinutes(sub.minutos_acumulados)}). ${
         allDone
-          ? "🔔 NOTIFICACIÓN AL SUPERVISOR DE PLANTA: Todas las tareas de la pieza han sido completadas. La orden pasa a 5. Control de Calidad para revisión."
+          ? "NOTIFICACIÓN AL SUPERVISOR DE PLANTA: Todas las tareas de la pieza han sido completadas. La orden pasa a 5. Control de Calidad para revisión."
           : ""
       }`,
       foto_adjunta_url: sub.foto_terminado_url,
@@ -7867,7 +8617,7 @@ function renderWorkerEarningsScreen() {
   return `
     <div style="background:var(--bg-card); border-radius:18px; padding:20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
-        <h2 style="font-size:20px; font-weight:900;">💰 Mi Ficha de Producción y Comisiones — ${currentUser.nombre}</h2>
+        <h2 style="font-size:20px; font-weight:900;"><i class="fas fa-hand-holding-dollar" style="color:var(--renacer-gold);"></i> Mi Ficha de Producción y Comisiones — ${currentUser.nombre}</h2>
         <p style="font-size:13px; color:var(--text-muted);">
           Relación de piezas trabajadas por número de Troquel, tiempo invertido en cada pieza y comisiones por destajo.
         </p>
@@ -7946,7 +8696,7 @@ function openDualGalleryInspector(orderId) {
           <div style="border-radius:12px; overflow:hidden; border:2px solid var(--renacer-gold); background:#000; position:relative; cursor:zoom-in;" onclick="openPhotoLightbox('${url}', 'Troquel #${order.codigo_troquel} · Repuestos #${i + 1}')">
             <img src="${url}" alt="Repuestos ${i + 1}" style="width:100%; height:210px; object-fit:cover; display:block;" />
             <div style="padding:6px 10px; font-size:11.5px; font-weight:800; color:#0f1638; background:var(--renacer-gold); display:flex; justify-content:space-between; align-items:center;">
-              <span>📷 Repuestos del Cliente #${i + 1}</span>
+              <span><i class="fas fa-camera"></i> Repuestos del Cliente #${i + 1}</span>
               <span style="font-size:10px;"><i class="fas fa-search-plus"></i> Ampliar 4K</span>
             </div>
           </div>
@@ -7987,7 +8737,7 @@ function openDualGalleryInspector(orderId) {
       <div class="form-section-box" style="border-color:rgba(245,196,0,0.6); background:rgba(245,196,0,0.04);">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
           <div class="form-section-title" style="color:#b45309; margin-bottom:0;">
-            📷 Galería 2: Fotos de Repuestos Aportados por el Cliente (${(order.galeria_fotos_repuestos || []).length})
+            <i class="fas fa-camera"></i> Galería 2: Fotos de Repuestos Aportados por el Cliente (${(order.galeria_fotos_repuestos || []).length})
           </div>
           <label class="btn btn--gold btn--xs" style="cursor:pointer; font-weight:800;">
             <i class="fas fa-camera"></i> + Subir Fotos HD de Repuestos
@@ -8033,49 +8783,107 @@ async function handleInspectionMultiUpload(event, orderId, galleryType) {
 }
 
 let tempCrmPhotoUrl = "";
+let currentCrmFilterMode = "chat"; // 'chat' | 'all'
+
+function setCrmFilterMode(mode, orderId) {
+  currentCrmFilterMode = mode;
+  openOrderCrmModal(orderId);
+}
 
 function openOrderCrmModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
   tempCrmPhotoUrl = "";
 
-  const messages = db.bitacora.filter((m) => m.orden_id === orderId);
+  const allMessages = db.bitacora.filter((m) => m.orden_id === orderId);
 
-  const feedHtml = messages.length
-    ? messages
-        .map(
-          (m) => `
-          <div class="crm-msg-bubble" style="${m.tipo_evento === "rechazo_calidad" ? "border-color:#dc2626; background:rgba(220,38,38,0.06);" : m.tipo_evento === "pausa_imprevisto" ? "border-color:#f59e0b; background:rgba(245,158,11,0.08);" : ""}">
+  const isSystemMsg = (m) => {
+    if (m.es_sistema || m.tipo_evento === "auditoria" || m.tipo_evento === "transicion" || m.tipo_evento === "sistema") return true;
+    const txt = (m.mensaje || "").toLowerCase();
+    if (txt.includes("orden ingresada") || txt.includes("orden archivada") || txt.includes("póliza de garantía") || txt.includes("orden anulada")) return true;
+    return false;
+  };
+  const chatOnlyMessages = allMessages.filter(
+    (m) => !isSystemMsg(m) || m.foto_adjunta_url || m.tipo_evento === "pausa_imprevisto" || m.tipo_evento === "rechazo_calidad" || m.tipo_evento === "comentario" || m.tipo_evento === "nota_interna"
+  );
+
+  const countChat = chatOnlyMessages.length;
+  const countAll = allMessages.length;
+
+  const displayMessages = currentCrmFilterMode === "chat" ? chatOnlyMessages : allMessages;
+
+  const feedHtml = displayMessages.length
+    ? displayMessages
+        .map((m) => {
+          const isMine = currentUser && m.autor_id === currentUser.id_usuario;
+          const specialStyle =
+            m.tipo_evento === "rechazo_calidad"
+              ? "border-color:#dc2626; background:rgba(220,38,38,0.08);"
+              : m.tipo_evento === "pausa_imprevisto"
+              ? "border-color:#f59e0b; background:rgba(245,158,11,0.08);"
+              : isSystemMsg(m)
+              ? "opacity:0.85; border-left:3px solid var(--renacer-gold); background:rgba(255,255,255,0.03);"
+              : "";
+          return `
+          <div class="crm-msg-bubble ${isMine ? "crm-msg-bubble--mine" : ""}" style="${specialStyle}">
             <div class="crm-msg-meta">
-              <span><strong>${m.autor_nombre}</strong> (${m.autor_rol})</span>
-              <span>${formatDateHuman(m.fecha_hora, true)}</span>
+              <span><strong><i class="fas ${isMine ? "fa-user-check" : "fa-user"}"></i> ${m.autor_nombre}</strong> (${m.autor_rol})</span>
+              <span><i class="far fa-clock"></i> ${formatDateHuman(m.fecha_hora, true)}</span>
             </div>
             <div class="crm-msg-text">${m.mensaje}</div>
-            ${m.foto_adjunta_url ? `<img src="${m.foto_adjunta_url}" class="crm-msg-photo" alt="Adjunto" />` : ""}
+            ${
+              m.foto_adjunta_url
+                ? `<img src="${m.foto_adjunta_url}" class="crm-msg-photo" alt="Adjunto" onclick="openPhotoLightbox('${m.foto_adjunta_url}', 'Troquel #${order.codigo_troquel} · Bitácora')" style="cursor:zoom-in;" />`
+                : ""
+            }
           </div>
-        `
-        )
+        `;
+        })
         .join("")
-    : `<p style="font-size:13px; color:var(--text-muted);">Aún no hay comentarios en esta orden.</p>`;
+    : `<p style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;"><i class="fas fa-comment-dots" style="font-size:24px; opacity:0.5; display:block; margin-bottom:6px;"></i>${currentCrmFilterMode === "chat" ? "No hay notas técnicas de trabajadores aún en esta orden." : "Aún no hay registros en la bitácora."}</p>`;
 
   openModal({
-    title: `Bitácora y Chat Interno en Tiempo Real — TROQUEL #${order.codigo_troquel}`,
+    title: `Bitácora y Chat Interno — TROQUEL #${order.codigo_troquel}`,
     icon: "fa-comments",
     wide: true,
     body: `
-      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
-        Canal directo en tiempo real entre Administración, Jefes de Taller y Técnicos para reportar novedades, pausas o anomalías sobre la pieza.
+      <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+          <div style="font-weight:900; font-size:14px; color:var(--text-main);">
+            ${order.nombre_cliente} · <span style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">TROQUEL #${order.codigo_troquel}</span>
+          </div>
+          <div style="font-size:11.5px; color:var(--text-muted); font-weight:600;">
+            ${order.datos_motor.marca} ${order.datos_motor.modelo} (${order.datos_motor.tipo_pieza})
+          </div>
+        </div>
+        <div>
+          <span class="state-badge">${order.estado_actual.replace(/_/g, " ")}</span>
+        </div>
       </div>
+
+      <!-- Filtro Chat Técnico vs Historial Completo (Audio 5) -->
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; padding:6px 10px; background:var(--bg-subtle); border-radius:10px; border:1px solid var(--border-subtle);">
+        <span style="font-size:11.5px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Vista de Conversación:</span>
+        <div style="display:flex; gap:6px;">
+          <button type="button" class="btn btn--xs ${currentCrmFilterMode === "chat" ? "btn--primary" : "btn--ghost"}" onclick="setCrmFilterMode('chat', '${orderId}')">
+            <i class="fas fa-comments"></i> Chat Técnico & Notas (${countChat})
+          </button>
+          <button type="button" class="btn btn--xs ${currentCrmFilterMode === "all" ? "btn--primary" : "btn--ghost"}" onclick="setCrmFilterMode('all', '${orderId}')">
+            <i class="fas fa-list-check"></i> Historial Completo (${countAll})
+          </button>
+        </div>
+      </div>
+
       <div class="crm-chat-feed" id="crm-feed-box">${feedHtml}</div>
 
-      <div class="form-section-box" style="margin-top:14px; margin-bottom:0;">
+      <div class="form-section-box" style="margin-top:12px; margin-bottom:0; padding:12px;">
         <div class="form-field">
           <label>Escribir Mensaje o Reportar Novedad en la Pieza</label>
           <textarea id="crm-new-msg-text" rows="2" placeholder="Ej: Se detectó asiento de válvula fisurado en cilindro #3, adjunto foto para aprobación de ítem extra..."></textarea>
         </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; flex-wrap:wrap; gap:10px;">
           <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-            <label class="btn btn--ghost" style="cursor:pointer;">
+            <label class="btn btn--ghost btn--sm" style="cursor:pointer;">
               <i class="fas fa-camera"></i> Adjuntar Foto
               <input type="file" accept="image/*" style="display:none;" onchange="handleCrmPhotoSelect(event)" />
             </label>
@@ -8089,6 +8897,11 @@ function openOrderCrmModal(orderId) {
     `,
     footer: `<button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>`
   });
+
+  setTimeout(() => {
+    const feed = document.getElementById("crm-feed-box");
+    if (feed) feed.scrollTop = feed.scrollHeight;
+  }, 100);
 }
 
 async function handleCrmPhotoSelect(event) {
@@ -8096,7 +8909,7 @@ async function handleCrmPhotoSelect(event) {
   if (!file) return;
   tempCrmPhotoUrl = await readFileAsCompressedDataUrl(file);
   const st = document.getElementById("crm-photo-status");
-  if (st) st.textContent = "📸 Foto adjunta lista para enviar";
+  if (st) st.innerHTML = '<i class="fas fa-check-circle" style="color:#16a34a;"></i> Foto lista';
 }
 
 function sendCrmMessage(orderId) {
@@ -8131,8 +8944,9 @@ function sendCrmMessage(orderId) {
    GESTIÓN DE PERSONAL POR DESTAJO, FICHA DE TRABAJOS/TIEMPOS Y PERFILES/PIN
    ============================================================================ */
 function renderCommissionsAndStaffScreen() {
-  const technicians = db.usuarios.filter((u) => u.rol === "tecnico");
-  const managementAndStaff = db.usuarios.filter((u) => u.rol !== "tecnico");
+  const technicians = db.usuarios.filter((u) => u.rol === "tecnico" && !u.es_externo && u.rol !== "outsourcing");
+  const outsourcingWorkshops = db.usuarios.filter((u) => u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo);
+  const managementAndStaff = db.usuarios.filter((u) => u.rol !== "tecnico" && !u.es_externo && u.rol !== "outsourcing");
 
   const techRowsHtml = technicians
     .map((t) => {
@@ -8157,10 +8971,10 @@ function renderCommissionsAndStaffScreen() {
       const troquelesSet = new Set();
       subs.forEach((s) => {
         const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
-        if (ord && ord.codigo_troquel) troquelesSet.add(`#${ord.codigo_troquel}`);
+        if (ord && ord.codigo_troquel) troquelesSet.add("#" + ord.codigo_troquel);
       });
       const troquelesBadges = Array.from(troquelesSet)
-        .map((tr) => `<span style="background:rgba(245,196,0,0.18); color:var(--text-main); border:1px solid rgba(245,196,0,0.5); padding:2px 7px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:800;">${tr}</span>`)
+        .map((tr) => '<span style="background:rgba(245,196,0,0.18); color:var(--text-main); border:1px solid rgba(245,196,0,0.5); padding:2px 7px; border-radius:6px; font-family:''JetBrains Mono'',monospace; font-size:11px; font-weight:800;">' + tr + '</span>')
         .join(" ");
 
       const activeDaysCount = new Set(
@@ -8169,92 +8983,142 @@ function renderCommissionsAndStaffScreen() {
           .map((a) => cleanDateISO(a.fecha))
       ).size;
 
-      return `
+      return 
         <tr>
           <td>
-            <div style="font-weight:900; font-size:14.5px;">${t.nombre}</div>
-            <div style="font-size:11.5px; color:var(--text-muted);">${t.especialidad} · 📞 ${t.telefono} · PIN: <code>${t.pin || "1234"}</code></div>
+            <div style="font-weight:900; font-size:14.5px;"> + t.nombre + </div>
+            <div style="font-size:11.5px; color:var(--text-muted);"> + t.especialidad +  · <i class="fas fa-phone"></i>  + t.telefono +  · PIN: <code> + (t.pin || "1234") + </code></div>
           </td>
           <td>
-            <span class="state-badge ${t.activo ? "state-badge--done" : "state-badge--wait"}">
-              ${t.activo ? "ACTIVO" : "INACTIVO"}
+            <span class="state-badge  + (t.activo ? "state-badge--done" : "state-badge--wait") + ">
+               + (t.activo ? "ACTIVO" : "INACTIVO") + 
             </span>
-            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${activeDaysCount} día(s) activo(s)</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;"> + activeDaysCount +  día(s) activo(s)</div>
           </td>
           <td>
             <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-              <span><strong>${completedUnpaid.length}</strong> por liquidar · <strong>${inProgress.length}</strong> en mesa</span>
-              <button type="button" class="btn btn--ghost" style="padding:2px 7px; font-size:11px;" onclick="openWorkerCompletedJobsModal('${t.id_usuario}')" title="Ver detalle de trabajos realizados en el periodo">
-                <i class="fas fa-list-check"></i> ${completedInPeriod.length} en periodo
+              <span><strong> + completedUnpaid.length + </strong> por liquidar · <strong> + inProgress.length + </strong> en mesa</span>
+              <button type="button" class="btn btn--ghost" style="padding:2px 7px; font-size:11px;" onclick="openWorkerCompletedJobsModal(' + t.id_usuario + ')" title="Ver detalle de trabajos realizados en el periodo">
+                <i class="fas fa-list-check"></i>  + completedInPeriod.length +  en periodo
               </button>
             </div>
-            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas asignadas</span>'}</div>
+            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;"> + (troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas asignadas</span>') + </div>
           </td>
           <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">
-            ${formatMinutes(totalMinutes)}
+             + formatMinutes(totalMinutes) + 
           </td>
           <td>
             <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#16a34a;">
-              $${totalToPay.toFixed(2)} <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
+              $ + totalToPay.toFixed(2) +  <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
             </div>
-            ${
-              totalPending > 0
-                ? `<div style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:#d97706;">+$${totalPending.toFixed(2)} en mesa</div>`
-                : ""
-            }
+             + (totalPending > 0 ? '<div style="font-family:''JetBrains Mono'',monospace; font-size:12px; font-weight:800; color:#d97706;">+$' + totalPending.toFixed(2) + ' en mesa</div>' : '') + 
           </td>
           <td>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal('${t.id_usuario}')">
+              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal(' + t.id_usuario + ')">
                 <i class="fas fa-clipboard-list"></i> Ficha / Trabajos y Tiempos
               </button>
-              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${t.id_usuario}')" title="Editar nombre, especialidad, teléfono o PIN">
+              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal(' + t.id_usuario + ')" title="Editar nombre, especialidad, teléfono o PIN">
                 <i class="fas fa-edit"></i> Editar
               </button>
-              ${
-                totalToPay > 0
-                  ? `<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateWorkerModal('${t.id_usuario}', ${totalToPay})">
-                      <i class="fas fa-hand-holding-usd"></i> Liquidar ($${totalToPay.toFixed(2)})
-                    </button>`
-                  : ""
-              }
-              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${t.id_usuario}')" title="Eliminar trabajador">
+               + (totalToPay > 0 ? '<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateWorkerModal(''' + t.id_usuario + ''', ' + totalToPay + ')"><i class="fas fa-hand-holding-usd"></i> Liquidar ($' + totalToPay.toFixed(2) + ')</button>' : '') + 
+              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker(' + t.id_usuario + ')" title="Eliminar trabajador">
                 <i class="fas fa-trash-alt"></i>
               </button>
             </div>
           </td>
         </tr>
-      `;
+      ;
+    })
+    .join("");
+
+  // Fila para talleres externos (Outsourcing / Rectificadora Solteca)
+  const outsourcingRowsHtml = outsourcingWorkshops
+    .map((w) => {
+      const subs = db.subtareas.filter((s) => s.tecnico_id === w.id_usuario);
+      const completedUnpaid = subs.filter((s) => s.estado_subtarea === "terminado" && !s.comision_pagada);
+      const inProgress = subs.filter((s) => s.estado_subtarea !== "terminado");
+      const totalToPay = completedUnpaid.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+      const totalPending = inProgress.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+
+      const troquelesSet = new Set();
+      subs.forEach((s) => {
+        const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+        if (ord && ord.codigo_troquel) troquelesSet.add("#" + ord.codigo_troquel);
+      });
+      const troquelesBadges = Array.from(troquelesSet)
+        .map((tr) => '<span style="background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.4); padding:2px 7px; border-radius:6px; font-family:''JetBrains Mono'',monospace; font-size:11px; font-weight:800;">' + tr + '</span>')
+        .join(" ");
+
+      return 
+        <tr>
+          <td>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="badge-external"><i class="fas fa-handshake"></i> ALIADO</span>
+              <strong style="font-size:14.5px;"> + w.nombre + </strong>
+            </div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+               + w.especialidad +  · <i class="fas fa-phone"></i>  + (w.telefono || "Sin teléfono") + (w.direccion ?  · <i class="fas fa-map-marker-alt"></i>  + w.direccion : "") + 
+            </div>
+          </td>
+          <td>
+            <span class="state-badge  + (w.activo ? "state-badge--done" : "state-badge--wait") + ">
+               + (w.activo ? "ACTIVO" : "INACTIVO") + 
+            </span>
+            <div style="font-size:11px; color:#38bdf8; font-weight:800; margin-top:4px;">Taller Externo</div>
+          </td>
+          <td>
+            <div><strong> + completedUnpaid.length + </strong> por liquidar · <strong> + inProgress.length + </strong> en proceso</div>
+            <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;"> + (troquelesBadges || '<span style="font-size:11px; color:var(--text-muted);">Sin piezas enviadas</span>') + </div>
+          </td>
+          <td>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#38bdf8;">
+              $ + totalToPay.toFixed(2) +  <span style="font-size:10px; color:var(--text-muted); font-weight:700;">(Listo)</span>
+            </div>
+             + (totalPending > 0 ? '<div style="font-family:''JetBrains Mono'',monospace; font-size:12px; font-weight:800; color:#d97706;">+$' + totalPending.toFixed(2) + ' en proceso</div>' : '') + 
+          </td>
+          <td>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal(' + w.id_usuario + ')">
+                <i class="fas fa-list-check"></i> Ficha / Trabajos Tercerizados
+              </button>
+              <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal(' + w.id_usuario + ')" title="Editar taller aliado">
+                <i class="fas fa-edit"></i> Editar
+              </button>
+               + (totalToPay > 0 ? '<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateExternalWorkshopModal(''' + w.id_usuario + ''', ' + totalToPay + ')"><i class="fas fa-hand-holding-usd"></i> Liquidar Pago ($' + totalToPay.toFixed(2) + ')</button>' : '') + 
+              <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker(' + w.id_usuario + ')" title="Eliminar taller externo">
+                <i class="fas fa-trash-alt"></i>
+              </button>
+            </div>
+          </td>
+        </tr>
+      ;
     })
     .join("");
 
   const adminRowsHtml = managementAndStaff
     .map(
-      (u) => `
+      (u) => 
       <tr>
-        <td><strong>${u.nombre}</strong></td>
-        <td><span class="state-badge state-badge--exec">${u.rol_label || u.rol}</span></td>
-        <td>${u.especialidad || "-"}</td>
-        <td>${u.telefono || "-"}</td>
-        <td><code>${u.pin || "1234"}</code></td>
+        <td><strong> + u.nombre + </strong></td>
+        <td><span class="state-badge state-badge--exec"> + (u.rol_label || u.rol) + </span></td>
+        <td> + (u.especialidad || "-") + </td>
+        <td> + (u.telefono || "-") + </td>
+        <td><code> + (u.pin || "1234") + </code></td>
         <td>
           <div style="display:flex; gap:6px;">
-            <button type="button" class="btn btn--ghost" style="padding:4px 10px; font-size:11.5px;" onclick="openEditWorkerModal('${u.id_usuario}')">
+            <button type="button" class="btn btn--ghost" style="padding:4px 10px; font-size:11.5px;" onclick="openEditWorkerModal(' + u.id_usuario + ')">
               <i class="fas fa-edit"></i> Editar Perfil / PIN
             </button>
-            ${
-              u.id_usuario !== currentUser.id_usuario
-                ? `<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${u.id_usuario}')"><i class="fas fa-trash-alt"></i></button>`
-                : ""
-            }
+             + (u.id_usuario !== currentUser.id_usuario ? '<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker(''' + u.id_usuario + ''')"><i class="fas fa-trash-alt"></i></button>' : '') + 
           </div>
         </td>
       </tr>
-    `
+    
     )
     .join("");
 
-  return `
+  return 
     <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
       <div>
         <span style="font-size:11px; font-weight:900; color:#16a34a; text-transform:uppercase;">
@@ -8270,12 +9134,12 @@ function renderCommissionsAndStaffScreen() {
           <i class="fas fa-calendar-check"></i> Días Activos y Proyectos
         </button>
         <button type="button" class="btn btn--gold" onclick="openAddWorkerModal()">
-          <i class="fas fa-user-plus"></i> + Agregar Trabajador / Perfil
+          <i class="fas fa-user-plus"></i> Agregar Trabajador / Perfil
         </button>
       </div>
     </div>
 
-    <div class="data-table-wrapper" style="margin-bottom:22px;">
+    <div class="data-table-wrapper" style="margin-bottom:28px;">
       <table class="renacer-table">
         <thead>
           <tr>
@@ -8288,7 +9152,44 @@ function renderCommissionsAndStaffScreen() {
           </tr>
         </thead>
         <tbody>
-          ${techRowsHtml}
+           + techRowsHtml + 
+        </tbody>
+      </table>
+    </div>
+
+    <!-- SECCIÓN DEDICADA: TALLERES EXTERNOS ALIADOS (RECTIFICADORA SOLTECA Y OUTSOURCING) -->
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+      <div>
+        <span style="font-size:11px; font-weight:900; color:#38bdf8; text-transform:uppercase;">
+          OUTSOURCING Y TRABAJOS EXTERNOS
+        </span>
+        <h2 style="font-size:19px; font-weight:900;">
+          <i class="fas fa-handshake" style="color:#38bdf8;"></i> Talleres Externos Aliados (Rectificadora Solteca y Tercerización)
+        </h2>
+        <p style="font-size:13px; color:var(--text-muted);">
+          Control de servicios mecanizados o rectificaciones enviadas a talleres aliados como <strong>Rectificadora Solteca</strong>. Permite auditar qué piezas y troqueles se enviaron y liquidar pagos registrando egresos automáticos en el Libro Diario.
+        </p>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--gold" onclick="openAddExternalWorkshopModal()">
+          <i class="fas fa-plus-circle"></i> Registrar Taller Externo
+        </button>
+      </div>
+    </div>
+
+    <div class="data-table-wrapper" style="margin-bottom:28px;">
+      <table class="renacer-table">
+        <thead>
+          <tr>
+            <th>Taller Aliado / Contacto</th>
+            <th>Estado y Tipo</th>
+            <th>Trabajos Tercerizados y Troqueles</th>
+            <th>Costo a Liquidar</th>
+            <th>Ficha, Detalle y Liquidación</th>
+          </tr>
+        </thead>
+        <tbody>
+           + (outsourcingRowsHtml || '<tr><td colspan="5" style="text-align:center; padding:16px; color:var(--text-muted);">No hay talleres externos registrados. Haz clic en "Registrar Taller Externo" para agregar uno.</td></tr>') + 
         </tbody>
       </table>
     </div>
@@ -8309,11 +9210,202 @@ function renderCommissionsAndStaffScreen() {
           </tr>
         </thead>
         <tbody>
-          ${adminRowsHtml}
+           + adminRowsHtml + 
         </tbody>
       </table>
     </div>
-  `;
+  ;
+}
+
+/* ---------- FUNCIONES PARA GESTIÓN Y LIQUIDACIÓN DE TALLERES EXTERNOS (SOLTECA) ---------- */
+function openAddExternalWorkshopModal() {
+  openModal({
+    title: "Registrar Taller Externo / Aliado (Solteca / Outsourcing)",
+    icon: "fa-handshake",
+    body: 
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+        Registra un taller aliado (como <strong>Rectificadora Solteca</strong>) para asignarle subtareas y controlar los costos tercerizados.
+      </p>
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label><i class="fas fa-building"></i> Nombre del Taller Aliado *</label>
+          <input type="text" id="ext-ws-name" placeholder="Ej. Rectificadora Solteca C.A." required />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-tools"></i> Especialidad / Procesos *</label>
+          <input type="text" id="ext-ws-spec" placeholder="Ej. Cigüeñales, Encamisado, Soldadura Especial" required />
+        </div>
+      </div>
+      <div class="form-grid-2" style="margin-top:10px;">
+        <div class="form-field">
+          <label><i class="fas fa-phone"></i> Teléfono de Contacto</label>
+          <input type="tel" id="ext-ws-phone" placeholder="0414-1234567" />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-map-marker-alt"></i> Dirección / Ubicación</label>
+          <input type="text" id="ext-ws-addr" placeholder="Ej. Calle 72, Sector Los Olivos" />
+        </div>
+      </div>
+    ,
+    footer: 
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewExternalWorkshop()">
+        <i class="fas fa-check"></i> Guardar Taller Externo
+      </button>
+    
+  });
+}
+
+function saveNewExternalWorkshop() {
+  const name = (document.getElementById("ext-ws-name")?.value || "").trim();
+  const spec = (document.getElementById("ext-ws-spec")?.value || "").trim() || "Mecanizado y Rectificación Externa";
+  const phone = (document.getElementById("ext-ws-phone")?.value || "").trim();
+  const addr = (document.getElementById("ext-ws-addr")?.value || "").trim();
+
+  if (!name) {
+    showToast("Indica el nombre del taller externo.", "error");
+    return;
+  }
+
+  const newId = "EXT-" + Date.now().toString().slice(-5);
+  const newWorkshop = {
+    id_usuario: newId,
+    nombre: name,
+    rol: "outsourcing",
+    rol_label: "Taller Externo (Outsourcing)",
+    tipo: "taller_externo",
+    es_externo: true,
+    especialidad: spec,
+    telefono: phone,
+    direccion: addr,
+    activo: true,
+    pin: "0000",
+    fecha_creacion: new Date().toISOString()
+  };
+
+  db.usuarios.push(newWorkshop);
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast("Taller externo " + name + " registrado exitosamente.");
+}
+
+function openLiquidateExternalWorkshopModal(workshopId, totalDue) {
+  const ws = db.usuarios.find((u) => u.id_usuario === workshopId);
+  if (!ws) return;
+
+  const pendingSubs = db.subtareas.filter(
+    (s) => s.tecnico_id === workshopId && s.estado_subtarea === "terminado" && !s.comision_pagada
+  );
+  const computedTotal = totalDue || pendingSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+
+  const subtasksSummary = pendingSubs
+    .map((s) => {
+      const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+      return <li style="font-size:12px; margin-bottom:4px;">
+        <strong>Troquel # + (ord ? ord.codigo_troquel : "S/N") + </strong>:  + s.descripcion_servicio +  — <span style="font-family:'JetBrains Mono',monospace; color:#38bdf8; font-weight:800;">$ + Number(s.comision_base_tecnico).toFixed(2) + </span>
+      </li>;
+    })
+    .join("");
+
+  openModal({
+    title: "Liquidar Pago a Taller Externo — " + ws.nombre,
+    icon: "fa-hand-holding-usd",
+    body: 
+      <div style="background:rgba(56, 189, 248, 0.1); border:1px solid rgba(56, 189, 248, 0.3); border-radius:12px; padding:12px; margin-bottom:14px;">
+        <div style="font-weight:900; font-size:14px; color:#38bdf8;">
+          <i class="fas fa-handshake"></i>  + ws.nombre + 
+        </div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+           + ws.especialidad +  ·  + (ws.telefono || "Sin teléfono") + 
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <span style="font-size:11px; font-weight:900; text-transform:uppercase; color:var(--text-muted);">
+          Trabajos tercerizados a liquidar ( + pendingSubs.length + ):
+        </span>
+        <ul style="margin-top:6px; padding-left:18px; max-height:160px; overflow-y:auto;">
+           + (subtasksSummary || '<li style="color:var(--text-muted); font-size:12px;">No hay trabajos pendientes de pago.</li>') + 
+        </ul>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label><i class="fas fa-dollar-sign"></i> Monto Total a Pagar ($) *</label>
+          <input type="number" step="0.5" id="liq-ext-amount" value=" + computedTotal.toFixed(2) + " style="font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:900; color:#38bdf8;" />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-credit-card"></i> Método de Pago de Caja *</label>
+          <select id="liq-ext-method">
+            <option value="efectivo">Efectivo Físico (Caja)</option>
+            <option value="pago_movil">Pago Móvil (Mercantil / BNC / Banesco)</option>
+            <option value="transferencia">Transferencia Bancaria</option>
+            <option value="zelle">Zelle / Divisas</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-receipt"></i> Nro. de Referencia o Comprobante</label>
+        <input type="text" id="liq-ext-ref" placeholder="Ej. Ref #592817 o Billete serial" />
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-comment"></i> Observación / Notas</label>
+        <input type="text" id="liq-ext-notes" placeholder="Ej. Liquidación de rectificación de cigüeñales y encamisado" />
+      </div>
+    ,
+    footer: 
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--success" onclick="confirmLiquidateExternalWorkshop(' + workshopId + ')">
+        <i class="fas fa-check-circle"></i> Asentar Pago como Egreso en Libro Diario
+      </button>
+    
+  });
+}
+
+function confirmLiquidateExternalWorkshop(workshopId) {
+  const ws = db.usuarios.find((u) => u.id_usuario === workshopId);
+  if (!ws) return;
+
+  const amount = Number(document.getElementById("liq-ext-amount")?.value);
+  const method = document.getElementById("liq-ext-method")?.value || "efectivo";
+  const ref = (document.getElementById("liq-ext-ref")?.value || "").trim();
+  const notes = (document.getElementById("liq-ext-notes")?.value || "").trim() || ("Liquidación a taller externo " + ws.nombre);
+
+  if (isNaN(amount) || amount <= 0) {
+    showToast("Indica un monto válido a liquidar.", "error");
+    return;
+  }
+
+  // 1. Asentar Egreso en Libro Diario
+  const movId = "FIN-" + Date.now();
+  const now = new Date().toISOString();
+  db.finanzas_movimientos.push({
+    id_movimiento: movId,
+    fecha: now,
+    tipo: "egreso",
+    categoria: "Pago a Talleres Externos (Solteca / Outsourcing)",
+    monto: amount,
+    metodo_pago: method,
+    referencia: ref,
+    concepto: "Pago por trabajos tercerizados a " + ws.nombre + ". " + notes,
+    usuario_registro: currentUser.nombre,
+    soporte_foto: null
+  });
+
+  // 2. Marcar subtareas completadas como pagadas
+  const pendingSubs = db.subtareas.filter(
+    (s) => s.tecnico_id === workshopId && s.estado_subtarea === "terminado" && !s.comision_pagada
+  );
+  pendingSubs.forEach((s) => {
+    s.comision_pagada = true;
+    s.fecha_pago_comision = now;
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast("Pago de $" + amount.toFixed(2) + " a " + ws.nombre + " registrado como Egreso en el Libro Diario.");
 }
 
 /* ---------- FICHA COMPLETA DEL TRABAJADOR (HISTORIAL DE PIEZAS, TIEMPOS Y AJUSTE DE COMISIÓN) ---------- */
@@ -8389,7 +9481,7 @@ function openWorkerProfileModal(techId) {
         .map(
           (d) => `
           <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border-subtle); font-size:12.5px;">
-            <span><strong>📅 ${formatDateHuman(d.fecha, false)}</strong> — ${d.observacion || "Actividad en taller"}</span>
+            <span><strong><i class="far fa-calendar-alt"></i> ${formatDateHuman(d.fecha, false)}</strong> — ${d.observacion || "Actividad en taller"}</span>
             <span class="state-badge state-badge--done">${d.estado || "Activo"}</span>
           </div>
         `
@@ -8398,7 +9490,7 @@ function openWorkerProfileModal(techId) {
     : `<div style="padding:10px; font-size:12px; color:var(--text-muted);">Sin días activos registrados todavía.</div>`;
 
   openModal({
-    title: `📋 Ficha Técnica de Producción y Tiempos — ${tech.nombre}`,
+    title: `Ficha Técnica de Producción y Tiempos — ${tech.nombre}`,
     icon: "fa-user-cog",
     wide: true,
     body: `
@@ -8534,7 +9626,7 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
   const unpaidSubs = db.subtareas.filter((s) => s.tecnico_id === techId && s.estado_subtarea === "terminado" && !s.comision_pagada);
 
   openModal({
-    title: `💵 Liquidación de Nómina / Salario por Destajo — ${tech.nombre}`,
+    title: `Liquidación de Nómina / Salario por Destajo — ${tech.nombre}`,
     icon: "fa-money-bill-wave",
     wide: true,
     body: `
@@ -8571,20 +9663,26 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
         </div>
       </div>
 
-      <div class="form-grid-2" style="margin-top:10px;">
+      <div class="form-grid-3" style="margin-top:10px;">
         <div class="form-field">
-          <label>Método de Pago Realizado *</label>
+          <label>Método de Pago *</label>
           <select id="liq-worker-method">
-            <option value="efectivo_usd">💵 Efectivo Divisas USD (Billetes en mano)</option>
-            <option value="pago_movil" selected>📱 Pago Móvil (Bs)</option>
-            <option value="efectivo_bs">💵 Efectivo Bolívares (Billetes en mano)</option>
-            <option value="transferencia">🏦 Transferencia Bancaria</option>
-            <option value="mixto">🔄 Mixto (Efectivo USD + Pago Móvil)</option>
+            <option value="efectivo_usd">Efectivo Divisas USD (Caja)</option>
+            <option value="pago_movil" selected>Pago Móvil (Bs)</option>
+            <option value="efectivo_bs">Efectivo Bolívares (Caja)</option>
+            <option value="transferencia">Transferencia Bancaria</option>
+            <option value="mixto">Mixto (Efectivo + Pago Móvil)</option>
           </select>
         </div>
         <div class="form-field">
-          <label>Referencia Bancaria o Conteo de Billetes</label>
-          <input type="text" id="liq-worker-ref" placeholder="Ej: Ref 482019 / Billetes: 2 de $20 y 1 de $10" />
+          <label>Cuenta / Caja Origen *</label>
+          <select id="liq-worker-account" style="font-weight:800;">
+            ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Referencia Bancaria o Conteo</label>
+          <input type="text" id="liq-worker-ref" placeholder="Ej: Ref 482019 / Billetes: $50" />
         </div>
       </div>
 
@@ -8625,6 +9723,7 @@ function confirmWorkerLiquidation(techId) {
 
   const methodEl = document.getElementById("liq-worker-method");
   const method = methodEl ? methodEl.value : "pago_movil";
+  const cuenta = document.getElementById("liq-worker-account")?.value || (method.includes("efectivo") ? "efectivo" : "mercantil");
   const refEl = document.getElementById("liq-worker-ref");
   const ref = refEl ? refEl.value.trim() : "";
 
@@ -8664,6 +9763,7 @@ function confirmWorkerLiquidation(techId) {
     monto_bs: amount * tasaBcv,
     tasa_bcv: tasaBcv,
     metodo: method,
+    cuenta: cuenta,
     referencia: ref || "S/R",
     comprobante_foto: currentWorkerLiquidationPhoto || null,
     orden_id: "NOMINA_DESTAJO"
@@ -8760,7 +9860,7 @@ function openWorkerCompletedJobsModal(techId) {
     : `<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">No hay trabajos completados registrados en este periodo.</td></tr>`;
 
   openModal({
-    title: `📋 Ficha de Trabajos Realizados — ${tech.nombre}`,
+    title: `Ficha de Trabajos Realizados — ${tech.nombre}`,
     icon: "fa-list-check",
     wide: true,
     body: `
@@ -8788,10 +9888,10 @@ function openWorkerCompletedJobsModal(techId) {
       <div class="form-section-box" style="margin-bottom:14px; background:rgba(2,132,199,0.06); border-color:#0284c7;">
         <div class="form-section-title"><i class="fas fa-tasks"></i> Protocolo de Control de Salida de Piezas y Repuestos</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px;">
-          <div>✔️ Todas las piezas rectificadas lavadas y desengrasadas</div>
-          <div>✔️ Repuestos viejos/reemplazados guardados para el cliente</div>
-          <div>✔️ Tolerancias dimensionales y rugosidad verificadas</div>
-          <div>✔️ Identificación de Troquel verificable en el metal</div>
+          <div><i class="fas fa-check" style="color:#22c55e;"></i> Todas las piezas rectificadas lavadas y desengrasadas</div>
+          <div><i class="fas fa-check" style="color:#22c55e;"></i> Repuestos viejos/reemplazados guardados para el cliente</div>
+          <div><i class="fas fa-check" style="color:#22c55e;"></i> Tolerancias dimensionales y rugosidad verificadas</div>
+          <div><i class="fas fa-check" style="color:#22c55e;"></i> Identificación de Troquel verificable en el metal</div>
         </div>
       </div>
 
@@ -8918,7 +10018,7 @@ function openEditWorkerModal(userId) {
   if (!u) return;
 
   openModal({
-    title: `✏️ Editar Perfil y PIN — ${u.nombre}`,
+    title: `Editar Perfil y PIN — ${u.nombre}`,
     icon: "fa-user-edit",
     body: `
       <div class="form-grid-2">
@@ -9045,7 +10145,7 @@ function renderAttendanceScreen() {
 
           return `
             <tr>
-              <td><strong>📅 ${formatDateHuman(a.fecha, false)}</strong></td>
+              <td><strong><i class="far fa-calendar-alt"></i> ${formatDateHuman(a.fecha, false)}</strong></td>
               <td><strong>${a.nombre}</strong></td>
               <td>
                 <div style="font-weight:800; color:var(--text-main);">${troqueles || "Actividad general en planta"}</div>
@@ -9072,7 +10172,7 @@ function renderAttendanceScreen() {
         <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
           MODALIDAD DE TALLER POR DESTAJO · SIN HORARIO FIJO DE ENTRADA/SALIDA
         </span>
-        <h2 style="font-size:20px; font-weight:900;">📅 Días Activos, Fechas de Trabajo y Proyectos (#Troquel) por Trabajador</h2>
+        <h2 style="font-size:20px; font-weight:900;"><i class="fas fa-calendar-alt" style="color:var(--renacer-gold);"></i> Días Activos, Fechas de Trabajo y Proyectos (#Troquel) por Trabajador</h2>
         <p style="font-size:13px; color:var(--text-muted);">
           Como los técnicos cobran por trabajo realizado y no por hora de llegada, aquí se registran qué fechas estuvieron activos en el taller, en qué piezas (#Troquel) trabajaron y cuánto tiempo invirtieron.
         </p>
@@ -9172,6 +10272,11 @@ function deleteAttendanceRecord(asistId) {
    LIBRO DIARIO DE INGRESOS, GASTOS, HISTORIAL POR CLIENTE Y FLUJO DE CAJA
    ============================================================================ */
 let ledgerClientFilter = "all";
+let ledgerTypeFilter = "all"; // 'all' | 'ingreso' | 'egreso'
+let ledgerAccountFilter = "all"; // 'all' | 'efectivo' | 'mercantil' | 'bnc' | 'banesco' | 'zelle_otro'
+let ledgerCategoryFilter = "all";
+let ledgerDateFrom = "";
+let ledgerDateTo = "";
 
 function renderFinancesLedgerScreen() {
   const ingresos = db.finanzas_movimientos
@@ -9182,10 +10287,31 @@ function renderFinancesLedgerScreen() {
     .filter((m) => m.tipo === "egreso")
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
-  const utilidadNeta = ingresos - egresos;
+  const balances = getBalancesPorCuenta();
+  const utilidadNeta = balances.totalLiquido; // Saldo real líquido disponible
   const cuentasPorCobrar = db.ordenes.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
 
-  let filteredMovs = db.finanzas_movimientos.slice();
+  // Filtrado compuesto avanzado
+  let filteredMovs = (db.finanzas_movimientos || []).slice();
+
+  if (ledgerTypeFilter !== "all") {
+    filteredMovs = filteredMovs.filter((m) => m.tipo === ledgerTypeFilter);
+  }
+
+  if (ledgerAccountFilter !== "all") {
+    filteredMovs = filteredMovs.filter((m) => {
+      let c = m.cuenta;
+      if (!c) {
+        c = (m.metodo === "pago_movil" || m.metodo === "transferencia") ? "mercantil" : "efectivo";
+      }
+      return c === ledgerAccountFilter;
+    });
+  }
+
+  if (ledgerCategoryFilter !== "all") {
+    filteredMovs = filteredMovs.filter((m) => m.categoria === ledgerCategoryFilter);
+  }
+
   if (ledgerClientFilter !== "all") {
     const clientObj = db.clientes.find((c) => c.id_cliente === ledgerClientFilter);
     const clientOrderIds = new Set(
@@ -9200,91 +10326,233 @@ function renderFinancesLedgerScreen() {
     });
   }
 
+  if (ledgerDateFrom) {
+    filteredMovs = filteredMovs.filter((m) => cleanDateISO(m.fecha) >= ledgerDateFrom);
+  }
+  if (ledgerDateTo) {
+    filteredMovs = filteredMovs.filter((m) => cleanDateISO(m.fecha) <= ledgerDateTo);
+  }
+
+  // Opciones de categorías únicas
+  const allCategories = [
+    ...new Set([
+      ...(db.finanzas_categorias?.ingresos || []),
+      ...(db.finanzas_categorias?.egresos || []),
+      ...db.finanzas_movimientos.map((m) => m.categoria).filter(Boolean)
+    ])
+  ].sort();
+
+  const categoryFilterOptions =
+    `<option value="all">Todas las Categorías (${allCategories.length})</option>` +
+    allCategories
+      .map((cat) => `<option value="${cat}" ${ledgerCategoryFilter === cat ? "selected" : ""}>${cat}</option>`)
+      .join("");
+
+  const accountFilterOptions =
+    `<option value="all">Todas las Cuentas / Bancos (${BANCOS_RENACER.length})</option>` +
+    BANCOS_RENACER.map(
+      (b) => `<option value="${b.id}" ${ledgerAccountFilter === b.id ? "selected" : ""}>${b.nombre} ($${(balances[b.id] || 0).toFixed(2)})</option>`
+    ).join("");
+
   const clientFilterOptions =
-    `<option value="all">Todos los Movimientos de Caja (${db.finanzas_movimientos.length})</option>` +
+    `<option value="all">Todos los Clientes / Terceros (${db.clientes.length})</option>` +
     db.clientes
       .map(
         (c) =>
-          `<option value="${c.id_cliente}" ${ledgerClientFilter === c.id_cliente ? "selected" : ""}>👤 Historial de Pagos: ${c.nombre_completo} (${c.documento_identidad})</option>`
+          `<option value="${c.id_cliente}" ${ledgerClientFilter === c.id_cliente ? "selected" : ""}>${c.nombre_completo || c.nombre_cliente} (${c.documento_identidad})</option>`
       )
       .join("");
 
   const movRowsHtml = filteredMovs.length
     ? filteredMovs
-        .map(
-          (m) => `
-          <tr>
-            <td><strong>${formatDateHuman(m.fecha, false)}</strong></td>
-            <td>
-              <span class="state-badge ${m.tipo === "ingreso" ? "state-badge--done" : "state-badge--wait"}">
-                ${m.tipo === "ingreso" ? "⬆️ INGRESO" : "⬇️ EGRESO / GASTO"}
-              </span>
-            </td>
-            <td><strong>${m.categoria}</strong></td>
-            <td>${m.concepto}</td>
-            <td>${(m.metodo || "efectivo").toUpperCase()}</td>
-            <td style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:${m.tipo === "ingreso" ? "#16a34a" : "#dc2626"};">
-              ${m.tipo === "ingreso" ? "+" : "-"}$${Number(m.monto).toFixed(2)}
-            </td>
-            <td style="text-align:right;">
-              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteFinanceMovement('${m.id_mov}')" title="Eliminar movimiento">
-                <i class="fas fa-trash-alt"></i>
-              </button>
-            </td>
-          </tr>
-        `
-        )
+        .map((m) => {
+          let cId = m.cuenta;
+          if (!cId) {
+            cId = (m.metodo === "pago_movil" || m.metodo === "transferencia") ? "mercantil" : "efectivo";
+          }
+          const bObj = BANCOS_RENACER.find((b) => b.id === cId) || BANCOS_RENACER[0];
+          const isIngreso = m.tipo === "ingreso";
+
+          return `
+            <tr>
+              <td>
+                <div style="font-weight:800; font-size:12.5px;">${formatDateHuman(m.fecha, false)}</div>
+                ${m.hora ? `<div style="font-size:10.5px; color:var(--text-muted);">${m.hora}</div>` : ""}
+              </td>
+              <td>
+                <span class="state-badge ${isIngreso ? "state-badge--done" : "state-badge--danger"}">
+                  <i class="fas ${isIngreso ? "fa-arrow-up" : "fa-arrow-down"}"></i> ${isIngreso ? "INGRESO" : "EGRESO"}
+                </span>
+              </td>
+              <td>
+                <span style="font-weight:800; font-size:12.5px; color:var(--text-main);">${m.categoria || "General"}</span>
+              </td>
+              <td>
+                <div style="font-size:12.5px; color:var(--text-main); font-weight:600;">${m.concepto || "Sin descripción"}</div>
+                ${
+                  m.referencia && m.referencia !== "S/R"
+                    ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fas fa-receipt"></i> Ref: ${m.referencia}</div>`
+                    : ""
+                }
+              </td>
+              <td>
+                <span class="bank-badge ${bObj.badgeCls}">
+                  <i class="fas ${bObj.icono}"></i> ${bObj.nombre}
+                </span>
+              </td>
+              <td style="font-size:11.5px; color:var(--text-muted); font-weight:700;">
+                ${(m.metodo || "efectivo").toUpperCase().replace(/_/g, " ")}
+              </td>
+              <td style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:${isIngreso ? "#16a34a" : "#dc2626"};">
+                ${isIngreso ? "+" : "-"}$${Number(m.monto).toFixed(2)}
+              </td>
+              <td style="text-align:right;">
+                <div style="display:flex; justify-content:flex-end; gap:6px;">
+                  ${
+                    m.comprobante_foto
+                      ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openPhotoLightbox('${m.comprobante_foto}', 'Comprobante ${m.id_mov}')" title="Ver foto soporte"><i class="fas fa-camera"></i></button>`
+                      : ""
+                  }
+                  <button type="button" class="btn btn--ghost btn--xs" style="color:#dc2626;" onclick="deleteFinanceMovement('${m.id_mov}')" title="Eliminar movimiento">
+                    <i class="fas fa-trash-alt"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `;
+        })
         .join("")
-    : `<tr><td colspan="7" style="text-align:center; padding:26px; color:var(--text-muted);">No hay movimientos registrados para este filtro.</td></tr>`;
+    : `<tr><td colspan="8" style="text-align:center; padding:32px; color:var(--text-muted);">No hay movimientos que coincidan con los filtros seleccionados.</td></tr>`;
 
   return `
+    <!-- KPI Strip Superior Ejecutivo -->
     <div class="kpi-strip">
       <div class="kpi-card">
-        <span class="kpi-label">Ingresos Cobrados en Caja</span>
+        <span class="kpi-label"><i class="fas fa-arrow-circle-down" style="color:#16a34a;"></i> Ingresos Totales en Caja</span>
         <div class="kpi-value" style="color:#16a34a;">$${ingresos.toFixed(2)}</div>
-        <span class="kpi-sub">Pagos Totales 100% + Abonos recibidos</span>
+        <span class="kpi-sub">Pagos Totales 100% + Abonos verificados</span>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label">Gastos y Comisiones Pagadas</span>
+        <span class="kpi-label"><i class="fas fa-arrow-circle-up" style="color:#dc2626;"></i> Egresos Totales Operativos</span>
         <div class="kpi-value" style="color:#dc2626;">$${egresos.toFixed(2)}</div>
-        <span class="kpi-sub">Insumos, nómina, servicios y repuestos</span>
+        <span class="kpi-sub">Insumos, destajo, nómina y adelantos</span>
       </div>
-      <div class="kpi-card">
-        <span class="kpi-label">Disponibilidad Neta en Caja</span>
-        <div class="kpi-value" style="color:var(--renacer-navy);">$${utilidadNeta.toFixed(2)}</div>
-        <span class="kpi-sub">Balance real (Ingresos - Egresos)</span>
+      <div class="kpi-card" style="border:1.5px solid rgba(245,223,0,0.4);">
+        <span class="kpi-label"><i class="fas fa-vault" style="color:var(--renacer-gold);"></i> Disponibilidad Líquida Real</span>
+        <div class="kpi-value" style="color:var(--renacer-gold);">$${utilidadNeta.toFixed(2)}</div>
+        <span class="kpi-sub">Total en efectivo físico + bancos</span>
       </div>
       <div class="kpi-card" style="cursor:pointer;" onclick="navigateTab('accounts_receivable')">
-        <span class="kpi-label">Cuentas por Cobrar (Resto)</span>
-        <div class="kpi-value" style="color:#d97706;">$${cuentasPorCobrar.toFixed(2)}</div>
-        <span class="kpi-sub">Toca para ir a Cuentas por Cobrar ➔</span>
+        <span class="kpi-label"><i class="fas fa-file-invoice-dollar" style="color:#f59e0b;"></i> Cuentas por Cobrar (Resto)</span>
+        <div class="kpi-value" style="color:#f59e0b;">$${cuentasPorCobrar.toFixed(2)}</div>
+        <span class="kpi-sub">Ver desglose detallado de deudas <i class="fas fa-arrow-right"></i></span>
       </div>
     </div>
 
-    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:18px; padding:16px 20px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-      <div>
-        <h2 style="font-size:19px; font-weight:900;">📊 Libro Diario de Caja e Historial de Pagos por Cliente</h2>
-        <p style="font-size:12.5px; color:var(--text-muted);">Filtra los pagos realizados por cualquier cliente o registra ingresos y egresos operativos.</p>
+    <!-- Tira de Cuentas y Bancos en Tiempo Real -->
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:12px 18px; margin-bottom:16px;">
+      <div style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+        <i class="fas fa-building-columns" style="color:var(--renacer-gold);"></i> SALDOS LÍQUIDOS DISPONIBLES POR CUENTA Y CAJA
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+        ${BANCOS_RENACER.map(
+          (b) => `
+          <div style="background:var(--bg-input); padding:8px 12px; border-radius:10px; border-left:4px solid ${b.color}; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-size:11px; font-weight:800; color:var(--text-muted);"><i class="fas ${b.icono}"></i> ${b.nombre}</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:${b.color}; margin-top:2px;">
+                $${(balances[b.id] || 0).toFixed(2)}
+              </div>
+            </div>
+            <span style="font-size:10px; font-weight:800; padding:2px 6px; border-radius:6px; background:rgba(255,255,255,0.06); color:var(--text-muted);">${b.moneda}</span>
+          </div>
+        `
+        ).join("")}
+      </div>
+    </div>
+
+    <!-- Barra de Filtros y Registro Rápido -->
+    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:16px 20px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+        <div>
+          <h2 style="font-size:18px; font-weight:900; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-book-open" style="color:var(--renacer-gold);"></i> Libro Diario General de Caja y Bancos
+          </h2>
+          <p style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+            Auditoría de todos los ingresos, egresos operativos, abonos y nóminas por cuenta bancaria.
+          </p>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <button type="button" class="btn btn--ghost" onclick="openAddFinanceCategoryModal()">
+            <i class="fas fa-tags"></i> + Categoría
+          </button>
+          <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
+            <i class="fas fa-minus-circle"></i> Registrar Gasto
+          </button>
+          <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')">
+            <i class="fas fa-plus-circle"></i> Registrar Ingreso
+          </button>
+        </div>
+      </div>
+
+      <!-- Filtros Multi-criterio -->
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; border-top:1px solid var(--border-subtle); padding-top:12px;">
+        <span style="font-size:11.5px; font-weight:800; color:var(--text-muted);"><i class="fas fa-filter"></i> Filtros:</span>
+
         <select
-          style="padding:8px 12px; border-radius:10px; border:1.5px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:12.5px; font-weight:800;"
-          onchange="setLedgerClientFilter(this.value)"
+          style="padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:11.5px; font-weight:700;"
+          onchange="setLedgerFilter('type', this.value)"
+        >
+          <option value="all" ${ledgerTypeFilter === "all" ? "selected" : ""}>Todos los Tipos</option>
+          <option value="ingreso" ${ledgerTypeFilter === "ingreso" ? "selected" : ""}>Solo Ingresos (+)</option>
+          <option value="egreso" ${ledgerTypeFilter === "egreso" ? "selected" : ""}>Solo Egresos (-)</option>
+        </select>
+
+        <select
+          style="padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:11.5px; font-weight:700;"
+          onchange="setLedgerFilter('account', this.value)"
+        >
+          ${accountFilterOptions}
+        </select>
+
+        <select
+          style="padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:11.5px; font-weight:700;"
+          onchange="setLedgerFilter('category', this.value)"
+        >
+          ${categoryFilterOptions}
+        </select>
+
+        <select
+          style="padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:11.5px; font-weight:700;"
+          onchange="setLedgerFilter('client', this.value)"
         >
           ${clientFilterOptions}
         </select>
-        <button type="button" class="btn btn--ghost" onclick="openAddFinanceCategoryModal()">
-          <i class="fas fa-tags"></i> + Categoría
-        </button>
-        <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
-          <i class="fas fa-minus-circle"></i> Registrar Gasto
-        </button>
-        <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')">
-          <i class="fas fa-plus-circle"></i> Registrar Ingreso
-        </button>
+
+        <input
+          type="date"
+          value="${ledgerDateFrom}"
+          onchange="setLedgerFilter('from', this.value)"
+          style="padding:5px 8px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:11px;"
+          title="Fecha Desde"
+        />
+        <input
+          type="date"
+          value="${ledgerDateTo}"
+          onchange="setLedgerFilter('to', this.value)"
+          style="padding:5px 8px; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-size:11px;"
+          title="Fecha Hasta"
+        />
+
+        ${
+          (ledgerTypeFilter !== "all" || ledgerAccountFilter !== "all" || ledgerCategoryFilter !== "all" || ledgerClientFilter !== "all" || ledgerDateFrom || ledgerDateTo)
+            ? `<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px;" onclick="resetLedgerFilters()" title="Limpiar filtros"><i class="fas fa-undo"></i> Limpiar</button>`
+            : ""
+        }
       </div>
     </div>
 
+    <!-- Tabla del Libro Diario -->
     <div class="data-table-wrapper">
       <table class="renacer-table">
         <thead>
@@ -9292,10 +10560,11 @@ function renderFinancesLedgerScreen() {
             <th>Fecha</th>
             <th>Tipo</th>
             <th>Categoría</th>
-            <th>Concepto / Cliente / Troquel</th>
+            <th>Concepto / Detalle</th>
+            <th>Cuenta / Banco</th>
             <th>Método</th>
             <th>Monto ($)</th>
-            <th style="text-align:right;">Acción</th>
+            <th style="text-align:right;">Acciones</th>
           </tr>
         </thead>
         <tbody>
@@ -9306,8 +10575,23 @@ function renderFinancesLedgerScreen() {
   `;
 }
 
-function setLedgerClientFilter(val) {
-  ledgerClientFilter = val;
+function setLedgerFilter(type, val) {
+  if (type === "type") ledgerTypeFilter = val;
+  if (type === "account") ledgerAccountFilter = val;
+  if (type === "category") ledgerCategoryFilter = val;
+  if (type === "client") ledgerClientFilter = val;
+  if (type === "from") ledgerDateFrom = val;
+  if (type === "to") ledgerDateTo = val;
+  renderScreen();
+}
+
+function resetLedgerFilters() {
+  ledgerTypeFilter = "all";
+  ledgerAccountFilter = "all";
+  ledgerCategoryFilter = "all";
+  ledgerClientFilter = "all";
+  ledgerDateFrom = "";
+  ledgerDateTo = "";
   renderScreen();
 }
 
@@ -9349,38 +10633,53 @@ function saveNewFinanceCategory() {
   const type = document.getElementById("new-cat-type")?.value || "egreso";
   const name = (document.getElementById("new-cat-name")?.value || "").trim();
   if (!name) return;
+  if (!db.finanzas_categorias) db.finanzas_categorias = { ingresos: [], egresos: [] };
   if (type === "ingreso") db.finanzas_categorias.ingresos.push(name);
   else db.finanzas_categorias.egresos.push(name);
   saveDatabase();
   closeModal();
+  renderApp();
   showToast(`Categoría "${name}" agregada.`);
 }
 
 function openNewFinanceMovementModal(tipo) {
-  const cats = tipo === "ingreso" ? db.finanzas_categorias.ingresos : db.finanzas_categorias.egresos;
+  const cats = tipo === "ingreso" ? (db.finanzas_categorias?.ingresos || []) : (db.finanzas_categorias?.egresos || []);
   const catOptions = cats.map((c) => `<option value="${c}">${c}</option>`).join("");
+  const bankOptions = BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre} (${b.moneda})</option>`).join("");
 
   openModal({
-    title: tipo === "ingreso" ? "Registrar Nuevo Ingreso en Caja" : "Registrar Gasto / Egreso Operativo",
+    title: tipo === "ingreso" ? "Registrar Nuevo Ingreso en Caja / Bancos" : "Registrar Gasto / Egreso Operativo",
     icon: tipo === "ingreso" ? "fa-arrow-up" : "fa-arrow-down",
     body: `
-      <div class="form-grid-3">
+      <div class="form-grid-2">
         <div class="form-field">
           <label>Categoría *</label>
           <select id="mov-cat">${catOptions}</select>
         </div>
         <div class="form-field">
-          <label>Monto ($) *</label>
-          <input type="number" step="0.5" id="mov-amount" placeholder="Ej: 25.00" required />
+          <label>Monto ($ USD) *</label>
+          <input type="number" step="0.5" min="0.1" id="mov-amount" placeholder="Ej: 25.00" required />
+        </div>
+      </div>
+
+      <div class="form-grid-2" style="margin-top:10px;">
+        <div class="form-field">
+          <label>Cuenta / Caja ${tipo === "ingreso" ? "Destino" : "Origen"} *</label>
+          <select id="mov-account" style="font-weight:800;">
+            ${bankOptions}
+          </select>
         </div>
         <div class="form-field">
           <label>Método de Pago</label>
           <select id="mov-method">
-            <option value="efectivo">Efectivo (Divisas / Caja)</option>
-            <option value="pago_movil">Pago Móvil / Transferencia</option>
+            <option value="efectivo">Efectivo Físico (Divisas / Caja)</option>
+            <option value="pago_movil">Pago Móvil (Bs)</option>
+            <option value="transferencia">Transferencia Bancaria</option>
+            <option value="zelle">Zelle / Transferencia Internacional</option>
           </select>
         </div>
       </div>
+
       <div class="form-field" style="margin-top:10px;">
         <label>Concepto / Descripción Detallada *</label>
         <input type="text" id="mov-concept" placeholder="Ej: Compra de líquido desengrasante para tanque químico" required />
@@ -9396,6 +10695,7 @@ function openNewFinanceMovementModal(tipo) {
 function saveNewFinanceMovement(tipo) {
   const cat = document.getElementById("mov-cat")?.value || "General";
   const amount = Math.max(0, Number(document.getElementById("mov-amount")?.value) || 0);
+  const cuenta = document.getElementById("mov-account")?.value || "efectivo";
   const method = document.getElementById("mov-method")?.value || "efectivo";
   const concept = (document.getElementById("mov-concept")?.value || "").trim();
 
@@ -9404,14 +10704,17 @@ function saveNewFinanceMovement(tipo) {
     return;
   }
 
+  const now = new Date();
   db.finanzas_movimientos.unshift({
     id_mov: "MOV-" + Date.now(),
-    fecha: new Date().toISOString().slice(0, 10),
+    fecha: now.toISOString().slice(0, 10),
+    hora: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     tipo,
     categoria: cat,
     concepto: concept,
     monto: amount,
     metodo: method,
+    cuenta: cuenta,
     orden_id: "-"
   });
 
@@ -9518,7 +10821,7 @@ function renderClientsDirectoryScreen() {
               <td style="white-space:nowrap;">
                 <div style="display:flex; align-items:center; gap:8px;">
                   <a href="tel:${c.telefono}" style="color:var(--renacer-navy); font-weight:800; text-decoration:none; font-family:'JetBrains Mono',monospace;">
-                    📞 ${c.telefono || "Sin teléfono"}
+                    <i class="fas fa-phone"></i> ${c.telefono || "Sin teléfono"}
                   </a>
                   ${
                     cleanPhone
@@ -9531,7 +10834,7 @@ function renderClientsDirectoryScreen() {
               </td>
               <td>
                 <span class="state-badge ${c.es_taller_aliado ? "state-badge--exec" : "state-badge--diag"}" style="font-size:11px;">
-                  ${c.es_taller_aliado ? "🤝 TALLER ALIADO (CRÉDITO)" : "👤 PARTICULAR"}
+                  <i class="fas ${c.es_taller_aliado ? "fa-handshake" : "fa-user"}"></i> ${c.es_taller_aliado ? "TALLER ALIADO (CRÉDITO)" : "PARTICULAR"}
                 </span>
                 <div style="font-size:11px; margin-top:5px; font-family:'JetBrains Mono',monospace;">
                   Pagado: <strong style="color:#16a34a;">$${c.totalPaid.toFixed(2)}</strong> · 
@@ -9577,14 +10880,14 @@ function renderClientsDirectoryScreen() {
                   </div>
                 </div>
                 <span class="state-badge ${c.es_taller_aliado ? "state-badge--exec" : "state-badge--diag"}" style="font-size:10.5px;">
-                  ${c.es_taller_aliado ? "🤝 ALIADO" : "PARTICULAR"}
+                  <i class="fas ${c.es_taller_aliado ? "fa-handshake" : "fa-user"}"></i> ${c.es_taller_aliado ? "ALIADO" : "PARTICULAR"}
                 </span>
               </div>
 
               <div class="client-mobile-card__meta">
                 <div class="client-mobile-card__contact-row">
                   <a href="tel:${c.telefono}" class="btn btn--ghost" style="padding:4px 10px; font-size:12px; font-family:'JetBrains Mono',monospace;">
-                    📞 ${c.telefono || "Sin teléfono"}
+                    <i class="fas fa-phone"></i> ${c.telefono || "Sin teléfono"}
                   </a>
                   ${
                     cleanPhone
@@ -9595,7 +10898,7 @@ function renderClientsDirectoryScreen() {
                   }
                 </div>
                 <div style="font-size:11.5px; color:var(--text-muted);">
-                  📍 ${c.direccion || "Sin dirección registrada"}
+                  <i class="fas fa-map-marker-alt"></i> ${c.direccion || "Sin dirección registrada"}
                 </div>
               </div>
 
@@ -9667,19 +10970,19 @@ function renderClientsDirectoryScreen() {
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">🤝 TALLERES ALIADOS</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);"><i class="fas fa-handshake"></i> TALLERES ALIADOS</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#38bdf8; margin-top:2px;">
               ${countAliados}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">⚠️ CON SALDO PENDIENTE</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);"><i class="fas fa-exclamation-triangle"></i> CON SALDO PENDIENTE</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#f87171; margin-top:2px;">
               ${countDeudores}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">DEUDA TOTAL ACUMULADA</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);"><i class="fas fa-file-invoice-dollar"></i> DEUDA TOTAL ACUMULADA</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#dc2626; margin-top:2px;">
               $${totalGeneralDeuda.toFixed(2)}
             </div>
@@ -9693,13 +10996,13 @@ function renderClientsDirectoryScreen() {
               Todos (${totalClients})
             </button>
             <button type="button" class="btn ${clientDirFilterType === "aliados" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('aliados')">
-              🤝 Talleres Aliados (${countAliados})
+              <i class="fas fa-handshake"></i> Talleres Aliados (${countAliados})
             </button>
             <button type="button" class="btn ${clientDirFilterType === "particulares" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('particulares')">
-              👤 Particulares (${countParticulares})
+              <i class="fas fa-user"></i> Particulares (${countParticulares})
             </button>
             <button type="button" class="btn ${clientDirFilterType === "deudores" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setClientDirFilter('deudores')">
-              ⚠️ Con Saldo Deudor (${countDeudores})
+              <i class="fas fa-exclamation-triangle"></i> Con Saldo Deudor (${countDeudores})
             </button>
           </div>
 
@@ -9757,64 +11060,94 @@ function renderCatalogManagerScreen() {
   const avgCommission = totalServices ? services.reduce((acc, s) => acc + (Number(s.comision_sugerida) || 0), 0) / totalServices : 0;
   const avgMargin = avgPrice > 0 ? ((avgPrice - avgCommission) / avgPrice) * 100 : 0;
 
-  const rowsHtml = services.length
+  // LISTA A: PRECIOS AL CLIENTE (PRESUPUESTO BASE)
+  const clientRowsHtml = services.length
+    ? services
+        .map((s) => {
+          const precio = Number(s.precio_sugerido) || 0;
+          const searchBlob = `${s.nombre} ${s.categoria || ""}`.toLowerCase();
+          return `
+            <div class="catalog-item-card catalog-service-row" data-search="${searchBlob}">
+              <div style="flex:1;">
+                <div style="font-weight:900; font-size:13.5px; color:var(--text-main);">${s.nombre}</div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                  <i class="fas fa-tag" style="color:var(--renacer-gold);"></i> ${s.categoria || "Rectificación General"}
+                </div>
+              </div>
+              <div style="text-align:right; margin: 0 10px;">
+                <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Precio Cliente</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:var(--renacer-gold);">
+                  $${precio.toFixed(2)}
+                </div>
+              </div>
+              <div>
+                <button type="button" class="btn btn--ghost btn--xs" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio al cliente">
+                  <i class="fas fa-edit"></i>
+                </button>
+              </div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div style="text-align:center; padding:24px; color:var(--text-muted);">Sin servicios en catálogo.</div>`;
+
+  // LISTA B: COMISIONES POR DESTAJO Y SERVICIOS EXTERNOS (OUTSOURCING SOLTECA)
+  const workshopRowsHtml = services.length
     ? services
         .map((s) => {
           const precio = Number(s.precio_sugerido) || 0;
           const comision = Number(s.comision_sugerida) || 0;
           const margen = precio - comision;
           const margenPct = precio > 0 ? (margen / precio) * 100 : 0;
+          const isOutsource = Boolean(s.es_outsourcing);
           const searchBlob = `${s.nombre} ${s.categoria || ""}`.toLowerCase();
 
           return `
-            <tr class="catalog-service-row" data-search="${searchBlob}">
-              <td>
-                <div style="font-weight:900; font-size:14.5px; color:var(--text-main);">${s.nombre}</div>
-                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
-                  <i class="fas fa-tag" style="color:var(--renacer-gold);"></i> ${s.categoria || "Rectificación General"}
+            <div class="catalog-item-card catalog-service-row" data-search="${searchBlob}">
+              <div style="flex:1;">
+                <div style="font-weight:900; font-size:13.5px; color:var(--text-main); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  ${s.nombre}
+                  ${isOutsource ? '<span class="badge-external"><i class="fas fa-handshake"></i> Solteca / Externo</span>' : '<span style="font-size:9.5px; font-weight:800; background:rgba(245,223,0,0.15); color:var(--renacer-gold); padding:2px 6px; border-radius:5px; border:1px solid rgba(245,223,0,0.3);"><i class="fas fa-wrench"></i> Destajo Interno</span>'}
                 </div>
-              </td>
-              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:var(--text-main);">
-                $${precio.toFixed(2)}
-              </td>
-              <td style="font-family:'JetBrains Mono',monospace; font-weight:800; font-size:14px; color:#16a34a;">
-                $${comision.toFixed(2)}
-              </td>
-              <td>
-                <div style="font-family:'JetBrains Mono',monospace; font-weight:800; font-size:13px; color:#0284c7;">
-                  $${margen.toFixed(2)} <span style="font-size:11px; color:var(--text-muted);">(${margenPct.toFixed(0)}%)</span>
+                <div style="font-size:11px; margin-top:3px; display:flex; gap:10px; align-items:center;">
+                  <span style="color:#0284c7; font-weight:800; font-family:'JetBrains Mono',monospace;">
+                    Margen Taller: $${margen.toFixed(2)} (${margenPct.toFixed(0)}%)
+                  </span>
                 </div>
-              </td>
-              <td style="text-align:right;">
-                <div style="display:flex; justify-content:flex-end; gap:6px;">
-                  <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px;" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio o comisión">
-                    <i class="fas fa-edit"></i> Editar
-                  </button>
-                  <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px; color:#dc2626;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio">
-                    <i class="fas fa-trash-alt"></i>
-                  </button>
+              </div>
+              <div style="text-align:right; margin: 0 10px;">
+                <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">
+                  ${isOutsource ? 'Costo Tercero' : 'Comisión Técnico'}
                 </div>
-              </td>
-            </tr>
+                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:${isOutsource ? '#38bdf8' : '#22c55e'};">
+                  $${comision.toFixed(2)}
+                </div>
+              </div>
+              <div>
+                <button type="button" class="btn btn--ghost btn--xs" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Ajustar destajo o costo externo">
+                  <i class="fas fa-sliders-h"></i>
+                </button>
+              </div>
+            </div>
           `;
         })
         .join("")
-    : `<tr><td colspan="5" style="text-align:center; padding:36px; color:var(--text-muted);">No hay servicios registrados en el catálogo.</td></tr>`;
+    : `<div style="text-align:center; padding:24px; color:var(--text-muted);">Sin servicios en catálogo.</div>`;
 
   return `
     <div style="display:flex; flex-direction:column; gap:16px;">
-      <!-- Header del Catálogo -->
+      <!-- Header del Catálogo con KPIs -->
       <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:18px 22px; box-shadow:var(--shadow-sm);">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
           <div>
             <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
-              <i class="fas fa-tools" style="color:var(--renacer-gold);"></i> MATRIZ DE PRECIOS Y DESTAJO
+              <i class="fas fa-columns" style="color:var(--renacer-gold);"></i> MATRIZ DOBLE EN PARALELO
             </span>
             <h2 style="font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
-              Catálogo de Servicios, Precios y Comisiones
+              Catálogo Doble: Precios al Cliente y Destajo / Outsourcing
             </h2>
             <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
-              Define los precios cobrados al cliente y la comisión base asignada a los técnicos por cada trabajo.
+              Visualización paralela con cálculo de margen operativo en tiempo real: Ganancia = Cobro Cliente − Costo Comisión/Externo.
             </p>
           </div>
 
@@ -9822,29 +11155,29 @@ function renderCatalogManagerScreen() {
             <button type="button" class="btn btn--gold" style="padding:9px 16px; font-size:13px; font-weight:800;" onclick="openAddCatalogServiceModal()">
               <i class="fas fa-plus-circle"></i> + Nuevo Servicio
             </button>
-            <button type="button" class="btn btn--ghost" style="padding:9px 14px; font-size:13px;" onclick="navigateTab('clients_dir')">
-              <i class="fas fa-users"></i> Ver Clientes
+            <button type="button" class="btn btn--ghost" style="padding:9px 14px; font-size:13px;" onclick="navigateTab('commissions_hr')">
+              <i class="fas fa-users-cog"></i> Personal & Outsourcing
             </button>
           </div>
         </div>
 
-        <!-- KPI Strip de Precios -->
+        <!-- KPI Strip de Precios y Margen -->
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border-subtle);">
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">TOTAL SERVICIOS</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">SERVICIOS EN CARTERA</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
               ${totalServices}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">PRECIO PROMEDIO CLIENTE</div>
-            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">COBRO PROMEDIO CLIENTE</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--renacer-gold); margin-top:2px;">
               $${avgPrice.toFixed(2)}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">COMISIÓN PROMEDIO TÉCNICO</div>
-            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#16a34a; margin-top:2px;">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">COSTO PROMEDIO TRABAJO</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#22c55e; margin-top:2px;">
               $${avgCommission.toFixed(2)}
             </div>
           </div>
@@ -9856,31 +11189,54 @@ function renderCatalogManagerScreen() {
           </div>
         </div>
 
-        <!-- Buscador en Vivo -->
+        <!-- Buscador en Vivo Unificado -->
         <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); display:flex; justify-content:flex-end;">
-          <div style="position:relative; width:100%; max-width:360px;">
+          <div style="position:relative; width:100%; max-width:380px;">
             <i class="fas fa-search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:12px;"></i>
-            <input type="text" placeholder="Buscar servicio por nombre..." oninput="filterCatalogLive(this.value)" style="width:100%; padding:7px 12px 7px 32px; font-size:12px; border-radius:10px; background:var(--bg-input); border:1px solid var(--border-subtle); color:var(--text-main);" />
+            <input type="text" placeholder="Buscar en ambas listas simultáneamente..." oninput="filterCatalogLive(this.value)" style="width:100%; padding:7px 12px 7px 32px; font-size:12px; border-radius:10px; background:var(--bg-input); border:1px solid var(--border-subtle); color:var(--text-main);" />
           </div>
         </div>
       </div>
 
-      <!-- Tabla Full-Width de Servicios -->
-      <div class="data-table-wrapper" style="box-shadow:var(--shadow-sm); border-radius:16px;">
-        <table class="renacer-table">
-          <thead>
-            <tr>
-              <th>Servicio de Rectificación</th>
-              <th style="width:160px;">Precio al Cliente ($)</th>
-              <th style="width:180px;">Comisión Técnico ($)</th>
-              <th style="width:160px;">Margen Taller</th>
-              <th style="text-align:right; width:140px;">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
+      <!-- CONTENEDOR PARALELO DE DOS COLUMNAS RESPONSIVO -->
+      <div class="catalog-dual-container">
+        <!-- COLUMNA 1: PRECIOS AL CLIENTE -->
+        <div class="catalog-column-card">
+          <div class="catalog-column-header">
+            <div>
+              <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
+                LISTA A · CLIENTE
+              </span>
+              <h3 style="font-size:16px; font-weight:900; margin-top:2px;">
+                <i class="fas fa-receipt" style="color:var(--renacer-gold);"></i> Catálogo de Precios al Cliente
+              </h3>
+            </div>
+            <button type="button" class="btn btn--gold btn--xs" onclick="openAddCatalogServiceModal()">
+              <i class="fas fa-plus"></i> Añadir
+            </button>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${clientRowsHtml}
+          </div>
+        </div>
+
+        <!-- COLUMNA 2: DESTAJO Y OUTSOURCING -->
+        <div class="catalog-column-card">
+          <div class="catalog-column-header">
+            <div>
+              <span style="font-size:11px; font-weight:900; color:#38bdf8; text-transform:uppercase;">
+                LISTA B · COSTO & MARGEN
+              </span>
+              <h3 style="font-size:16px; font-weight:900; margin-top:2px;">
+                <i class="fas fa-hand-holding-dollar" style="color:#22c55e;"></i> Comisiones Destajo & Outsourcing
+              </h3>
+            </div>
+            <span style="font-size:11px; color:var(--text-muted); font-weight:700;">Margen Operativo</span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${workshopRowsHtml}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -9945,7 +11301,7 @@ function openClientHistoryModal(clientId) {
     : `<tr><td colspan="5" style="text-align:center; padding:16px; color:var(--text-muted);">No hay pagos individuales registrados en el Libro Diario para este cliente.</td></tr>`;
 
   openModal({
-    title: `📜 Historial de Pagos y Piezas — ${client.nombre_completo} (${client.documento_identidad})`,
+    title: `Historial de Pagos y Piezas — ${client.nombre_completo} (${client.documento_identidad})`,
     icon: "fa-history",
     wide: true,
     body: `
@@ -10048,7 +11404,7 @@ function openAddClientModal() {
       </div>
       <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; font-weight:800; cursor:pointer;">
         <input type="checkbox" id="new-cli-allied" style="width:18px; height:18px;" />
-        🤝 Clasificar como Mecánico / Taller Aliado (Habilita Crédito Flexible)
+        <i class="fas fa-handshake"></i> Clasificar como Mecánico / Taller Aliado (Habilita Crédito Flexible)
       </label>
     `,
     footer: `
@@ -10090,7 +11446,7 @@ function openEditClientModal(clientId) {
   if (!c) return;
 
   openModal({
-    title: `✏️ Editar Cliente — ${c.nombre_completo}`,
+    title: `Editar Cliente — ${c.nombre_completo}`,
     icon: "fa-user-edit",
     body: `
       <div class="form-grid-2">
@@ -10113,7 +11469,7 @@ function openEditClientModal(clientId) {
       </div>
       <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; font-weight:800; cursor:pointer;">
         <input type="checkbox" id="edit-cli-allied" ${c.es_taller_aliado ? "checked" : ""} style="width:18px; height:18px;" />
-        🤝 Clasificar como Mecánico / Taller Aliado
+        <i class="fas fa-handshake"></i> Clasificar como Mecánico / Taller Aliado
       </label>
     `,
     footer: `
@@ -10180,13 +11536,33 @@ function openAddCatalogServiceModal() {
         <label>Nombre del Servicio *</label>
         <input type="text" id="cat-srv-name" placeholder="Ej: Rectificación de Cigüeñal 4 Cilindros" required />
       </div>
+      <div class="form-grid-2" style="margin-bottom:10px;">
+        <div class="form-field">
+          <label>Categoría de Pieza *</label>
+          <select id="cat-srv-category">
+            <option value="Cámara / Culata">Cámara / Culata</option>
+            <option value="Bloque / Cigüeñal">Bloque / Cigüeñal</option>
+            <option value="Lavado y Químico">Lavado y Químico</option>
+            <option value="Calibración y Asientos">Calibración y Asientos</option>
+            <option value="Soldadura Especial">Soldadura Especial</option>
+            <option value="Rectificación General">Rectificación General</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Modalidad de Ejecución *</label>
+          <select id="cat-srv-type">
+            <option value="interno">Destajo Interno (Técnicos Renacer)</option>
+            <option value="outsourcing">Tercerizado / Outsourcing (Rectificadora Solteca)</option>
+          </select>
+        </div>
+      </div>
       <div class="form-grid-2">
         <div class="form-field">
           <label>Precio Sugerido al Cliente ($) *</label>
           <input type="number" step="0.5" id="cat-srv-price" value="40" required />
         </div>
         <div class="form-field">
-          <label>Comisión Base para el Técnico ($) *</label>
+          <label>Comisión Técnico / Costo Externo ($) *</label>
           <input type="number" step="0.5" id="cat-srv-comm" value="12" required />
         </div>
       </div>
@@ -10200,13 +11576,21 @@ function openAddCatalogServiceModal() {
 
 function saveNewCatalogService() {
   const name = (document.getElementById("cat-srv-name")?.value || "").trim();
+  const category = document.getElementById("cat-srv-category")?.value || "Rectificación General";
+  const type = document.getElementById("cat-srv-type")?.value || "interno";
   const price = Math.max(0, Number(document.getElementById("cat-srv-price")?.value) || 0);
   const comm = Math.max(0, Number(document.getElementById("cat-srv-comm")?.value) || 0);
-  if (!name) return;
+  if (!name) {
+    showToast("Indica el nombre del servicio.", "error");
+    return;
+  }
 
   db.catalogo_servicios.push({
     id_cat: "CAT-" + Date.now(),
     nombre: name,
+    categoria: category,
+    es_outsourcing: type === "outsourcing",
+    taller_externo_nombre: type === "outsourcing" ? "Rectificadora Solteca" : "",
     precio_sugerido: price,
     comision_sugerida: comm
   });
@@ -10222,12 +11606,32 @@ function openEditCatalogServiceModal(catId) {
   if (!s) return;
 
   openModal({
-    title: `✏️ Editar Servicio del Catálogo`,
+    title: `Editar Servicio del Catálogo`,
     icon: "fa-edit",
     body: `
       <div class="form-field" style="margin-bottom:10px;">
         <label>Nombre del Servicio *</label>
         <input type="text" id="edit-cat-name" value="${s.nombre}" required />
+      </div>
+      <div class="form-grid-2" style="margin-bottom:10px;">
+        <div class="form-field">
+          <label>Categoría de Pieza *</label>
+          <select id="edit-cat-category">
+            <option value="Cámara / Culata" ${s.categoria === "Cámara / Culata" ? "selected" : ""}>Cámara / Culata</option>
+            <option value="Bloque / Cigüeñal" ${s.categoria === "Bloque / Cigüeñal" ? "selected" : ""}>Bloque / Cigüeñal</option>
+            <option value="Lavado y Químico" ${s.categoria === "Lavado y Químico" ? "selected" : ""}>Lavado y Químico</option>
+            <option value="Calibración y Asientos" ${s.categoria === "Calibración y Asientos" ? "selected" : ""}>Calibración y Asientos</option>
+            <option value="Soldadura Especial" ${s.categoria === "Soldadura Especial" ? "selected" : ""}>Soldadura Especial</option>
+            <option value="Rectificación General" ${s.categoria === "Rectificación General" ? "selected" : ""}>Rectificación General</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Modalidad de Ejecución *</label>
+          <select id="edit-cat-type">
+            <option value="interno" ${!s.es_outsourcing ? "selected" : ""}>Destajo Interno (Técnicos Renacer)</option>
+            <option value="outsourcing" ${s.es_outsourcing ? "selected" : ""}>Tercerizado / Outsourcing (Rectificadora Solteca)</option>
+          </select>
+        </div>
       </div>
       <div class="form-grid-2">
         <div class="form-field">
@@ -10235,7 +11639,7 @@ function openEditCatalogServiceModal(catId) {
           <input type="number" step="0.5" id="edit-cat-price" value="${Number(s.precio_sugerido) || 0}" required />
         </div>
         <div class="form-field">
-          <label>Comisión Base para el Técnico ($) *</label>
+          <label>Comisión Técnico / Costo Externo ($) *</label>
           <input type="number" step="0.5" id="edit-cat-comm" value="${Number(s.comision_sugerida) || 0}" required />
         </div>
       </div>
@@ -10252,6 +11656,8 @@ function saveEditedCatalogService(catId) {
   if (!s) return;
 
   const name = (document.getElementById("edit-cat-name")?.value || "").trim();
+  const category = document.getElementById("edit-cat-category")?.value || "Rectificación General";
+  const type = document.getElementById("edit-cat-type")?.value || "interno";
   const price = Math.max(0, Number(document.getElementById("edit-cat-price")?.value) || 0);
   const comm = Math.max(0, Number(document.getElementById("edit-cat-comm")?.value) || 0);
   if (!name) {
@@ -10260,7 +11666,11 @@ function saveEditedCatalogService(catId) {
   }
 
   s.nombre = name;
+  s.categoria = category;
+  s.es_outsourcing = type === "outsourcing";
+  s.taller_externo_nombre = type === "outsourcing" ? "Rectificadora Solteca" : "";
   s.precio_sugerido = price;
+  s.comision_sugerida = comm;
   s.comision_sugerida = comm;
 
   saveDatabase();
@@ -10298,6 +11708,13 @@ window.addEventListener("DOMContentLoaded", () => {
   initTheme();
   db = loadDatabase();
   populateLoginSelect();
+
+  // Verificación proactiva de versión y limpieza de caché
+  checkAppVersionAndCache();
+
+  // Consulta automática de tasas de cambio oficiales (BCV / Paralelo) en vivo
+  fetchLiveExchangeRates(true);
+  setInterval(() => fetchLiveExchangeRates(true), 30 * 60 * 1000);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
