@@ -1,4 +1,4 @@
-const CACHE_NAME = 'renacer-taller-v11';
+const CACHE_NAME = 'renacer-taller-v17';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -24,20 +24,26 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.action === 'skipWaiting') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
-  if (req.url.includes('script.google.com')) {
+  if (req.url.includes('script.google.com') || req.url.includes('dolarapi.com') || req.url.includes('binance.com')) {
     event.respondWith(fetch(req).catch(() => new Response(JSON.stringify({ ok: false, offline: true }), {
       headers: { 'Content-Type': 'application/json' }
     })));
     return;
   }
 
-  // Estrategia Network-First con respaldo en caché para ver cambios al instante
+  // Estrategia Network-First con revalidación y respaldo en caché para reflejar cambios inmediatamente
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res && res.status === 200 && res.type === 'basic') {
           const clone = res.clone();
@@ -48,4 +54,3 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(req))
   );
 });
-
