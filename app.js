@@ -1100,6 +1100,18 @@ function normalizeDatabaseSchema(d) {
         activo: true,
         es_externo: true,
         modalidad_horario: "Tercerizado Externo"
+      },
+      {
+        id_usuario: "USR-JAVIER",
+        nombre: "Javier Andrade",
+        rol: "inventario",
+        rol_label: "Encargado de Inventario y Repuestos",
+        especialidad: "Control de Repuestos, Stock de Válvulas, Guías, Sellos y Empacaduras",
+        pin: "1234",
+        telefono: "0414-6005566",
+        salario_fijo_semanal: 80,
+        activo: true,
+        modalidad_horario: "Tiempo Completo (Inventario)"
       }
     ];
     defaultWorkers.forEach((dw) => {
@@ -1107,6 +1119,22 @@ function normalizeDatabaseSchema(d) {
         d.usuarios.push(dw);
       }
     });
+  }
+
+  // Inicializar inventario central de repuestos si no existe
+  if (!Array.isArray(d.inventario_repuestos) || d.inventario_repuestos.length === 0) {
+    d.inventario_repuestos = [
+      { id_repuesto: "REP-101", codigo: "GUA-01", nombre: "Guías de Válvula (Bronce)", categoria: "Cámara / Culata", stock_actual: 48, stock_minimo: 16, precio_costo: 2.5, precio_venta: 5.0, unidad: "Pieza" },
+      { id_repuesto: "REP-102", codigo: "GUA-02", nombre: "Guías de Válvula (Hierro)", categoria: "Cámara / Culata", stock_actual: 32, stock_minimo: 12, precio_costo: 1.8, precio_venta: 4.0, unidad: "Pieza" },
+      { id_repuesto: "REP-103", codigo: "VAL-01", nombre: "Válvulas de Admisión Estándar", categoria: "Válvulas", stock_actual: 40, stock_minimo: 16, precio_costo: 3.5, precio_venta: 7.0, unidad: "Pieza" },
+      { id_repuesto: "REP-104", codigo: "VAL-02", nombre: "Válvulas de Escape Reforzadas", categoria: "Válvulas", stock_actual: 36, stock_minimo: 16, precio_costo: 4.0, precio_venta: 8.0, unidad: "Pieza" },
+      { id_repuesto: "REP-105", codigo: "SEL-01", nombre: "Sellos / Gomas de Válvula (Kit 16pz)", categoria: "Sellos", stock_actual: 15, stock_minimo: 5, precio_costo: 6.0, precio_venta: 12.0, unidad: "Juego" },
+      { id_repuesto: "REP-106", codigo: "EMP-01", nombre: "Empacadura de Cámara Amianto / Metal", categoria: "Empacaduras", stock_actual: 20, stock_minimo: 8, precio_costo: 8.0, precio_venta: 16.0, unidad: "Pieza" },
+      { id_repuesto: "REP-107", codigo: "QUI-01", nombre: "Químico Descarbonizante Concentrado", categoria: "Químicos", stock_actual: 12, stock_minimo: 4, precio_costo: 15.0, precio_venta: 25.0, unidad: "Galón" }
+    ];
+  }
+  if (!Array.isArray(d.movimientos_inventario)) {
+    d.movimientos_inventario = [];
   }
 
   d.usuarios.forEach((u) => {
@@ -1916,7 +1944,13 @@ function resumePreviousSession() {
   if (!savedUserId) return;
   const user = db.usuarios.find((u) => u.id_usuario === savedUserId);
   if (user) {
-    loginSuccess(user);
+    const inp = document.getElementById("login-username-input");
+    if (inp) inp.value = user.nombre;
+    const pin = document.getElementById("login-pin-input");
+    if (pin) {
+      pin.focus();
+      showToast(`Ingresa el PIN de ${user.nombre} para ingresar.`, "info");
+    }
   }
 }
 
@@ -2406,12 +2440,22 @@ function getTabsForRole(role) {
     ];
   }
 
+  if (role === "inventario") {
+    const lowStockCount = (db.inventario_repuestos || []).filter((r) => r.stock_actual <= r.stock_minimo).length;
+    return [
+      { id: "inventario", label: "Inventario Repuestos", shortLabel: "Inventario", icon: "fa-boxes-stacked", badge: lowStockCount || undefined },
+      { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length }
+    ];
+  }
+
   // Administrador (Moisés) y Jefes de Taller (Jesús Andrade y Sr. Enrique)
   // Estructura oficial del boceto WEB RENACER DISEÑO 1
+  const lowStockCount = (db.inventario_repuestos || []).filter((r) => r.stock_actual <= r.stock_minimo).length;
   return [
     { id: "dashboard", label: "Inicio", shortLabel: "Inicio", icon: "fa-home" },
     { id: "clients_dir", label: "Clientes", shortLabel: "Clientes", icon: "fa-users" },
     { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length },
+    { id: "inventario", label: "Inventario Repuestos", shortLabel: "Inventario", icon: "fa-boxes-stacked", badge: lowStockCount || undefined },
     { id: "finances_ledger", label: "Finanzas", shortLabel: "Finanzas", icon: "fa-chart-line" },
     { id: "commissions_hr", label: "Comisiones y Personal", shortLabel: "Personal", icon: "fa-user-check" },
     { id: "accounts_receivable", label: "Facturas por cobrar", shortLabel: "Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
@@ -2612,9 +2656,404 @@ function renderScreen() {
     case "catalog_mgr":
       screen.innerHTML = renderCatalogManagerScreen();
       break;
+    case "inventario":
+      screen.innerHTML = renderInventoryScreen();
+      break;
     default:
       screen.innerHTML = renderDashboardScreen();
   }
+}
+
+/* ============================================================================
+   MÓDULO DE INVENTARIO CENTRAL DE REPUESTOS (RESPONSABLE: JAVIER ANDRADE)
+   ============================================================================ */
+function renderInventoryScreen() {
+  const spares = db.inventario_repuestos || [];
+  const lowStock = spares.filter((r) => Number(r.stock_actual) <= Number(r.stock_minimo));
+  const totalUnits = spares.reduce((acc, r) => acc + (Number(r.stock_actual) || 0), 0);
+  const totalValorUSD = spares.reduce((acc, r) => acc + ((Number(r.stock_actual) || 0) * (Number(r.precio_venta) || 0)), 0);
+  const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
+
+  return `
+    <div style="display:flex; flex-direction:column; gap:18px;">
+      <!-- CABECERA DE INVENTARIO -->
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; background:var(--bg-card); padding:16px 20px; border-radius:16px; border:1px solid var(--border-subtle);">
+        <div>
+          <h2 style="margin:0; font-size:18px; font-weight:900; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-boxes-stacked" style="color:var(--renacer-gold);"></i> CONTROL CENTRAL DE INVENTARIO Y REPUESTOS
+          </h2>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
+            Gestión de stock, válvulas, guías, empacaduras y consumos por orden · Responsable: <strong>Javier Andrade</strong>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold" onclick="openAddInventorySpareModal()">
+            <i class="fas fa-plus"></i> Nuevo Repuesto
+          </button>
+          <button type="button" class="btn btn--ghost" onclick="openInventoryHistoryModal()">
+            <i class="fas fa-history"></i> Historial de Salidas
+          </button>
+        </div>
+      </div>
+
+      <!-- TARJETAS DE MÉTRICAS -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
+        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1px solid var(--border-subtle);">
+          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Variedad de Repuestos</div>
+          <div style="font-size:24px; font-weight:900; color:var(--text-main); margin-top:4px;">${spares.length} Ítems</div>
+        </div>
+        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1px solid var(--border-subtle);">
+          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Unidades Físicas en Stock</div>
+          <div style="font-size:24px; font-weight:900; color:#38bdf8; margin-top:4px;">${totalUnits} uds.</div>
+        </div>
+        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1px solid var(--border-subtle);">
+          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Valor Total Inventario (PVP)</div>
+          <div style="font-size:24px; font-weight:900; color:#22c55e; margin-top:4px;">$${totalValorUSD.toFixed(2)}</div>
+          <div style="font-size:11px; color:var(--text-muted);">≈ Bs. ${(totalValorUSD * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2 })}</div>
+        </div>
+        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1.5px solid ${lowStock.length > 0 ? "#ef4444" : "var(--border-subtle)"};">
+          <div style="font-size:11px; font-weight:800; color:${lowStock.length > 0 ? "#ef4444" : "var(--text-muted)"}; text-transform:uppercase;">Stock Bajo / Reponer</div>
+          <div style="font-size:24px; font-weight:900; color:${lowStock.length > 0 ? "#ef4444" : "#22c55e"}; margin-top:4px;">${lowStock.length} Ítems</div>
+        </div>
+      </div>
+
+      <!-- TABLA DE REPUESTOS -->
+      <div style="background:var(--bg-card); border-radius:16px; border:1px solid var(--border-subtle); overflow:hidden;">
+        <div style="padding:12px 16px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span style="font-size:12.5px; font-weight:800; color:var(--text-main);"><i class="fas fa-list"></i> Catálogo Físico en Depósito</span>
+          <input type="search" placeholder="Buscar repuesto..." oninput="filterInventoryTable(this.value)" style="padding:6px 10px; border-radius:8px; border:1px solid var(--border-color); font-size:12px; width:220px;" />
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse; font-size:12.5px; text-align:left;">
+            <thead>
+              <tr style="background:rgba(0,0,0,0.12); color:var(--text-secondary); font-size:11.5px; text-transform:uppercase;">
+                <th style="padding:10px 14px;">Código</th>
+                <th style="padding:10px 14px;">Repuesto</th>
+                <th style="padding:10px 14px;">Categoría</th>
+                <th style="padding:10px 14px; text-align:center;">Stock Actual</th>
+                <th style="padding:10px 14px; text-align:right;">P. Costo</th>
+                <th style="padding:10px 14px; text-align:right;">P. Venta</th>
+                <th style="padding:10px 14px; text-align:center;">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="inventory-table-body">
+              ${spares.map(r => {
+                const isCritical = Number(r.stock_actual) <= Number(r.stock_minimo);
+                return `
+                  <tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:10px 14px; font-weight:900; font-family:'JetBrains Mono',monospace; color:var(--renacer-gold);">${r.codigo || r.id_repuesto}</td>
+                    <td style="padding:10px 14px; font-weight:800; color:var(--text-main);">${r.nombre}</td>
+                    <td style="padding:10px 14px; color:var(--text-muted);">${r.categoria || "General"}</td>
+                    <td style="padding:10px 14px; text-align:center;">
+                      <span style="padding:3px 9px; border-radius:99px; font-weight:900; font-size:12px; background:${isCritical ? "rgba(239,68,68,0.18)" : "rgba(34,197,94,0.15)"}; color:${isCritical ? "#ef4444" : "#22c55e"};">
+                        ${r.stock_actual} ${r.unidad || "uds"}
+                      </span>
+                    </td>
+                    <td style="padding:10px 14px; text-align:right; font-family:'JetBrains Mono',monospace;">$${Number(r.precio_costo).toFixed(2)}</td>
+                    <td style="padding:10px 14px; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#22c55e;">$${Number(r.precio_venta).toFixed(2)}</td>
+                    <td style="padding:10px 14px; text-align:center;">
+                      <div style="display:inline-flex; gap:6px;">
+                        <button type="button" class="btn btn--primary btn--xs" onclick="openAdjustStockModal('${r.id_repuesto}')" title="Añadir o descontar unidades">
+                          <i class="fas fa-boxes-packing"></i> Stock
+                        </button>
+                        <button type="button" class="btn btn--ghost btn--xs" onclick="openEditSpareModal('${r.id_repuesto}')" title="Editar precio y datos">
+                          <i class="fas fa-pen"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function filterInventoryTable(query) {
+  const q = normalizeLoginString(query || "");
+  const rows = document.querySelectorAll("#inventory-table-body tr");
+  rows.forEach((row) => {
+    const text = normalizeLoginString(row.textContent || "");
+    row.style.display = text.includes(q) ? "" : "none";
+  });
+}
+
+function openAddInventorySpareModal() {
+  openModal({
+    title: "Registrar Nuevo Repuesto en Inventario",
+    icon: "fa-plus-circle",
+    body: `
+      <form id="form-new-spare" onsubmit="event.preventDefault(); saveNewInventorySpare();">
+        <div class="form-grid-2">
+          <div class="form-field">
+            <label>Código Interno *</label>
+            <input type="text" id="spare-code" placeholder="Ej: GUA-03" required />
+          </div>
+          <div class="form-field">
+            <label>Categoría *</label>
+            <select id="spare-category">
+              <option value="Cámara / Culata">Cámara / Culata</option>
+              <option value="Válvulas">Válvulas</option>
+              <option value="Sellos">Sellos</option>
+              <option value="Empacaduras">Empacaduras</option>
+              <option value="Químicos">Químicos</option>
+              <option value="Bloque / Cigüeñal">Bloque / Cigüeñal</option>
+              <option value="Otros">Otros</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-field" style="margin-top:10px;">
+          <label>Nombre del Repuesto *</label>
+          <input type="text" id="spare-name" placeholder="Ej: Guías de Válvula Chevrolet Corsa 1.6" required />
+        </div>
+        <div class="form-grid-4" style="margin-top:10px;">
+          <div class="form-field">
+            <label>Stock Inicial *</label>
+            <input type="number" id="spare-stock" value="10" min="0" required />
+          </div>
+          <div class="form-field">
+            <label>Stock Mínimo *</label>
+            <input type="number" id="spare-min" value="4" min="0" required />
+          </div>
+          <div class="form-field">
+            <label>Costo ($) *</label>
+            <input type="number" id="spare-cost" step="0.1" value="2.0" min="0" required />
+          </div>
+          <div class="form-field">
+            <label>Precio Venta ($) *</label>
+            <input type="number" id="spare-price" step="0.1" value="4.5" min="0" required />
+          </div>
+        </div>
+        <div class="form-field" style="margin-top:10px;">
+          <label>Unidad de Medida</label>
+          <input type="text" id="spare-unit" value="Pieza" placeholder="Pieza, Juego, Galón..." />
+        </div>
+      </form>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewInventorySpare()">Guardar Repuesto</button>
+    `
+  });
+}
+
+function saveNewInventorySpare() {
+  const code = (document.getElementById("spare-code")?.value || "").trim();
+  const name = (document.getElementById("spare-name")?.value || "").trim();
+  const cat = document.getElementById("spare-category")?.value || "General";
+  const stock = parseInt(document.getElementById("spare-stock")?.value, 10) || 0;
+  const min = parseInt(document.getElementById("spare-min")?.value, 10) || 0;
+  const cost = parseFloat(document.getElementById("spare-cost")?.value) || 0;
+  const price = parseFloat(document.getElementById("spare-price")?.value) || 0;
+  const unit = (document.getElementById("spare-unit")?.value || "").trim() || "Pieza";
+
+  if (!code || !name) {
+    showToast("Completa el código y nombre del repuesto.", "error");
+    return;
+  }
+
+  if (!Array.isArray(db.inventario_repuestos)) db.inventario_repuestos = [];
+  db.inventario_repuestos.push({
+    id_repuesto: "REP-" + Date.now().toString().slice(-4),
+    codigo: code.toUpperCase(),
+    nombre: name,
+    categoria: cat,
+    stock_actual: stock,
+    stock_minimo: min,
+    precio_costo: cost,
+    precio_venta: price,
+    unidad: unit
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Repuesto "${name}" registrado exitosamente en el inventario.`);
+}
+
+function openAdjustStockModal(spareId) {
+  const spare = (db.inventario_repuestos || []).find((r) => r.id_repuesto === spareId);
+  if (!spare) return;
+
+  openModal({
+    title: `Ajuste de Stock — ${spare.nombre}`,
+    icon: "fa-boxes-packing",
+    body: `
+      <p style="font-size:13px; color:var(--text-main); margin-bottom:12px;">
+        Stock Físico Actual: <strong>${spare.stock_actual} ${spare.unidad}</strong>
+      </p>
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Tipo de Ajuste</label>
+          <select id="adjust-type">
+            <option value="entrada">Entrada / Compra (+ Sumar)</option>
+            <option value="salida">Salida / Merma (- Restar)</option>
+            <option value="conteo">Conteo Físico Real (= Fijar)</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Cantidad de Unidades</label>
+          <input type="number" id="adjust-qty" min="1" value="1" required />
+        </div>
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label>Motivo o Nota del Ajuste</label>
+        <input type="text" id="adjust-note" placeholder="Ej: Compra de lote nuevo a distribuidor" />
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--primary" onclick="saveAdjustStock('${spareId}')">Aplicar Ajuste</button>
+    `
+  });
+}
+
+function saveAdjustStock(spareId) {
+  const spare = (db.inventario_repuestos || []).find((r) => r.id_repuesto === spareId);
+  if (!spare) return;
+
+  const type = document.getElementById("adjust-type")?.value || "entrada";
+  const qty = parseInt(document.getElementById("adjust-qty")?.value, 10) || 0;
+  const note = (document.getElementById("adjust-note")?.value || "").trim() || "Ajuste manual";
+
+  if (qty <= 0) {
+    showToast("Ingresa una cantidad válida mayor a 0.", "error");
+    return;
+  }
+
+  const prev = Number(spare.stock_actual) || 0;
+  if (type === "entrada") {
+    spare.stock_actual = prev + qty;
+  } else if (type === "salida") {
+    spare.stock_actual = Math.max(0, prev - qty);
+  } else if (type === "conteo") {
+    spare.stock_actual = qty;
+  }
+
+  if (!Array.isArray(db.movimientos_inventario)) db.movimientos_inventario = [];
+  db.movimientos_inventario.unshift({
+    id_mov: "MOV-" + Date.now(),
+    repuesto_id: spare.id_repuesto,
+    repuesto_nombre: spare.nombre,
+    tipo: type,
+    cantidad: qty,
+    stock_anterior: prev,
+    stock_nuevo: spare.stock_actual,
+    nota: note,
+    fecha: new Date().toISOString(),
+    responsable: currentUser ? currentUser.nombre : "Javier Andrade"
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Stock de "${spare.nombre}" actualizado a ${spare.stock_actual} ${spare.unidad}.`);
+}
+
+function openEditSpareModal(spareId) {
+  const spare = (db.inventario_repuestos || []).find((r) => r.id_repuesto === spareId);
+  if (!spare) return;
+
+  openModal({
+    title: `Editar Repuesto — ${spare.nombre}`,
+    icon: "fa-pen",
+    body: `
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label>Código</label>
+          <input type="text" id="edit-spare-code" value="${spare.codigo || ""}" required />
+        </div>
+        <div class="form-field">
+          <label>Categoría</label>
+          <input type="text" id="edit-spare-cat" value="${spare.categoria || ""}" required />
+        </div>
+      </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label>Nombre</label>
+        <input type="text" id="edit-spare-name" value="${spare.nombre}" required />
+      </div>
+      <div class="form-grid-3" style="margin-top:10px;">
+        <div class="form-field">
+          <label>Stock Mínimo</label>
+          <input type="number" id="edit-spare-min" value="${spare.stock_minimo}" min="0" required />
+        </div>
+        <div class="form-field">
+          <label>Costo ($)</label>
+          <input type="number" id="edit-spare-cost" step="0.1" value="${spare.precio_costo}" min="0" required />
+        </div>
+        <div class="form-field">
+          <label>Precio Venta ($)</label>
+          <input type="number" id="edit-spare-price" step="0.1" value="${spare.precio_venta}" min="0" required />
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--gold" onclick="saveEditSpare('${spareId}')">Guardar Cambios</button>
+    `
+  });
+}
+
+function saveEditSpare(spareId) {
+  const spare = (db.inventario_repuestos || []).find((r) => r.id_repuesto === spareId);
+  if (!spare) return;
+
+  spare.codigo = (document.getElementById("edit-spare-code")?.value || "").trim().toUpperCase();
+  spare.categoria = (document.getElementById("edit-spare-cat")?.value || "").trim();
+  spare.nombre = (document.getElementById("edit-spare-name")?.value || "").trim();
+  spare.stock_minimo = parseInt(document.getElementById("edit-spare-min")?.value, 10) || 0;
+  spare.precio_costo = parseFloat(document.getElementById("edit-spare-cost")?.value) || 0;
+  spare.precio_venta = parseFloat(document.getElementById("edit-spare-price")?.value) || 0;
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Repuesto "${spare.nombre}" actualizado.`);
+}
+
+function openInventoryHistoryModal() {
+  const movs = db.movimientos_inventario || [];
+  openModal({
+    title: "Historial de Movimientos de Inventario",
+    icon: "fa-history",
+    wide: true,
+    body: `
+      <div style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
+          <thead>
+            <tr style="background:rgba(0,0,0,0.12); color:var(--text-secondary); text-transform:uppercase;">
+              <th style="padding:8px 12px;">Fecha</th>
+              <th style="padding:8px 12px;">Repuesto</th>
+              <th style="padding:8px 12px; text-align:center;">Tipo</th>
+              <th style="padding:8px 12px; text-align:center;">Cantidad</th>
+              <th style="padding:8px 12px;">Referencia / Nota</th>
+              <th style="padding:8px 12px;">Responsable</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${movs.length ? movs.map(m => `
+              <tr style="border-bottom:1px solid var(--border-subtle);">
+                <td style="padding:8px 12px; font-size:11px; color:var(--text-muted);">${formatDateHuman(m.fecha, true)}</td>
+                <td style="padding:8px 12px; font-weight:800; color:var(--text-main);">${m.repuesto_nombre || m.repuesto_id}</td>
+                <td style="padding:8px 12px; text-align:center;">
+                  <span style="padding:2px 8px; border-radius:99px; font-size:10.5px; font-weight:800; background:${m.tipo === "salida_orden" || m.tipo === "salida" ? "rgba(239,68,68,0.18); color:#ef4444;" : "rgba(34,197,94,0.15); color:#22c55e;"}">
+                    ${m.tipo === "salida_orden" ? "Salida en Orden" : m.tipo}
+                  </span>
+                </td>
+                <td style="padding:8px 12px; text-align:center; font-weight:900;">${m.cantidad}</td>
+                <td style="padding:8px 12px; font-size:11.5px; color:var(--text-muted);">${m.orden_id ? `Orden #${m.codigo_troquel || m.orden_id}` : (m.nota || "Ajuste de inventario")}</td>
+                <td style="padding:8px 12px; font-weight:700;">${m.responsable || "Javier Andrade"}</td>
+              </tr>
+            `).join("") : '<tr><td colspan="6" style="padding:20px; text-align:center; color:var(--text-muted);">Sin movimientos registrados aún.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `,
+    footer: `<button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>`
+  });
 }
 
 /* ============================================================================
@@ -4185,24 +4624,24 @@ function renderOrderCardTelegramStyle(order) {
               ? `<span style="color:var(--text-muted); margin-left:6px;"><i class="fas fa-stopwatch"></i> ${formatMinutes(s.minutos_acumulados || s.tiempo_neto_min)}</span>`
               : "";
           return `
-            <div class="order-service-entry ${s.estado_subtarea === "terminado" ? "done" : ""}">
+            <div class="order-clean-service-row ${s.estado_subtarea === "terminado" ? "done" : ""}">
               <div style="flex:1;">
-                <div style="font-weight:800; font-size:12.5px; color:var(--text-main);">
-                  ${s.descripcion_servicio} ${s.es_item_extra ? '<span style="font-size:10px; color:var(--renacer-gold); font-weight:900;">(Ítem Extra)</span>' : ""}
+                <div class="service-title">
+                  ${s.descripcion_servicio} ${s.es_item_extra ? '<span class="extra-tag">(Ítem Extra)</span>' : ""}
                 </div>
-                <div style="font-size:11px; color:var(--text-muted); display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:2px;">
+                <div class="service-meta">
                   <span>Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong></span>
-                  ${canManage ? `<button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-size:10.5px; margin-left:4px; font-weight:800;" onclick="openAssignSubtaskModal('${s.id_subtarea}', '${order.id_orden}')" title="Asignar o cambiar técnico">[<i class="fas fa-user-plus"></i> ${s.tecnico_id ? "Cambiar" : "Asignar"}]</button>` : ""}
-                  ${canManage && s.tecnico_id ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:4px; font-weight:800;" onclick="unassignTechnicianFromOrderCard('${s.id_subtarea}', '${order.id_orden}')" title="Quitar asignación">[<i class="fas fa-user-minus"></i> Quitar]</button>` : ""}
+                  ${canManage ? `<button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-size:10.5px; margin-left:4px; font-weight:800;" onclick="openAssignSubtaskModal('${s.id_subtarea}', '${order.id_orden}')" title="Asignar o cambiar técnico">[${s.tecnico_id ? "Cambiar" : "Asignar"}]</button>` : ""}
+                  ${canManage && s.tecnico_id ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:4px; font-weight:800;" onclick="unassignTechnicianFromOrderCard('${s.id_subtarea}', '${order.id_orden}')" title="Quitar asignación">[Quitar]</button>` : ""}
                   ${canManage && !isEntregado ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:6px; font-weight:800;" onclick="removeSubtaskFromOrder('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar ítem">[<i class="fas fa-trash-alt"></i>]</button>` : ""}
                   <span>·</span>
                   <span>${stateText}</span>
                   ${timerBadge}
                 </div>
               </div>
-              <div style="text-align:right;">
-                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:13px; color:var(--text-main);">$${Number(s.monto_servicio).toFixed(2)}</div>
-                <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:#22c55e; font-weight:800;">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
+              <div class="service-right">
+                <div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>
+                <div class="comm-val">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
               </div>
             </div>
           `;
@@ -4241,22 +4680,22 @@ function renderOrderCardTelegramStyle(order) {
       .map((k) => {
         const t = techMap[k];
         return `
-        <div class="order-assignee-card ${t.isExternal ? "order-assignee-card--external" : ""}">
+        <div class="order-clean-assignee-row ${t.isExternal ? "external" : ""}">
           <div style="flex:1;">
-            <div style="font-weight:900; font-size:13px; color:var(--text-main);">
-              ${t.isExternal ? '<span class="badge-external"><i class="fas fa-handshake"></i> EXTERNO</span> ' : '<i class="fas fa-user-gear" style="color:var(--renacer-gold); font-size:12px;"></i> '}
+            <div class="assignee-name">
+              ${t.isExternal ? '<span class="badge-external"><i class="fas fa-handshake"></i> EXTERNO</span> ' : ''}
               ${t.nombre}
             </div>
-            <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px; line-height:1.35;">
+            <div class="assignee-tasks">
               ${t.servicios.join(", ")}
             </div>
           </div>
-          <div style="text-align:right; margin-left:8px;">
-            <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">
-              ${t.isExternal ? "Costo Tercero" : "Comisión"}
+          <div class="assignee-comm">
+            <div class="comm-label">
+              ${t.isExternal ? "Costo Tercero" : "Comision"}
             </div>
-            <div style="font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:${t.isExternal ? "#38bdf8" : "#22c55e"};">
-              $${t.totalComm.toFixed(2)}
+            <div class="comm-val">
+              ${t.totalComm}$
             </div>
           </div>
         </div>
@@ -4373,16 +4812,11 @@ function renderOrderCardTelegramStyle(order) {
   }
 
   return `
-    <article class="renacer-order-card ${order.prioridad_alta || order.devuelto_calidad ? "priority-high" : ""}">
-      <!-- CABECERA LIMPIA UNIFICADA POR CÓDIGO DE TROQUEL -->
-      <div class="clean-card-top-bar">
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span class="troquel-badge-lg">
-            TROQUEL #${order.codigo_troquel}
-          </span>
-          <span style="color:#cbd5e1; font-size:11.5px; font-weight:700;">
-            <i class="far fa-calendar-alt"></i> ${formatDateHuman(order.fecha_ingreso, false)}
-          </span>
+    <article class="renacer-order-card order-clean-card ${order.prioridad_alta || order.devuelto_calidad ? "priority-high" : ""}">
+      <!-- 1. CABECERA LIMPIA: NÚMERO DE ORDEN Y ESTADO EN ALTO CONTRASTE (DISEÑO IMAGEN 6) -->
+      <div class="order-clean-header">
+        <div class="order-clean-header-num">
+          ORDEN: ${order.codigo_troquel}
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
           ${order.prioridad_alta ? `<span class="priority-fire-badge" title="Prioridad Alta"><i class="fas fa-bolt"></i> Prioridad</span>` : ""}
@@ -4392,166 +4826,138 @@ function renderOrderCardTelegramStyle(order) {
         </div>
       </div>
 
-      <!-- CUERPO DE LA ORDEN -->
-      <div class="order-card-body">
-        ${
-          order.estado_actual === "anulado"
-            ? `<div style="background:rgba(239,68,68,0.14); border:1px solid #ef4444; color:#fca5a5; padding:8px 12px; border-radius:10px; font-size:12px; font-weight:700; margin-bottom:8px;">
-                <i class="fas fa-ban"></i> <strong>ORDEN ANULADA:</strong> ${order.motivo_anulacion || "Sin motivo especificado"}
-                <div style="font-size:10.5px; opacity:0.85; margin-top:2px;">El número de Troquel #${order.codigo_troquel} se conserva en auditoría sin deuda.</div>
-              </div>`
-            : ""
-        }
-        ${
-          order.estado_actual === "entregado" && order.fecha_garantia_hasta
-            ? (() => {
-                const garDate = new Date(order.fecha_garantia_hasta);
-                const today = new Date();
-                const diffDays = Math.ceil((garDate - today) / (1000 * 60 * 60 * 24));
-                const isValid = diffDays > 0;
-                return `<div class="warranty-badge ${isValid ? "warranty-badge--valid" : "warranty-badge--expired"}" style="margin-bottom:8px;">
-                  <i class="fas fa-shield-halved"></i>
-                  <span><strong>Garantía de 1 Año Renacer:</strong> ${isValid ? diffDays + " días restantes" : "Vencida"} (Vence: ${formatDateHuman(order.fecha_garantia_hasta, false)})</span>
-                </div>`;
-              })()
-            : ""
-        }
-        ${
-          order.devuelto_calidad && order.motivo_rechazo_qc
-            ? `<div style="background:rgba(220,38,38,0.12); border:1px solid #dc2626; color:#f87171; padding:8px 10px; border-radius:10px; font-size:12px; font-weight:700;">
-                <i class="fas fa-times-circle"></i> <strong>Devuelto por Calidad:</strong> ${order.motivo_rechazo_qc}
-              </div>`
-            : ""
-        }
-
-        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px;">
-          <div>
-            <h3 class="order-motor-title">${order.datos_motor.marca} ${order.datos_motor.modelo}</h3>
-            <div style="font-size:12px; color:var(--text-muted); font-weight:600; margin-top:2px;">
-              ${order.datos_motor.tipo_pieza} · Serial: ${order.datos_motor.serial || "S/N"}
-            </div>
-          </div>
-          ${finBadge}
+      <!-- 2. DATOS DE VEHÍCULO / MOTOR Y CLIENTE (DISEÑO IMAGEN 6) -->
+      <div class="order-clean-subheader">
+        <div class="order-clean-brand">
+          ${order.datos_motor.marca} ${order.datos_motor.modelo ? `<span style="font-size:13px; font-weight:700; color:#94a3b8; text-transform:none;">${order.datos_motor.modelo}</span>` : ""}
         </div>
-
-        <div class="order-client-line">
-          <span><i class="fas fa-user"></i> <strong>${order.nombre_cliente}</strong></span>
-          <span>·</span>
+        <div class="order-clean-client-info">
+          <span><i class="fas fa-user"></i> ${order.nombre_cliente}</span>
+          <span class="dot-sep">·</span>
           <span>${order.documento_cliente}</span>
-          <span>·</span>
-          <a href="tel:${order.telefono_cliente}" style="color:var(--text-secondary); font-weight:700; text-decoration:none;">
+          <span class="dot-sep">·</span>
+          <a href="tel:${order.telefono_cliente}" style="color:inherit; text-decoration:none;">
             <i class="fas fa-phone"></i> ${order.telefono_cliente}
           </a>
         </div>
+      </div>
 
-        ${(() => {
-          const allImgs = [...(order.galeria_fotos_pieza || []), ...(order.galeria_fotos_repuestos || [])];
-          if (!allImgs.length) return "";
-          return `
-            <div style="display:flex; align-items:center; gap:6px; margin:4px 0; overflow-x:auto; padding-bottom:2px;">
-              ${allImgs.slice(0, 4).map((u, idx) => `
-                <img
-                  src="${u}"
-                  alt="Foto ${idx + 1}"
-                  onclick="openPhotoLightbox('${u}', 'Troquel #${order.codigo_troquel} · ${order.datos_motor.marca}')"
-                  title="Toca para inspeccionar en 4K HD con Zoom"
-                  style="width:40px; height:40px; border-radius:8px; object-fit:cover; border:1.5px solid var(--border-color); cursor:zoom-in; flex-shrink:0; transition:transform 0.15s;"
-                />
-              `).join("")}
-              ${allImgs.length > 4 ? `
-                <button type="button" class="btn btn--ghost btn--xs" style="height:40px; border-radius:8px; padding:0 8px; font-size:10.5px;" onclick="openDualGalleryInspector('${order.id_orden}')">
-                  +${allImgs.length - 4}
-                </button>
-              ` : ""}
-            </div>
-          `;
-        })()}
+      ${
+        order.estado_actual === "anulado"
+          ? `<div style="background:rgba(239,68,68,0.14); border:1px solid #ef4444; color:#fca5a5; padding:8px 12px; border-radius:10px; font-size:12px; font-weight:700;">
+              <i class="fas fa-ban"></i> <strong>ORDEN ANULADA:</strong> ${order.motivo_anulacion || "Sin motivo especificado"}
+              <div style="font-size:10.5px; opacity:0.85; margin-top:2px;">El número de Orden #${order.codigo_troquel} se conserva en auditoría sin deuda.</div>
+            </div>`
+          : ""
+      }
+      ${
+        order.estado_actual === "entregado" && order.fecha_garantia_hasta
+          ? (() => {
+              const garDate = new Date(order.fecha_garantia_hasta);
+              const today = new Date();
+              const diffDays = Math.ceil((garDate - today) / (1000 * 60 * 60 * 24));
+              const isValid = diffDays > 0;
+              return `<div class="warranty-badge ${isValid ? "warranty-badge--valid" : "warranty-badge--expired"}">
+                <i class="fas fa-shield-halved"></i>
+                <span><strong>Garantía de 1 Año Renacer:</strong> ${isValid ? diffDays + " días restantes" : "Vencida"} (Vence: ${formatDateHuman(order.fecha_garantia_hasta, false)})</span>
+              </div>`;
+            })()
+          : ""
+      }
+      ${
+        order.devuelto_calidad && order.motivo_rechazo_qc
+          ? `<div style="background:rgba(220,38,38,0.12); border:1px solid #dc2626; color:#f87171; padding:8px 10px; border-radius:10px; font-size:12px; font-weight:700;">
+              <i class="fas fa-times-circle"></i> <strong>Devuelto por Calidad:</strong> ${order.motivo_rechazo_qc}
+            </div>`
+          : ""
+      }
 
-        <!-- BLOQUE 1: SERVICIOS Y PRESUPUESTO CLIENTE (DISEÑO IMAGEN 6) -->
-        <div class="order-section-block">
-          <div class="order-section-title">
-            <span><i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> Servicios:</span>
-            ${
-              !isEntregado && canManage
-                ? `<div style="display:flex; gap:5px;">
-                    <button type="button" class="btn btn--gold btn--xs" onclick="openQuickExtraItemModal('${order.id_orden}')" title="Añadir ítem extra">+ Ítem Extra</button>
-                    <button type="button" class="btn btn--ghost btn--xs" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar presupuesto y comisiones"><i class="fas fa-pen"></i></button>
-                  </div>`
-                : ""
-            }
-          </div>
-
-          <div class="subtasks-mini-list">
-            ${subtasksListHtml}
-          </div>
-
-          <!-- Resumen Financiero Total / Abonado / Resto -->
-          <div class="order-finance-strip" style="margin-top:6px;">
-            <div class="finance-cell">
-              <span>TOTAL</span>
-              <strong>$${Number(order.monto_total).toFixed(2)}</strong>
-            </div>
-            <div class="finance-cell">
-              <span>ABONADO</span>
-              <strong style="color:#22c55e;">$${Number(order.monto_abonado).toFixed(2)}</strong>
-            </div>
-            <div class="finance-cell">
-              <span>RESTO</span>
-              <strong style="color:${order.saldo_pendiente > 0 ? "#f87171" : "#22c55e"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
-            </div>
-          </div>
+      <!-- 3. BLOQUE 1: SERVICIOS Y PRESUPUESTO CLIENTE (DISEÑO IMAGEN 6) -->
+      <div class="order-clean-block">
+        <div class="order-clean-block-title">
+          <span>Servicios:</span>
+          ${
+            !isEntregado && canManage
+              ? `<div style="display:flex; gap:5px;">
+                  <button type="button" class="btn btn--gold btn--xs" onclick="openQuickExtraItemModal('${order.id_orden}')" title="Añadir ítem extra">+ Ítem Extra</button>
+                  <button type="button" class="btn btn--ghost btn--xs" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar presupuesto"><i class="fas fa-pen"></i></button>
+                </div>`
+              : ""
+          }
         </div>
 
-        <!-- BLOQUE 2: ASIGNACIONES / COMISIONES Y TERCERIZADOS (DISEÑO IMAGEN 6) -->
-        <div class="order-section-block">
-          <div class="order-section-title">
-            <span><i class="fas fa-users-cog" style="color:var(--renacer-gold);"></i> Asignaciones / Comisiones:</span>
-            ${
-              canManage
-                ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Abrir matriz de asignación"><i class="fas fa-sliders-h"></i> Matriz</button>`
-                : ""
-            }
+        <div class="order-clean-services-list">
+          ${subtasksListHtml}
+        </div>
+
+        <!-- Strip Financiero Total / Abonado / Resto dentro de Servicios (Imagen 6) -->
+        <div class="order-clean-finance-strip">
+          <div class="finance-cell">
+            <span class="lbl">TOTAL</span>
+            <strong class="val val--total">$${Number(order.monto_total).toFixed(2)}</strong>
           </div>
-          <div style="display:flex; flex-direction:column; gap:6px;">
-            ${assignmentsHtml}
+          <div class="finance-cell">
+            <span class="lbl">ABONADO</span>
+            <strong class="val val--abonado">$${Number(order.monto_abonado).toFixed(2)}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="lbl">RESTO</span>
+            <strong class="val val--resto" style="color:${order.saldo_pendiente > 0 ? "#f87171" : "#22c55e"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
           </div>
         </div>
       </div>
 
-      <!-- PIE DE ACCIONES LIMPIO -->
-      <div class="order-card-footer">
-        <div style="display:flex; gap:5px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px;" onclick="openDualGalleryInspector('${order.id_orden}')" title="Ver fotos de la pieza y repuestos">
-            <i class="fas fa-camera"></i> ${countFotosPieza + countFotosRepuestos}
+      <!-- 4. BLOQUE 2: ASIGNACIONES / COMISIONES POR TÉCNICO (DISEÑO IMAGEN 6) -->
+      <div class="order-clean-block">
+        <div class="order-clean-block-title">
+          <span>Asignaciones/Comisiones:</span>
+          ${
+            canManage
+              ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Abrir matriz de asignación"><i class="fas fa-sliders-h"></i> Matriz</button>`
+              : ""
+          }
+        </div>
+        <div class="order-clean-assignees-list">
+          ${assignmentsHtml}
+        </div>
+      </div>
+
+      <!-- 5. PIE DE ACCIONES: PILL COMPACTO DE CONTADORES + BOTONES DE ESTADO (DISEÑO IMAGEN 6) -->
+      <div class="order-clean-footer">
+        <div class="order-clean-pill-actions">
+          <button type="button" class="order-clean-pill-btn" onclick="openDualGalleryInspector('${order.id_orden}')" title="Fotos de pieza y repuestos">
+            <i class="fas fa-camera"></i> <span>${countFotosPieza + countFotosRepuestos}</span>
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px;" onclick="openOrderCrmModal('${order.id_orden}')" title="Abrir bitácora y chat de la orden">
-            <i class="fas fa-comments"></i> ${chatMessages.length}
+          <span style="color:#334155;">|</span>
+          <button type="button" class="order-clean-pill-btn" onclick="openOrderCrmModal('${order.id_orden}')" title="Bitácora técnica y chat">
+            <i class="fas fa-comments"></i> <span>${chatMessages.length}</span>
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#38bdf8;" onclick="openWhatsAppTermsOnlyModal('${order.id_orden}')" title="Enviar Términos y Comprobante de Recepción por WhatsApp (Sin Precios)">
-            <i class="fas fa-file-contract"></i>
-          </button>
-          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar Presupuesto Oficial Detallado por WhatsApp">
+          <span style="color:#334155;">|</span>
+          <button type="button" class="order-clean-pill-btn order-clean-pill-btn--wa" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar presupuesto detallado por WhatsApp">
             <i class="fab fa-whatsapp"></i>
           </button>
-          <button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#38bdf8;" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket de Recepción (4 Políticas)">
+          <span style="color:#334155;">|</span>
+          <button type="button" class="order-clean-pill-btn" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket de Recepción (Políticas)">
             <i class="fas fa-print"></i>
           </button>
           ${
             canManage && order.estado_actual !== "anulado" && order.estado_actual !== "entregado"
-              ? `<button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#f87171;" onclick="cancelOrderWithReason('${order.id_orden}')" title="Anular orden conservando troquel">
-                  <i class="fas fa-ban"></i>
-                </button>`
+              ? `<span style="color:#334155;">|</span>
+                 <button type="button" class="order-clean-pill-btn order-clean-pill-btn--danger" onclick="cancelOrderWithReason('${order.id_orden}')" title="Anular orden conservando correlativo">
+                   <i class="fas fa-ban"></i>
+                 </button>`
               : ""
           }
           ${
             canManage
-              ? `<button type="button" class="btn btn--ghost" style="padding:6px 9px; font-size:11.5px; color:#ef4444;" onclick="deleteOrder('${order.id_orden}')" title="Eliminar esta orden">
-                  <i class="fas fa-trash"></i>
-                </button>`
+              ? `<button type="button" class="order-clean-pill-btn order-clean-pill-btn--danger" onclick="deleteOrder('${order.id_orden}')" title="Eliminar orden">
+                   <i class="fas fa-trash-alt"></i>
+                 </button>`
               : ""
           }
         </div>
-        <div>
+
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           ${primaryActionBtn}
         </div>
       </div>
@@ -5230,6 +5636,106 @@ let tempNewOrderState = {
   itemsPresupuesto: []
 };
 
+function getAlliedWorkshopsOptions() {
+  const alliedClients = (db.clientes || []).filter((c) => c.es_taller_aliado || (c.tipo_cliente && c.tipo_cliente.includes("aliado")));
+  const alliedOutsourcing = (db.usuarios || []).filter((u) => u.rol === "outsourcing" || u.tipo === "taller_externo");
+  
+  const options = [];
+  alliedClients.forEach((c) => {
+    options.push(`<option value="CLI_${c.id_cliente}">${c.nombre_completo} (${c.documento_identidad})</option>`);
+  });
+  alliedOutsourcing.forEach((u) => {
+    if (!alliedClients.some((c) => c.nombre_completo === u.nombre)) {
+      options.push(`<option value="USR_${u.id_usuario}">${u.nombre} (Taller Aliado Externo)</option>`);
+    }
+  });
+  return options.join("");
+}
+
+function handleFastAlliedSelect(val) {
+  if (!val) return;
+  if (val.startsWith("CLI_")) {
+    const id = val.replace("CLI_", "");
+    const c = (db.clientes || []).find((x) => x.id_cliente === id);
+    if (!c) return;
+    const docTypeEl = document.getElementById("new-cli-doc-type");
+    const docNumEl = document.getElementById("new-cli-doc-num");
+    const nameEl = document.getElementById("new-cli-name");
+    const phoneEl = document.getElementById("new-cli-phone");
+    const addrEl = document.getElementById("new-cli-address");
+    const alliedEl = document.getElementById("new-cli-allied");
+    
+    const parts = (c.documento_identidad || "").split("-");
+    if (docTypeEl && parts.length > 1) docTypeEl.value = parts[0] + "-";
+    if (docNumEl) docNumEl.value = parts.slice(1).join("-") || c.documento_identidad || "";
+    if (nameEl) nameEl.value = c.nombre_completo || "";
+    if (phoneEl) phoneEl.value = c.telefono || "";
+    if (addrEl) addrEl.value = c.direccion || "";
+    if (alliedEl) alliedEl.value = "true";
+    tempNewOrderState.clienteEncontradoId = c.id_cliente;
+    showToast(`Taller Aliado "${c.nombre_completo}" cargado.`);
+  } else if (val.startsWith("USR_")) {
+    const id = val.replace("USR_", "");
+    const u = (db.usuarios || []).find((x) => x.id_usuario === id);
+    if (!u) return;
+    const nameEl = document.getElementById("new-cli-name");
+    const phoneEl = document.getElementById("new-cli-phone");
+    const alliedEl = document.getElementById("new-cli-allied");
+    if (nameEl) nameEl.value = u.nombre || "";
+    if (phoneEl) phoneEl.value = u.telefono || "";
+    if (alliedEl) alliedEl.value = "true";
+    showToast(`Taller Aliado "${u.nombre}" cargado.`);
+  }
+}
+
+function toggleSellSparesSection(checked) {
+  const box = document.getElementById("sell-spares-container");
+  if (!box) return;
+  if (checked) {
+    box.classList.remove("hidden");
+  } else {
+    box.classList.add("hidden");
+  }
+}
+
+function addInventorySpareToTempOrder() {
+  const select = document.getElementById("select-inventory-spare");
+  const qtyInp = document.getElementById("input-inventory-spare-qty");
+  if (!select || !select.value) {
+    showToast("Selecciona un repuesto del inventario.", "warning");
+    return;
+  }
+  const qty = parseInt(qtyInp?.value, 10) || 1;
+  const spare = (db.inventario_repuestos || []).find((r) => r.id_repuesto === select.value);
+  if (!spare) return;
+
+  if (spare.stock_actual < qty) {
+    Swal.fire({
+      title: "Stock Insuficiente",
+      text: `Solo quedan ${spare.stock_actual} ${spare.unidad} de ${spare.nombre} en inventario.`,
+      icon: "warning",
+      confirmButtonColor: "#182254"
+    });
+    return;
+  }
+
+  const unitPrice = Number(spare.precio_venta) || 0;
+  const totalPrice = unitPrice * qty;
+
+  tempNewOrderState.itemsPresupuesto.push({
+    id_temp: "SP_" + Date.now(),
+    id_repuesto: spare.id_repuesto,
+    descripcion: `Repuesto: ${spare.nombre} (x${qty} ${spare.unidad || "pz"})`,
+    monto: totalPrice,
+    comision: 0,
+    es_repuesto_inventario: true,
+    cantidad_descontar: qty
+  });
+
+  renderTempBudgetItems();
+  showToast(`Repuesto "${spare.nombre}" (x${qty}) añadido al presupuesto ($${totalPrice.toFixed(2)}).`);
+}
+
 function openNewOrderModal() {
   tempNewOrderState = {
     clienteEncontradoId: null,
@@ -5245,6 +5751,10 @@ function openNewOrderModal() {
     .map((c) => `<option value="${c.id_cat}">${c.nombre} — $${c.precio_sugerido} (Comisión: $${c.comision_sugerida})</option>`)
     .join("");
 
+  const inventoryOptions = (db.inventario_repuestos || [])
+    .map((r) => `<option value="${r.id_repuesto}">${r.nombre} — $${Number(r.precio_venta).toFixed(2)} (Stock: ${r.stock_actual} ${r.unidad || "pz"})</option>`)
+    .join("");
+
   const randomTroquel = Math.floor(1515 + Math.random() * 80);
 
   openModal({
@@ -5253,10 +5763,17 @@ function openNewOrderModal() {
     wide: true,
     body: `
       <form id="form-new-order" onsubmit="event.preventDefault(); saveNewOrder();">
-        <!-- 1. Identificación Única del Cliente por Cédula o RIF -->
+        <!-- 1. Identificación del Cliente o Selección Rápida de Taller Aliado -->
         <div class="form-section-box">
-          <div class="form-section-title">
-            <i class="fas fa-id-card"></i> 1. Identificación Única del Cliente (Búsqueda por Cédula o RIF)
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span><i class="fas fa-id-card"></i> 1. Identificación del Cliente / Taller Aliado</span>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span style="font-size:11px; font-weight:800; color:var(--renacer-gold);"><i class="fas fa-handshake"></i> ¿Es Taller Aliado?:</span>
+              <select id="select-fast-allied-workshop" onchange="handleFastAlliedSelect(this.value)" style="padding:4px 8px; font-size:11.5px; font-weight:800; border-radius:8px; background:var(--bg-card); color:var(--text-main); border:1.5px solid var(--renacer-gold);">
+                <option value="">-- Seleccionar Taller Aliado Registrado --</option>
+                ${getAlliedWorkshopsOptions()}
+              </select>
+            </div>
           </div>
           <div class="form-grid-3">
             <div class="form-field">
@@ -5302,6 +5819,13 @@ function openNewOrderModal() {
             </div>
             <div class="form-field">
               <label>Tipo de Cliente</label>
+              <select id="new-cli-allied">
+                <option value="false">Cliente Particular</option>
+                <option value="true">Mecánico / Taller Aliado Recurrente</option>
+              </select>
+            </div>
+          </div>
+        </div>
               <select id="new-cli-allied">
                 <option value="false">Cliente Particular</option>
                 <option value="true">Mecánico / Taller Aliado Recurrente</option>
@@ -5440,10 +5964,36 @@ function openNewOrderModal() {
           </div>
         </div>
 
-        <!-- 4. Presupuesto Dinámico Inicial -->
+        <!-- 4. Repuestos del Taller Vendidos al Cliente (Inventario Javier Andrade) -->
+        <div class="form-section-box" style="border:1.5px solid rgba(56, 189, 248, 0.45); background:rgba(56, 189, 248, 0.03);">
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span><i class="fas fa-boxes-stacked" style="color:#38bdf8;"></i> 4. ¿Se le vendieron repuestos del taller al cliente?</span>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; font-weight:800; color:var(--text-main);">
+              <input type="checkbox" id="toggle-sell-spares" onchange="toggleSellSparesSection(this.checked)" style="width:17px; height:17px; accent-color:#0284c7;" />
+              Sí, incluir repuestos de inventario
+            </label>
+          </div>
+          <div id="sell-spares-container" class="hidden" style="margin-top:10px;">
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <select id="select-inventory-spare" style="flex:1; min-width:240px; padding:9px 12px; border-radius:10px; border:1.5px solid var(--border-color); font-weight:700;">
+                <option value="">-- Seleccionar repuesto del inventario --</option>
+                ${inventoryOptions}
+              </select>
+              <input type="number" id="input-inventory-spare-qty" min="1" value="1" style="width:75px; padding:9px; border-radius:10px; font-weight:800;" placeholder="Cant." />
+              <button type="button" class="btn btn--primary" onclick="addInventorySpareToTempOrder()">
+                <i class="fas fa-plus"></i> Agregar al Pedido
+              </button>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+              <i class="fas fa-info-circle"></i> Al guardar la orden se descontarán automáticamente del stock controlado por Javier Andrade.
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. Presupuesto Dinámico Inicial -->
         <div class="form-section-box">
           <div class="form-section-title">
-            <i class="fas fa-file-invoice-dollar"></i> 4. Presupuesto Dinámico Inicial (Desglose Editable de Servicios)
+            <i class="fas fa-file-invoice-dollar"></i> 5. Presupuesto Dinámico Inicial (Desglose Editable de Servicios)
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
             <select id="select-cat-service" style="flex:1; min-width:240px; padding:9px 12px; border-radius:10px; border:1.5px solid var(--border-color); font-weight:700;">
@@ -5803,6 +6353,27 @@ function saveNewOrder() {
   db.ordenes.unshift(newOrder);
 
   tempNewOrderState.itemsPresupuesto.forEach((it, idx) => {
+    // Si es repuesto del inventario de Javier Andrade, descontar stock físico y registrar movimiento
+    if (it.es_repuesto_inventario && it.id_repuesto) {
+      const sp = (db.inventario_repuestos || []).find((r) => r.id_repuesto === it.id_repuesto);
+      if (sp) {
+        const cant = Number(it.cantidad_descontar) || 1;
+        sp.stock_actual = Math.max(0, (Number(sp.stock_actual) || 0) - cant);
+        if (!Array.isArray(db.movimientos_inventario)) db.movimientos_inventario = [];
+        db.movimientos_inventario.unshift({
+          id_mov: "MOV-" + Date.now() + "-" + idx,
+          repuesto_id: sp.id_repuesto,
+          repuesto_nombre: sp.nombre,
+          tipo: "salida_orden",
+          orden_id: newOrderId,
+          codigo_troquel: cleanTroquel,
+          cantidad: cant,
+          fecha: nowStr,
+          responsable: currentUser.nombre
+        });
+      }
+    }
+
     db.subtareas.push({
       id_subtarea: `SUB-${cleanTroquel}-${idx + 1}-${Date.now().toString().slice(-3)}`,
       orden_id: newOrderId,
@@ -5829,7 +6400,7 @@ function saveNewOrder() {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "recepcion",
-    mensaje: `Pieza recibida con Troquel #${cleanTroquel}. Presupuesto inicial: $${montoTotal.toFixed(2)}.`,
+    mensaje: `Pieza recibida con Orden #${cleanTroquel}. Presupuesto inicial: $${montoTotal.toFixed(2)}.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -5840,7 +6411,7 @@ function saveNewOrder() {
 
   if (clientObj && clientObj.telefono) {
     Swal.fire({
-      title: `¡Troquel #${cleanTroquel} Registrado!`,
+      title: `¡Orden #${cleanTroquel} Registrada!`,
       text: `¿Deseas enviar el comprobante de recepción con los Términos y Condiciones por WhatsApp a ${clientObj.nombre_completo} (sin precios)?`,
       icon: "success",
       showCancelButton: true,
@@ -5854,7 +6425,7 @@ function saveNewOrder() {
       }
     });
   } else {
-    showToast(`Troquel #${cleanTroquel} registrado en 1. Diagnóstico / Presupuesto.`);
+    showToast(`Orden #${cleanTroquel} registrada en 1. Diagnóstico / Presupuesto.`);
   }
 }
 
@@ -7174,9 +7745,41 @@ function approveAndDeliverOrder(orderId) {
 
 
 /* ============================================================================
-   ENVÍO DE PRESUPUESTO / ORDEN EN TEXTO PLANO POR WHATSAPP CON NRO. DE TROQUEL
+   ENVÍO DE PRESUPUESTO / ORDEN EN TEXTO PLANO POR WHATSAPP CON NRO. DE ORDEN
    (SOLICITADO EN AUDIOS DE JESÚS ANDRADE)
    ============================================================================ */
+function formatWhatsAppPhone(rawPhone) {
+  if (!rawPhone) return "";
+  let digits = String(rawPhone).replace(/\D/g, "");
+  if (!digits) return "";
+  
+  // Si empieza con 58 y luego 0 (ej. 580414 -> 58414)
+  if (digits.startsWith("580") && digits.length >= 12) {
+    digits = "58" + digits.slice(3);
+  }
+  // Si ya tiene código internacional (+58 Venezuela, +57 Colombia, +1 USA, etc.)
+  if (digits.startsWith("58") || digits.startsWith("57") || digits.startsWith("1") || digits.startsWith("34") || digits.startsWith("56") || digits.startsWith("54") || digits.startsWith("55") || digits.startsWith("52")) {
+    return digits;
+  }
+  // Si empieza con 0 (número local vzla ej. 0412, 0414, 0424, 0416, 0426, 0261)
+  if (digits.startsWith("0")) {
+    return "58" + digits.slice(1);
+  }
+  // Si tiene 10 dígitos y empieza por prefijo móvil venezolano sin cero (ej. 412, 414, 424)
+  if (digits.length === 10 && (digits.startsWith("412") || digits.startsWith("414") || digits.startsWith("424") || digits.startsWith("416") || digits.startsWith("426") || digits.startsWith("261"))) {
+    return "58" + digits;
+  }
+  // Si tiene 10 dígitos y empieza por 3 (Colombia sin 57)
+  if (digits.length === 10 && digits.startsWith("3")) {
+    return "57" + digits;
+  }
+  // Default Venezuela si tiene 7 a 10 dígitos
+  if (digits.length <= 10) {
+    return "58" + digits;
+  }
+  return digits;
+}
+
 function buildWhatsAppBudgetPlainText(order) {
   const subtasks = db.subtareas.filter((s) => s.orden_id === order.id_orden);
   const itemsLines = subtasks
@@ -7196,8 +7799,7 @@ function buildWhatsAppBudgetPlainText(order) {
     `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
     `*ORDEN DE SERVICIO / PRESUPUESTO*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `*Nro. de Orden:* ${order.id_orden}\n` +
-    `*CÓDIGO DE TROQUEL (Nro. Pieza):* #${order.codigo_troquel}\n` +
+    `*Nro. de Orden:* #${order.codigo_troquel}\n` +
     `*Cliente:* ${order.nombre_cliente} (${order.documento_cliente})\n` +
     `*Pieza / Motor:* ${order.datos_motor.tipo_pieza} — ${order.datos_motor.marca} ${order.datos_motor.modelo}\n` +
     `*Estado Actual:* ${stateNames[order.estado_actual] || order.estado_actual}\n` +
@@ -7207,15 +7809,15 @@ function buildWhatsAppBudgetPlainText(order) {
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `*TOTAL PRESUPUESTO:* $${Number(order.monto_total).toFixed(2)}\n` +
     `*MONTO ABONADO:* $${Number(order.monto_abonado).toFixed(2)}\n` +
-    `⏳ *RESTO PENDIENTE:* $${Number(order.saldo_pendiente).toFixed(2)}\n` +
+    `*RESTO PENDIENTE:* $${Number(order.saldo_pendiente).toFixed(2)}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `*TÉRMINOS Y POLÍTICAS DEL TALLER:*\n` +
-    `1️⃣ El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
-    `2️⃣ La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un mes sin concretar o finalizar el trabajo.\n` +
-    `3️⃣ El trabajo solo podrá ser retirado si se ha cancelado en su totalidad.\n` +
-    `4️⃣ Existe la posibilidad de modificaciones del presupuesto debido a afectaciones adicionales encontradas en el proceso de limpieza; el cliente será informado previamente.\n` +
+    `1. El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
+    `2. La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un mes sin concretar o finalizar el trabajo.\n` +
+    `3. El trabajo solo podrá ser retirado si se ha cancelado en su totalidad (100%).\n` +
+    `4. Existe la posibilidad de modificaciones del presupuesto debido a afectaciones adicionales encontradas en el proceso de limpieza; el cliente será informado previamente.\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `_Conserve su Nro. de Troquel (#${order.codigo_troquel}) para cualquier consulta o retiro._`
+    `_Conserve su Número de Orden (#${order.codigo_troquel}) para cualquier consulta o retiro._`
   );
 }
 
@@ -7230,20 +7832,19 @@ function buildWhatsAppTermsOnlyPlainText(order) {
     `_«Aunque tu principio haya sido pequeño, tu postrer estado será muy grande.»_\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Estimado(a) *${order.nombre_cliente}* (${order.documento_cliente}), confirmamos el ingreso formal de su pieza a nuestras instalaciones para evaluación y diagnóstico:\n\n` +
-    `*Nro. de Orden:* ${order.id_orden}\n` +
-    `*CÓDIGO DE TROQUEL:* #${troquel}\n` +
+    `*Nro. de Orden:* #${troquel}\n` +
     `*Pieza / Motor:* ${motor}\n` +
     `*Fecha de Ingreso:* ${fecha}\n` +
     `*Estado Actual:* Recepción e Inspección Técnica en Proceso\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `*TÉRMINOS Y CONDICIONES OBLIGATORIAS DEL SERVICIO:*\n` +
-    `1️⃣ *Plazo de Aprobación / Retiro:* El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
-    `2️⃣ *Custodia de Piezas:* La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un (1) mes sin concretar o finalizar el trabajo.\n` +
-    `3️⃣ *Retiro del Trabajo:* El trabajo solo podrá ser retirado si se ha cancelado en su totalidad (100%).\n` +
-    `4️⃣ *Ajustes por Lavado y Limpieza:* Existe la posibilidad de modificaciones del presupuesto debido a afectaciones adicionales encontradas en el proceso de limpieza y desengrase químico; el cliente será informado previamente antes de ejecutar cualquier trabajo extra.\n` +
+    `1. *Plazo de Aprobación / Retiro:* El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
+    `2. *Custodia de Piezas:* La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un (1) mes sin concretar o finalizar el trabajo.\n` +
+    `3. *Retiro del Trabajo:* El trabajo solo podrá ser retirado si se ha cancelado en su totalidad (100%).\n` +
+    `4. *Ajustes por Lavado y Limpieza:* Existe la posibilidad de modificaciones del presupuesto debido a afectaciones adicionales encontradas en el proceso de limpieza y desengrase químico; el cliente será informado previamente antes de ejecutar cualquier trabajo extra.\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `*Próximo Paso:* Nuestro personal técnico evaluará las tolerancias de su pieza y en breve le enviaremos el presupuesto formal detallado renglón por renglón para su aprobación.\n\n` +
-    `_Conserve su Código de Troquel (#${troquel}) para cualquier consulta._\n` +
+    `_Conserve su Número de Orden (#${troquel}) para cualquier consulta._\n` +
     `¡Gracias por confiar en Rectificadora Renacer!`
   );
 }
@@ -7253,12 +7854,11 @@ function openWhatsAppTermsOnlyModal(orderId) {
   if (!order) return;
 
   const textMsg = buildWhatsAppTermsOnlyPlainText(order);
-  const cleanPhone = (order.telefono_cliente || "").replace(/\D/g, "");
-  const intlPhone = cleanPhone.startsWith("0") ? "58" + cleanPhone.slice(1) : cleanPhone;
-  const waUrl = `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}`;
+  const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
+  const waUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}` : "#";
 
   openModal({
-    title: `Términos y Comprobante de Recepción — Troquel #${order.codigo_troquel}`,
+    title: `Términos y Comprobante de Recepción — Orden #${order.codigo_troquel}`,
     icon: "fa-file-contract",
     wide: true,
     body: `
@@ -7300,12 +7900,11 @@ function openWhatsAppBudgetTextModal(orderId) {
   if (!order) return;
 
   const textMsg = buildWhatsAppBudgetPlainText(order);
-  const cleanPhone = (order.telefono_cliente || "").replace(/\D/g, "");
-  const intlPhone = cleanPhone.startsWith("0") ? "58" + cleanPhone.slice(1) : cleanPhone;
-  const waUrl = `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}`;
+  const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
+  const waUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}` : "#";
 
   openModal({
-    title: `Presupuesto Oficial por WhatsApp — Troquel #${order.codigo_troquel}`,
+    title: `Presupuesto Oficial por WhatsApp — Orden #${order.codigo_troquel}`,
     icon: "fa-comment-dots",
     wide: true,
     body: `
@@ -7738,12 +8337,12 @@ function renderAccountsReceivableScreen() {
       </div>
     </div>
 
-    <!-- Tabla agrupada estilo Excel de Jesús Andrade (Nro Troquel | Marca | Suma de Resto) -->
+    <!-- Tabla agrupada estilo Excel de Jesús Andrade (Nro Orden | Marca | Suma de Resto) -->
     <div class="data-table-wrapper">
       <table class="ar-excel-table">
         <thead>
           <tr>
-            <th>Nro (Troquel / Orden)</th>
+            <th>NRO. ORDEN</th>
             <th>Marca / Pieza</th>
             <th>Estado Actual</th>
             <th>Total Factura</th>
@@ -7914,7 +8513,7 @@ function sendClientStatementWhatsApp(clientId) {
   const lines = pendingOrders
     .map(
       (o) =>
-        `• *Troquel #${o.codigo_troquel}* (${o.datos_motor.marca} ${o.datos_motor.modelo}) — Total: $${o.monto_total} | Abonado: $${o.monto_abonado} | *Resto: $${Number(o.saldo_pendiente).toFixed(2)}*`
+        `• *Orden #${o.codigo_troquel}* (${o.datos_motor.marca} ${o.datos_motor.modelo}) — Total: $${o.monto_total} | Abonado: $${o.monto_abonado} | *Resto: $${Number(o.saldo_pendiente).toFixed(2)}*`
     )
     .join("\n");
 
@@ -7928,9 +8527,12 @@ function sendClientStatementWhatsApp(clientId) {
     `*TOTAL RESTANTE POR LIQUIDAR: $${totalDebt.toFixed(2)}*\n` +
     `Quedamos atentos a su comprobante de pago. ¡Gracias por su confianza!`;
 
-  const cleanPhone = (client.telefono || "").replace(/\D/g, "");
-  const intlPhone = cleanPhone.startsWith("0") ? "58" + cleanPhone.slice(1) : cleanPhone;
-  window.open(`https://wa.me/${intlPhone}?text=${encodeURIComponent(msg)}`, "_blank");
+  const intlPhone = formatWhatsAppPhone(client.telefono);
+  if (intlPhone) {
+    window.open(`https://wa.me/${intlPhone}?text=${encodeURIComponent(msg)}`, "_blank");
+  } else {
+    showToast("El cliente no tiene un teléfono válido registrado.", "error");
+  }
 }
 
 /* ============================================================================
@@ -8822,7 +9424,15 @@ function openOrderCrmModal(orderId) {
   const countChat = chatOnlyMessages.length;
   const countAll = allMessages.length;
 
-  const displayMessages = currentCrmFilterMode === "chat" ? chatOnlyMessages : allMessages;
+  const isTech = currentUser && currentUser.rol === "tecnico";
+  const baseMessages = isTech ? chatOnlyMessages : (currentCrmFilterMode === "chat" ? chatOnlyMessages : allMessages);
+  const displayMessages = baseMessages.filter((m) => {
+    if (!isTech) return true;
+    const txt = (m.mensaje || "").toLowerCase();
+    if (m.tipo_evento === "cobro_resto" || m.tipo_evento === "abono" || m.tipo_evento === "pago") return false;
+    if (txt.includes("presupuesto inicial:") || txt.includes("pago recibido") || txt.includes("saldo pendiente") || txt.includes("resto pendiente") || txt.includes("abono")) return false;
+    return true;
+  });
 
   const feedHtml = displayMessages.length
     ? displayMessages
@@ -8845,24 +9455,24 @@ function openOrderCrmModal(orderId) {
             <div class="crm-msg-text">${m.mensaje}</div>
             ${
               m.foto_adjunta_url
-                ? `<img src="${m.foto_adjunta_url}" class="crm-msg-photo" alt="Adjunto" onclick="openPhotoLightbox('${m.foto_adjunta_url}', 'Troquel #${order.codigo_troquel} · Bitácora')" style="cursor:zoom-in;" />`
+                ? `<img src="${m.foto_adjunta_url}" class="crm-msg-photo" alt="Adjunto" onclick="openPhotoLightbox('${m.foto_adjunta_url}', 'Orden #${order.codigo_troquel} · Bitácora')" style="cursor:zoom-in;" />`
                 : ""
             }
           </div>
         `;
         })
         .join("")
-    : `<p style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;"><i class="fas fa-comment-dots" style="font-size:24px; opacity:0.5; display:block; margin-bottom:6px;"></i>${currentCrmFilterMode === "chat" ? "No hay notas técnicas de trabajadores aún en esta orden." : "Aún no hay registros en la bitácora."}</p>`;
+    : `<p style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;"><i class="fas fa-comment-dots" style="font-size:24px; opacity:0.5; display:block; margin-bottom:6px;"></i>${currentCrmFilterMode === "chat" || isTech ? "No hay notas técnicas de trabajadores aún en esta orden." : "Aún no hay registros en la bitácora."}</p>`;
 
   openModal({
-    title: `Bitácora y Chat Interno — TROQUEL #${order.codigo_troquel}`,
+    title: `Chat Interno Técnico — ORDEN #${order.codigo_troquel}`,
     icon: "fa-comments",
     wide: true,
     body: `
       <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
         <div>
           <div style="font-weight:900; font-size:14px; color:var(--text-main);">
-            ${order.nombre_cliente} · <span style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">TROQUEL #${order.codigo_troquel}</span>
+            ${order.nombre_cliente} · <span style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">ORDEN #${order.codigo_troquel}</span>
           </div>
           <div style="font-size:11.5px; color:var(--text-muted); font-weight:600;">
             ${order.datos_motor.marca} ${order.datos_motor.modelo} (${order.datos_motor.tipo_pieza})
@@ -8873,7 +9483,8 @@ function openOrderCrmModal(orderId) {
         </div>
       </div>
 
-      <!-- Filtro Chat Técnico vs Historial Completo (Audio 5) -->
+      <!-- Filtro Chat Técnico vs Historial Completo (Solo visible para Jefes y Admin) -->
+      ${!isTech ? `
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; padding:6px 10px; background:var(--bg-subtle); border-radius:10px; border:1px solid var(--border-subtle);">
         <span style="font-size:11.5px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Vista de Conversación:</span>
         <div style="display:flex; gap:6px;">
@@ -8884,7 +9495,7 @@ function openOrderCrmModal(orderId) {
             <i class="fas fa-list-check"></i> Historial Completo (${countAll})
           </button>
         </div>
-      </div>
+      </div>` : ""}
 
       <div class="crm-chat-feed" id="crm-feed-box">${feedHtml}</div>
 
@@ -11732,13 +12343,9 @@ window.addEventListener("DOMContentLoaded", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
 
-  const savedUserId = localStorage.getItem(SESSION_KEY);
-  if (savedUserId) {
-    const found = db.usuarios.find((u) => u.id_usuario === savedUserId);
-    if (found) {
-      quickLoginAs(savedUserId);
-    }
-  }
+  // Siempre mostrar la pantalla de acceso para que cada usuario ingrese con su PIN individual
+  document.getElementById("workspace")?.classList.add("hidden");
+  document.getElementById("login-view")?.classList.remove("hidden");
 
   // Cronómetro en tiempo real (Fase 3): actualiza cada segundo los trabajos "En Proceso"
   setInterval(tickLiveSubtaskTimers, 1000);
