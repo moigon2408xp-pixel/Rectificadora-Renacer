@@ -5017,3 +5017,102 @@ body {
 
 
 
+
+/* ==========================================================================
+   ACTUALIZACIONES 2026: DISEÑO 2 JESÚS ANDRADE, ASISTENCIA QR Y PLANILLA EXCEL
+   ========================================================================== */
+
+/* Botón Modificar en cabecera de orden */
+.btn-edit-order {
+  background: linear-gradient(135deg, #f5c400 0%, #eab308 100%) !important;
+  color: #0f1638 !important;
+  font-weight: 900 !important;
+  border: 1px solid #d97706 !important;
+  transition: all 0.2s ease;
+}
+
+.btn-edit-order:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(245, 196, 0, 0.4);
+}
+
+/* Kiosco de Asistencia con QR Dinámico */
+.attendance-kiosk-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+}
+
+.attendance-qr-card {
+  background: #ffffff;
+  padding: 20px;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: inline-block;
+  margin: 16px 0;
+  border: 4px solid var(--renacer-gold, #f5c400);
+}
+
+.attendance-qr-card #kiosk-qr-canvas canvas,
+.attendance-qr-card #kiosk-qr-canvas img {
+  display: block;
+  margin: 0 auto;
+  border-radius: 8px;
+}
+
+.qr-countdown-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(2, 132, 199, 0.12);
+  color: #0284c7;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  font-size: 14px;
+  border: 1.5px solid rgba(2, 132, 199, 0.3);
+}
+
+.qr-countdown-badge.warning {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* Escáner de Técnico con Cámara */
+.attendance-scanner-box {
+  width: 100%;
+  max-width: 440px;
+  margin: 0 auto;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 3px solid var(--renacer-gold, #f5c400);
+  background: #000;
+}
+
+/* Estilos de Impresión de la Hoja de Servicio (Planilla / Formato Tabla) */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #print-service-sheet-root, #print-service-sheet-root * {
+    visibility: visible;
+  }
+  #print-service-sheet-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
