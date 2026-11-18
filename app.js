@@ -10694,6 +10694,60 @@ function deleteWorker(userId) {
 
 /* ---------- DÍAS ACTIVOS Y PROYECTOS TRABAJADOS (SIN HORARIO FIJO DE ENTRADA/SALIDA) ---------- */
 function renderAttendanceScreen() {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const activeWorkers = (db.usuarios || []).filter(
+    (u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "admin" || u.rol === "jefe_taller")
+  );
+
+  // Tarjetas de Presencia Hoy para el Jefe de Taller (Jesús Andrade)
+  const presenceCardsHtml = activeWorkers
+    .map((w) => {
+      const pres = getWorkerCurrentPresence(w.id_usuario);
+      let borderClr = "var(--border-subtle)";
+      let badgeCls = "state-badge--recep";
+      let dotIcon = "fa-circle";
+      let badgeBg = "rgba(148, 163, 184, 0.15)";
+      let badgeTxtClr = "#94a3b8";
+
+      if (pres.status === "en_taller") {
+        borderClr = "#22c55e";
+        badgeBg = "rgba(34, 197, 94, 0.15)";
+        badgeTxtClr = "#22c55e";
+        dotIcon = "fa-check-circle";
+      } else if (pres.status === "en_almuerzo") {
+        borderClr = "#f59e0b";
+        badgeBg = "rgba(245, 158, 11, 0.15)";
+        badgeTxtClr = "#f59e0b";
+        dotIcon = "fa-utensils";
+      } else if (pres.status === "salida_final") {
+        borderClr = "#64748b";
+        badgeBg = "rgba(100, 116, 139, 0.15)";
+        badgeTxtClr = "#cbd5e1";
+        dotIcon = "fa-flag-checkered";
+      }
+
+      return `
+        <div style="background:var(--bg-card); border:1.5px solid ${borderClr}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; justify-content:space-between; min-width:210px; flex:1;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+            <div>
+              <strong style="font-size:13.5px; color:var(--text-main);">${w.nombre}</strong>
+              <div style="font-size:11px; color:var(--text-muted);">${w.rol_label || w.rol}</div>
+            </div>
+            <span style="font-size:11px; font-weight:800; background:${badgeBg}; color:${badgeTxtClr}; padding:3px 8px; border-radius:6px; display:inline-flex; align-items:center; gap:4px;">
+              <i class="fas ${dotIcon}"></i> ${pres.label}
+            </span>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); border-top:1px solid var(--border-subtle); padding-top:6px; display:flex; justify-content:space-between; align-items:center;">
+            <span>Estatus Hoy:</span>
+            <button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-weight:800; font-size:11px;" onclick="quickAttendanceByProfile('${w.id_usuario}')">
+              Cambiar / Marcar
+            </button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
   const rowsHtml = db.asistencias.length
     ? db.asistencias
         .map((a) => {
@@ -10710,18 +10764,33 @@ function renderAttendanceScreen() {
             )
           ).join(", ");
 
+          const isLate = a.estado === "Tardanza" || (a.observacion && a.observacion.includes("Tardanza"));
+          const statusBadge = isLate
+            ? `<span style="font-size:11px; font-weight:800; background:rgba(239, 68, 68, 0.14); color:#ef4444; padding:3px 8px; border-radius:6px;"><i class="fas fa-exclamation-triangle"></i> Tardanza</span>`
+            : `<span style="font-size:11px; font-weight:800; background:rgba(34, 197, 94, 0.14); color:#22c55e; padding:3px 8px; border-radius:6px;"><i class="fas fa-check"></i> Puntual</span>`;
+
+          const lunchInfo = (a.hora_salida_almuerzo || a.hora_regreso_almuerzo)
+            ? `${a.hora_salida_almuerzo || '--'} / ${a.hora_regreso_almuerzo || '--'}`
+            : `<span style="color:var(--text-muted);">-</span>`;
+
           return `
             <tr>
               <td><strong><i class="far fa-calendar-alt"></i> ${formatDateHuman(a.fecha, false)}</strong></td>
               <td><strong>${a.nombre}</strong></td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:800; color:var(--text-main);">
+                ${a.hora_entrada || a.hora_registro || "--"}
+              </td>
+              <td style="font-size:11.5px; font-family:'JetBrains Mono',monospace;">
+                ${lunchInfo}
+              </td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:800; color:#38bdf8;">
+                ${a.hora_salida || "<span style='color:var(--text-muted);'>En jornada</span>"}
+              </td>
+              <td>${statusBadge}</td>
               <td>
-                <div style="font-weight:800; color:var(--text-main);">${troqueles || "Actividad general en planta"}</div>
-                <div style="font-size:11.5px; color:var(--text-muted);">${a.observacion || "Trabajo por destajo en piezas asignadas"}</div>
+                <div style="font-weight:700; color:var(--text-main); font-size:11.5px;">${troqueles || "Planta General"}</div>
+                <div style="font-size:10.5px; color:var(--text-muted);">${a.observacion || "Marcación presencial"}</div>
               </td>
-              <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">
-                ${totalWorkerMins > 0 ? formatMinutes(totalWorkerMins) : "Por destajo"}
-              </td>
-              <td><span class="state-badge state-badge--done">${(a.estado || "ACTIVO").toUpperCase()}</span></td>
               <td style="text-align:right;">
                 <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteAttendanceRecord('${a.id_asist}')" title="Eliminar registro">
                   <i class="fas fa-trash-alt"></i>
@@ -10731,38 +10800,55 @@ function renderAttendanceScreen() {
           `;
         })
         .join("")
-    : `<tr><td colspan="6" style="text-align:center; padding:26px; color:var(--text-muted);">No hay registros de días activos. Se registran automáticamente cuando un técnico inicia un trabajo o usando el botón superior.</td></tr>`;
+    : `<tr><td colspan="8" style="text-align:center; padding:26px; color:var(--text-muted);">No hay registros de asistencia guardados aún.</td></tr>`;
 
   return `
-    <div style="background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <!-- ENCABEZADO Y ACCIONES PRINCIPALES DE ASISTENCIA -->
+    <div style="background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
-        <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
-          MODALIDAD DE TALLER POR DESTAJO · SIN HORARIO FIJO DE ENTRADA/SALIDA
+        <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase; letter-spacing:0.5px;">
+          <i class="fas fa-shield-alt"></i> CONTROL DE ASISTENCIA Y PRESENCIA FÍSICA · RECTIFICADORA RENACER
         </span>
-        <h2 style="font-size:20px; font-weight:900;"><i class="fas fa-calendar-alt" style="color:var(--renacer-gold);"></i> Días Activos, Fechas de Trabajo y Proyectos (#Troquel) por Trabajador</h2>
-        <p style="font-size:13px; color:var(--text-muted);">
-          Como los técnicos cobran por trabajo realizado y no por hora de llegada, aquí se registran qué fechas estuvieron activos en el taller, en qué piezas (#Troquel) trabajaron y cuánto tiempo invirtieron.
+        <h2 style="font-size:20px; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> Monitoreo de Horarios, Entrada, Almuerzo y Salida</h2>
+        <p style="font-size:12.5px; color:var(--text-muted); margin:0;">
+          Límite de entrada puntual: <strong>8:15 AM</strong>. Validación física mediante Kiosco con QR Dinámico (45s) o selección de perfil técnico con PIN.
         </p>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--ghost" onclick="navigateTab('commissions')">
-          <i class="fas fa-arrow-left"></i> Volver a Personal y Fichas
+        <button type="button" class="btn btn--gold" onclick="openAttendanceKioskModal()">
+          <i class="fas fa-qrcode"></i> 📱 Abrir Kiosco QR (Recepción)
         </button>
-        <button type="button" class="btn btn--gold" onclick="openAddActiveDayModal()">
-          <i class="fas fa-calendar-plus"></i> + Registrar Día Activo / Proyecto
+        <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
+          <i class="fas fa-camera"></i> 📷 Marcar Asistencia
+        </button>
+        <button type="button" class="btn btn--ghost" onclick="openAddActiveDayModal()">
+          <i class="fas fa-calendar-plus"></i> + Registro Manual
         </button>
       </div>
     </div>
 
+    <!-- TABLERO EN VIVO DE PRESENCIA FÍSICA HOY -->
+    <div style="margin-bottom:18px;">
+      <div style="font-size:12px; font-weight:800; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; display:flex; align-items:center; gap:6px;">
+        <i class="fas fa-users-viewfinder" style="color:#38bdf8;"></i> Presencia Física en Taller Hoy (${formatDateHuman(todayIso, false)}):
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        ${presenceCardsHtml}
+      </div>
+    </div>
+
+    <!-- TABLA DETALLADA DE HISTORIAL DE ASISTENCIA -->
     <div class="data-table-wrapper">
       <table class="renacer-table">
         <thead>
           <tr>
-            <th>Fecha Activa</th>
+            <th>Fecha</th>
             <th>Trabajador</th>
-            <th>Proyectos / Troqueles Trabajados y Detalle</th>
-            <th>Tiempo Acumulado en Piezas</th>
-            <th>Estado</th>
+            <th>Hora Entrada</th>
+            <th>Almuerzo (Salida / Regreso)</th>
+            <th>Hora Salida</th>
+            <th>Puntualidad</th>
+            <th>Troqueles / Detalle</th>
             <th style="text-align:right;">Acción</th>
           </tr>
         </thead>
@@ -10773,6 +10859,7 @@ function renderAttendanceScreen() {
     </div>
   `;
 }
+
 
 function openAddActiveDayModal() {
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -12855,45 +12942,116 @@ function cancelOrArchiveFromEditModal(orderId) {
 }
 
 /* ============================================================================
-   CONTROL DE ASISTENCIA PRESENCIAL POR QR DINÁMICO (ANTI-FRAUDE 45S)
+   CONTROL DE ASISTENCIA PRESENCIAL POR QR DINÁMICO Y POR PERFIL (JESÚS ANDRADE)
+   Entrada, Salida a Almorzar, Regreso y Salida de Jornada con Anti-Fraude
    ============================================================================ */
 let kioskTimerInterval = null;
 let html5QrCodeScannerInstance = null;
+
+function getTodayAttendanceList() {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  return (db.asistencias || []).filter((a) => a.fecha === todayIso);
+}
+
+function getWorkerCurrentPresence(userId) {
+  const todayRecords = getTodayAttendanceList();
+  const rec = todayRecords.find((a) => a.usuario_id === userId);
+  if (!rec) return { status: "no_ingreso", label: "No ha ingresado hoy", cls: "text-muted", icon: "fa-circle" };
+  if (rec.hora_salida) return { status: "salida_final", label: `Jornada Finalizada (${rec.hora_salida})`, cls: "text-secondary", icon: "fa-flag-checkered", rec };
+  if (rec.hora_salida_almuerzo && !rec.hora_regreso_almuerzo) return { status: "en_almuerzo", label: `En Almuerzo (${rec.hora_salida_almuerzo})`, cls: "text-warning", icon: "fa-utensils", rec };
+  return { status: "en_taller", label: `En Taller (${rec.hora_entrada})`, cls: "text-success", icon: "fa-check-circle", rec };
+}
 
 function openAttendanceKioskModal() {
   if (kioskTimerInterval) clearInterval(kioskTimerInterval);
 
   let secondsLeft = 45;
 
+  const activeWorkers = (db.usuarios || []).filter(
+    (u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "admin" || u.rol === "jefe_taller")
+  );
+
+  const workersProfilesHtml = activeWorkers
+    .map((w) => {
+      const pres = getWorkerCurrentPresence(w.id_usuario);
+      let badgeColor = "#94a3b8";
+      let badgeText = "Sin marcar";
+      let dotIcon = "fa-circle";
+      if (pres.status === "en_taller") {
+        badgeColor = "#22c55e";
+        badgeText = "En Taller";
+        dotIcon = "fa-check-circle";
+      } else if (pres.status === "en_almuerzo") {
+        badgeColor = "#f59e0b";
+        badgeText = "Almuerzo";
+        dotIcon = "fa-utensils";
+      } else if (pres.status === "salida_final") {
+        badgeColor = "#64748b";
+        badgeText = "Salió";
+        dotIcon = "fa-flag-checkered";
+      }
+
+      return `
+        <button type="button" class="kiosk-worker-card-btn" onclick="quickAttendanceByProfile('${w.id_usuario}')" title="Marcar entrada/salida para ${w.nombre}">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong style="font-size:12.5px; color:var(--text-main);">${w.nombre}</strong>
+            <span style="font-size:10.5px; font-weight:800; color:${badgeColor}; display:flex; align-items:center; gap:4px;">
+              <i class="fas ${dotIcon}"></i> ${badgeText}
+            </span>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            ${w.rol_label || w.rol} · <span style="color:var(--renacer-gold); font-weight:700;">Tocar para marcar</span>
+          </div>
+        </button>
+      `;
+    })
+    .join("");
+
   openModal({
-    title: "Kiosco de Asistencia Presencial (QR Dinámico Anti-Fraude)",
+    title: "Kiosco de Asistencia Presencial (QR Dinámico y Perfil)",
     icon: "fa-qrcode",
-    wide: false,
+    wide: true,
     body: `
-      <div class="attendance-kiosk-wrapper">
-        <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
-          <i class="fas fa-shield-alt" style="color:var(--renacer-gold);"></i> 
-          <strong>Verificación de Presencia Física en Taller</strong>
-        </div>
-        <p style="font-size:12px; color:var(--text-main); margin-bottom:12px;">
-          Los técnicos deben escanear este código en vivo desde la app en su teléfono móvil. Se regenera automáticamente cada 45 segundos para impedir reenvíos de foto por WhatsApp desde casa.
-        </p>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:18px; align-items:start;" class="kiosk-grid-responsive">
+        <!-- COLUMNA IZQUIERDA: QR DINÁMICO ANTI-FRAUDE 45s -->
+        <div class="attendance-kiosk-wrapper" style="background:var(--bg-card); border:1.5px solid var(--border-subtle); border-radius:16px; padding:18px;">
+          <div style="font-size:12.5px; color:var(--renacer-gold); font-weight:900; text-transform:uppercase; margin-bottom:4px;">
+            <i class="fas fa-camera"></i> Escanear con Teléfono
+          </div>
+          <p style="font-size:11.5px; color:var(--text-muted); margin-bottom:8px; line-height:1.4;">
+            El código cambia cada <strong>45 segundos</strong> para certificar presencia física en el taller (evita reenvíos por WhatsApp).
+          </p>
 
-        <div class="attendance-qr-card">
-          <div id="kiosk-qr-canvas"></div>
-        </div>
+          <div class="attendance-qr-card" style="margin:8px 0;">
+            <div id="kiosk-qr-canvas"></div>
+          </div>
 
-        <div id="kiosk-timer-display" class="qr-countdown-badge">
-          <i class="fas fa-stopwatch"></i> Actualizando en: <strong id="kiosk-secs-num">45</strong>s
-        </div>
+          <div id="kiosk-timer-display" class="qr-countdown-badge">
+            <i class="fas fa-stopwatch"></i> Actualizando en: <strong id="kiosk-secs-num">45</strong>s
+          </div>
 
-        <div style="margin-top:18px; display:flex; gap:8px; width:100%; justify-content:center;">
-          <button type="button" class="btn btn--ghost btn--sm" onclick="promptManualPinAttendance()" style="font-size:12px;">
-            <i class="fas fa-keyboard"></i> Registrar PIN Manual
+          <button type="button" class="btn btn--ghost btn--xs" onclick="generateNewKioskQr()" style="margin-top:10px; font-size:11px;">
+            <i class="fas fa-sync-alt"></i> Forzar nuevo código
           </button>
-          <button type="button" class="btn btn--primary btn--sm" onclick="generateNewKioskQr()" style="font-size:12px;">
-            <i class="fas fa-sync-alt"></i> Regenerar Ahora
-          </button>
+        </div>
+
+        <!-- COLUMNA DERECHA: REGISTRO DIRECTO POR PERFIL (SI NO TIENEN TELÉFONO) -->
+        <div style="background:var(--bg-card); border:1.5px solid var(--border-subtle); border-radius:16px; padding:18px;">
+          <div style="font-size:12.5px; color:#38bdf8; font-weight:900; text-transform:uppercase; margin-bottom:4px;">
+            <i class="fas fa-user-circle"></i> Marcar por Perfil (Sin Teléfono)
+          </div>
+          <p style="font-size:11.5px; color:var(--text-muted); margin-bottom:12px;">
+            Si se dañó el teléfono o no lo tienen a mano, el técnico toca su perfil e ingresa su PIN numérico.
+          </p>
+
+          <div style="display:grid; gap:8px;">
+            ${workersProfilesHtml}
+          </div>
+
+          <div style="margin-top:14px; padding:10px; background:rgba(245,196,0,0.06); border:1px dashed var(--renacer-gold); border-radius:10px; font-size:11px; color:var(--text-main);">
+            <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> 
+            <strong>Horario oficial:</strong> Entrada puntual hasta las <strong>8:15 AM</strong>. Después de esa hora se marca <strong>Tardanza</strong> con deducción en nómina.
+          </div>
         </div>
       </div>
     `
@@ -12910,14 +13068,14 @@ function openAttendanceKioskModal() {
     if (typeof QRCode !== "undefined") {
       new QRCode(canvasBox, {
         text: token,
-        width: 240,
-        height: 240,
+        width: 210,
+        height: 210,
         colorDark: "#0f1638",
         colorLight: "#ffffff",
         correctLevel: QRCode.CorrectLevel.M
       });
     } else {
-      canvasBox.innerHTML = `<div style="padding:40px; font-weight:800; color:#ef4444;">Error cargando librería QRCode</div>`;
+      canvasBox.innerHTML = `<div style="padding:30px; font-weight:800; color:#ef4444;">Error cargando QRCode</div>`;
     }
   };
 
@@ -12938,6 +13096,42 @@ function openAttendanceKioskModal() {
   }, 1000);
 }
 
+function quickAttendanceByProfile(userId) {
+  const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
+  if (!user) return;
+
+  Swal.fire({
+    title: `Marcar Asistencia: ${user.nombre}`,
+    text: "Ingresa tu PIN numérico personal para validar:",
+    input: "password",
+    inputAttributes: {
+      inputmode: "numeric",
+      maxlength: 6,
+      autocapitalize: "off",
+      autocorrect: "off"
+    },
+    showCancelButton: true,
+    confirmButtonText: "Continuar",
+    confirmButtonColor: "#f5c400",
+    cancelButtonText: "Cancelar",
+    preConfirm: (pin) => {
+      if (!pin) {
+        Swal.showValidationMessage("Debes ingresar tu PIN.");
+        return false;
+      }
+      if (String(user.pin || "000000").trim() !== pin.trim()) {
+        Swal.showValidationMessage("PIN incorrecto.");
+        return false;
+      }
+      return true;
+    }
+  }).then((res) => {
+    if (res.isConfirmed) {
+      handleAttendanceActionForUser(user, "perfil_kiosco");
+    }
+  });
+}
+
 function openTechnicianQrScanModal() {
   if (html5QrCodeScannerInstance) {
     try {
@@ -12952,7 +13146,7 @@ function openTechnicianQrScanModal() {
     body: `
       <div style="text-align:center; padding:12px;">
         <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
-          Apunta la cámara de tu teléfono a la pantalla de recepción para validar tu asistencia presencial de hoy.
+          Apunta la cámara de tu teléfono a la pantalla de recepción para certificar tu presencia física en el taller.
         </p>
 
         <div id="tech-qr-reader" class="attendance-scanner-box"></div>
@@ -12963,7 +13157,7 @@ function openTechnicianQrScanModal() {
 
         <div style="margin-top:14px;">
           <button type="button" class="btn btn--ghost btn--sm" onclick="promptManualPinAttendance()">
-            ¿Problemas con la cámara? Registrar con PIN
+            ¿Problemas con la cámara? Registrar con PIN / Perfil
           </button>
         </div>
       </div>
@@ -13008,7 +13202,7 @@ function handleScannedAttendanceToken(token) {
   const timestamp = Number(parts[1]) || 0;
   const ageMs = Date.now() - timestamp;
 
-  // Verificación anti-fraude: menos de 90 segundos
+  // Verificación anti-fraude: código emitido hace menos de 90 segundos
   if (ageMs > 90000) {
     Swal.fire({
       icon: "error",
@@ -13022,11 +13216,14 @@ function handleScannedAttendanceToken(token) {
     html5QrCodeScannerInstance.stop().catch(() => {});
   }
 
-  recordAttendanceSuccess("qr_dinamico_presencial");
+  closeModal();
+
+  const user = currentUser || db.usuarios.find((u) => u.rol === "tecnico") || db.usuarios[0];
+  handleAttendanceActionForUser(user, "qr_dinamico_presencial");
 }
 
 function promptManualPinAttendance() {
-  const users = (db.usuarios || []).filter((u) => u.activo && (u.rol === "tecnico" || u.rol === "admin" || u.rol === "jefe_taller"));
+  const users = (db.usuarios || []).filter((u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "admin" || u.rol === "jefe_taller"));
   const optionsHtml = users.map((u) => `<option value="${u.id_usuario}">${u.nombre} (${u.rol_label || u.rol})</option>`).join("");
 
   Swal.fire({
@@ -13046,7 +13243,7 @@ function promptManualPinAttendance() {
       </div>
     `,
     showCancelButton: true,
-    confirmButtonText: "Registrar Asistencia",
+    confirmButtonText: "Continuar",
     confirmButtonColor: "#f5c400",
     cancelButtonText: "Cancelar",
     preConfirm: () => {
@@ -13065,56 +13262,124 @@ function promptManualPinAttendance() {
     }
   }).then((res) => {
     if (res.isConfirmed && res.value) {
-      recordAttendanceSuccess("pin_manual_kiosco", res.value);
+      handleAttendanceActionForUser(res.value, "pin_manual_kiosco");
     }
   });
 }
 
-function recordAttendanceSuccess(method, targetUser = null) {
-  const user = targetUser || currentUser || db.usuarios.find((u) => u.rol === "tecnico") || db.usuarios[0];
+function handleAttendanceActionForUser(user, method) {
   const now = new Date();
   const todayIso = now.toISOString().slice(0, 10);
-
-  // Verificación de puntualidad (después de 8:15 AM se considera tardanza)
-  const isLate = now.getHours() > 8 || (now.getHours() === 8 && now.getMinutes() > 15);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  const record = {
-    id_asist: "ASI-" + Date.now(),
-    fecha: todayIso,
-    usuario_id: user.id_usuario,
-    nombre: user.nombre,
-    hora_registro: timeStr,
-    hora_entrada: timeStr,
-    estado: isLate ? "Tardanza" : "Puntual",
-    metodo: method,
-    observacion: isLate
-      ? "Llegada posterior a las 8:15 AM (Tardanza registrada - Deducción en nómina semanal)"
-      : "Asistencia presencial verificada puntual en taller",
-    dispositivo: navigator.userAgent.slice(0, 50)
-  };
+  let existing = (db.asistencias || []).find((a) => a.fecha === todayIso && a.usuario_id === user.id_usuario);
 
-  db.asistencias.unshift(record);
-  saveDatabase();
-  closeModal();
+  // SI NO TIENE ENTRADA HOY: REGISTRO DE ENTRADA
+  if (!existing) {
+    const isLate = now.getHours() > 8 || (now.getHours() === 8 && now.getMinutes() > 15);
+    const newRecord = {
+      id_asist: "ASI-" + Date.now(),
+      fecha: todayIso,
+      usuario_id: user.id_usuario,
+      nombre: user.nombre,
+      hora_registro: timeStr,
+      hora_entrada: timeStr,
+      hora_salida_almuerzo: "",
+      hora_regreso_almuerzo: "",
+      hora_salida: "",
+      estado_hoy: "En Taller",
+      estado: isLate ? "Tardanza" : "Puntual",
+      metodo: method,
+      observacion: isLate
+        ? "Llegada después de las 8:15 AM (Tardanza registrada - Deducción aplicable)"
+        : "Asistencia presencial verificada puntual en taller",
+      dispositivo: navigator.userAgent.slice(0, 50)
+    };
+
+    db.asistencias.unshift(newRecord);
+    saveDatabase();
+    closeModal();
+
+    Swal.fire({
+      icon: isLate ? "warning" : "success",
+      title: isLate ? "¡Entrada con Tardanza Registrada!" : "¡Entrada Puntual Registrada!",
+      html: `
+        <div style="font-size:14px; line-height:1.6;">
+          <p><strong>${user.nombre}</strong></p>
+          <p>Hora de Entrada: <strong>${timeStr}</strong></p>
+          <p>Estatus: <strong style="color:${isLate ? '#f59e0b' : '#22c55e'};">${isLate ? 'Tardanza (deducción en nómina)' : 'Puntual (antes de 8:15 AM)'}</strong></p>
+        </div>
+      `,
+      confirmButtonColor: "#f5c400"
+    });
+
+    renderApp();
+    return;
+  }
+
+  // SI YA TIENE ENTRADA: OFRECER ACCIONES (ALMUERZO / SALIDA FINAL)
+  let statusText = `Entrada registrada a las ${existing.hora_entrada}`;
+  if (existing.hora_salida_almuerzo && !existing.hora_regreso_almuerzo) {
+    statusText += ` · Salió a almorzar a las ${existing.hora_salida_almuerzo}`;
+  } else if (existing.hora_regreso_almuerzo) {
+    statusText += ` · Regresó de almorzar a las ${existing.hora_regreso_almuerzo}`;
+  }
+  if (existing.hora_salida) {
+    statusText += ` · Salida final a las ${existing.hora_salida}`;
+  }
 
   Swal.fire({
-    icon: isLate ? "warning" : "success",
-    title: isLate ? "¡Asistencia Registrada con Tardanza!" : "¡Asistencia Registrada Puntual!",
+    title: `Control de Horario: ${user.nombre}`,
     html: `
-      <div style="font-size:14px; line-height:1.6;">
-        <p><strong>${user.nombre}</strong></p>
-        <p>Hora: <strong>${timeStr}</strong> · Estado: <strong style="color:${isLate ? '#f59e0b' : '#22c55e'};">${isLate ? 'Tardanza' : 'Puntual'}</strong></p>
-        <p style="font-size:12px; color:#94a3b8;">${record.observacion}</p>
+      <div style="font-size:13px; text-align:left; margin-bottom:12px;">
+        <div style="padding:8px 12px; background:var(--bg-subtle); border-radius:8px; margin-bottom:12px;">
+          <i class="fas fa-info-circle"></i> <strong>Estatus hoy:</strong><br>${statusText}
+        </div>
+        <p style="font-weight:700;">Selecciona la acción a marcar en este momento (${timeStr}):</p>
       </div>
     `,
-    confirmButtonColor: "#f5c400"
+    showDenyButton: true,
+    showCancelButton: true,
+    confirmButtonText: "🍔 Salida a Almorzar",
+    confirmButtonColor: "#f59e0b",
+    denyButtonText: "🏁 Salida de Jornada",
+    denyButtonColor: "#0284c7",
+    cancelButtonText: "Cerrar",
+    footer: `<button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-weight:800; font-size:12px;" onclick="markLunchReturnPrompt('${existing.id_asist}')">¿Regresando de almorzar? Toca aquí</button>`
+  }).then((res) => {
+    if (res.isConfirmed) {
+      existing.hora_salida_almuerzo = timeStr;
+      existing.estado_hoy = "En Almuerzo";
+      saveDatabase();
+      closeModal();
+      showToast(`Salida a almorzar registrada para ${user.nombre} (${timeStr}).`);
+      renderApp();
+    } else if (res.isDenied) {
+      existing.hora_salida = timeStr;
+      existing.estado_hoy = "Jornada Finalizada";
+      saveDatabase();
+      closeModal();
+      showToast(`Salida final de jornada registrada para ${user.nombre} (${timeStr}).`);
+      renderApp();
+    }
   });
-
-  if (currentTab === "attendance" || currentTab === "commissions_hr") {
-    renderScreen();
-  }
 }
+
+function markLunchReturnPrompt(asistId) {
+  const rec = (db.asistencias || []).find((a) => a.id_asist === asistId);
+  if (!rec) return;
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  rec.hora_regreso_almuerzo = timeStr;
+  rec.estado_hoy = "En Taller";
+  saveDatabase();
+  Swal.close();
+  closeModal();
+  showToast(`Regreso de almuerzo registrado para ${rec.nombre} (${timeStr}).`);
+  renderApp();
+}
+
+
 
 /* ============================================================================
    PLANILLA / HOJA DE SERVICIO EN FORMATO TABLA / EXCEL (RECTIFICADORA RENACER)
