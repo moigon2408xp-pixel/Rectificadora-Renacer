@@ -13,7 +13,7 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=20261118_1530" />
+  <link rel="stylesheet" href="./styles.css?v=20261118_v25" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -96,43 +96,13 @@
             <i class="fas fa-sign-in-alt"></i> Entrar al Sistema Renacer
           </button>
 
-          <!-- ACCESO RÁPIDO POR PERFIL (DISEÑO OFICIAL RENACER) -->
-          <div class="quick-profiles-box">
-            <div class="quick-profiles-title">
-              <i class="fas fa-users"></i> ACCESO RÁPIDO POR PERFIL:
-            </div>
-            <div class="quick-profiles-grid">
-              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Moises Gonzalez', 'USR-MOISES')">
-                <i class="fas fa-user-shield" style="color:var(--renacer-gold);"></i>
-                <span style="font-weight:800; font-size:12.5px;">Moises (Admin)</span>
-              </button>
-              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Jesus Andrade', 'USR-JESUS')">
-                <i class="fas fa-user-tie" style="color:#38bdf8;"></i>
-                <span style="font-weight:800; font-size:12.5px;">Jesús (Jefe)</span>
-              </button>
-              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Recepcion Renacer', 'USR-RECEPCION')">
-                <i class="fas fa-headset" style="color:#4ade80;"></i>
-                <span style="font-weight:800; font-size:12.5px;">Recepción</span>
-              </button>
-              <button type="button" class="profile-quick-card" onclick="quickSelectUser('Havell Bracho', 'USR-HAVELL')">
-                <i class="fas fa-wrench" style="color:#fbbf24;"></i>
-                <span style="font-weight:800; font-size:12.5px;">Havell (Técnico)</span>
-              </button>
-            </div>
-          </div>
-
-          <button type="button" class="btn btn--ghost" style="width:100%; border-color:rgba(245,223,0,0.4); color:#fde047; margin-top:8px; font-size:13px; font-weight:800; background:rgba(245,223,0,0.06);" onclick="handleBiometricLogin()">
+          <button type="button" class="btn btn--ghost" style="width:100%; border-color:rgba(245,223,0,0.4); color:#fde047; margin-top:12px; font-size:13px; font-weight:800; background:rgba(245,223,0,0.06);" onclick="handleBiometricLogin()">
             <i class="fas fa-fingerprint"></i> Ingresar con Huella Dactilar
           </button>
 
-          <div style="display:flex; gap:8px; margin-top:6px;">
-            <button type="button" class="btn btn--ghost" style="flex:1; background:rgba(255,255,255,0.06); color:#fff; border-color:rgba(255,255,255,0.18); font-size:12px;" onclick="triggerPwaInstall()">
-              <i class="fas fa-download"></i> Instalar App (PC / Teléfono)
-            </button>
-            <button type="button" class="btn btn--ghost" style="background:rgba(255,255,255,0.06); color:#fde047; border-color:rgba(245,223,0,0.3); font-size:12px;" onclick="resetDemoDatabase()" title="Restaurar datos de ejemplo">
-              <i class="fas fa-redo"></i> Demo
-            </button>
-          </div>
+          <button type="button" class="btn btn--ghost" style="width:100%; background:rgba(255,255,255,0.06); color:#fff; border-color:rgba(255,255,255,0.18); font-size:12px; margin-top:8px;" onclick="triggerPwaInstall()">
+            <i class="fas fa-download"></i> Instalar App Renacer (PC / Teléfono)
+          </button>
         </form>
       </div>
     </section>
@@ -286,7 +256,7 @@
 
   </div>
 
-  <script src="./app.js?v=20261118_1530"></script>
+  <script src="./app.js?v=20261118_v25"></script>
 </body>
 </html>
 
