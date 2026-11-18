@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.14.v18";
+const CURRENT_APP_VERSION = "2026.11.18.v22";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -395,567 +395,300 @@ function getInitialDatabase() {
     ],
     clientes: [
       {
-        id_cliente: "CLI-001",
-        documento_identidad: "V-14589320",
-        nombre_completo: "José Gregorio Morales",
-        telefono: "0414-6219988",
-        direccion: "Sector Sierra Maestra, Calle 14, San Francisco",
+        id_cliente: "CLI-JESUS",
+        documento_identidad: "V-27421339",
+        nombre_completo: "Jesús Andrade",
+        telefono: "0424-6999635",
+        direccion: "Casco Central, Maracaibo",
         tipo_cliente: "Particular"
       },
       {
-        id_cliente: "CLI-002",
-        documento_identidad: "V-12884910",
-        nombre_completo: "Luis Mecánico (Taller Aliado)",
-        telefono: "0424-6884411",
-        direccion: "Av. Principal La Limpia, Local 42, Maracaibo",
-        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
-      },
-      {
-        id_cliente: "CLI-003",
-        documento_identidad: "V-18920411",
-        nombre_completo: "Gonzalo González",
-        telefono: "0412-7553310",
-        direccion: "Urb. San Miguel, Etapa 2, Maracaibo",
-        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
-      },
-      {
-        id_cliente: "CLI-004",
-        documento_identidad: "V-11405982",
-        nombre_completo: "Kerales (Mecánico Aliado)",
-        telefono: "0414-6901234",
-        direccion: "Circunvalación 2, al lado de Repuestos El Motor",
-        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
-      },
-      {
-        id_cliente: "CLI-005",
-        documento_identidad: "V-16773210",
-        nombre_completo: "Jhon Colinas",
-        telefono: "0424-6198877",
-        direccion: "Zona Industrial Sur, Maracaibo",
+        id_cliente: "CLI-JOSEMANUE",
+        documento_identidad: "V-26559977",
+        nombre_completo: "Jose manue",
+        telefono: "0412-0696868",
+        direccion: "su casa",
         tipo_cliente: "Particular"
+      },
+      {
+        id_cliente: "CLI-PRIMOS",
+        documento_identidad: "J-40998877",
+        nombre_completo: "Taller Mecánico Los Primos",
+        telefono: "0414-6112233",
+        direccion: "Av. Principal Los Haticos, Maracaibo",
+        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
+      },
+      {
+        id_cliente: "CLI-CATIRE",
+        documento_identidad: "J-30887766",
+        nombre_completo: "Multiservicios El Catire",
+        telefono: "0424-6554433",
+        direccion: "Av. La Limpia frente a Curva de Molina",
+        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
+      },
+      {
+        id_cliente: "CLI-GONZALEZ",
+        documento_identidad: "V-14556677",
+        nombre_completo: "Taller Hermanos González",
+        telefono: "0412-6889900",
+        direccion: "Urb. San Miguel, Calle 3",
+        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
       }
     ],
     ordenes: [
-      // Estado 1: Diagnóstico / Presupuesto
+      // 1. TROQUEL #1548: CHEVROLET z24 (Jesús Andrade) - Entregada y Liquidada 100% con Garantía 1 Año
       {
-        id_orden: "ORD-1003",
-        cliente_id: "CLI-005",
-        documento_cliente: "V-16773210",
-        nombre_cliente: "Jhon Colinas",
-        telefono_cliente: "0424-6198877",
-        codigo_troquel: "1513",
+        id_orden: "ORD-1548",
+        cliente_id: "CLI-JESUS",
+        documento_cliente: "V-27421339",
+        nombre_cliente: "Jesús Andrade",
+        telefono_cliente: "0424-6999635",
+        direccion_cliente: "Casco Central, Maracaibo",
+        tipo_cliente: "particular",
+        codigo_troquel: "1548",
         datos_motor: {
           tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "Toyota",
-          modelo: "Corolla 1.8",
-          serial: "1ZZ-4412",
-          observaciones: "Recién ingresada en recepción para diagnóstico y cepillado."
+          marca: "CHEVROLET",
+          modelo: "z24",
+          serial: "S/N",
+          observaciones: "Servicio completo de rectificación de cámara CHEVROLET z24."
         },
-        galeria_fotos_pieza: [DEMO_PHOTOS.bloqueFiesta],
-        galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosFiesta],
+        galeria_fotos_pieza: [],
+        galeria_fotos_repuestos: [],
+        estado_actual: "entregado",
+        subestado_ejecucion: "completado",
+        tipo_condicion_pago: "pago_total",
+        monto_total: 40.0,
+        monto_abonado: 40.0,
+        saldo_pendiente: 0.0,
+        fecha_ingreso: "2026-11-18T09:15:00.000Z",
+        fecha_entrega: "2026-11-18T11:30:00.000Z",
+        garantia_activa: true,
+        garantia_dias: 365,
+        fecha_garantia_hasta: "2027-11-18",
+        repuestos_comprados_taller: false,
+        items_repuestos: [],
+        historial_abonos: [
+          {
+            id_abono: "AB-1548-1",
+            fecha: "2026-11-18",
+            monto: 40.0,
+            metodo: "efectivo_usd",
+            referencia: "PAGO-EFECTIVO-CAJA",
+            comprobante_foto: "",
+            registrado_por: "Jesús Andrade"
+          }
+        ]
+      },
+      // 2. TROQUEL #1576: TOYOTA runner (Jose manue) - Estado 1: Recepción / Diagnóstico
+      {
+        id_orden: "ORD-1576",
+        cliente_id: "CLI-JOSEMANUE",
+        documento_cliente: "V-26559977",
+        nombre_cliente: "Jose manue",
+        telefono_cliente: "0412-0696868",
+        direccion_cliente: "su casa",
+        tipo_cliente: "particular",
+        codigo_troquel: "1576",
+        datos_motor: {
+          tipo_pieza: "Cámara / Tapa de Compresión",
+          marca: "TOYOTA",
+          modelo: "runner",
+          serial: "234234",
+          observaciones: "Revisión general y descarbonizado químico."
+        },
+        galeria_fotos_pieza: [],
+        galeria_fotos_repuestos: [],
         estado_actual: "diagnostico_presupuesto",
         subestado_ejecucion: "pendiente",
         tipo_condicion_pago: "pendiente_definir",
-        excepcion_taller_aliado: false,
-        monto_total: 70,
-        monto_abonado: 50,
-        saldo_pendiente: 20,
-        metodo_pago: "efectivo",
-        comprobante_pago_foto: DEMO_PHOTOS.pagoMovilCapture,
-        prioridad_alta: false,
-        devuelto_calidad: false,
-        motivo_rechazo_qc: "",
-        fecha_ingreso: "2026-11-09 11:40",
-        fecha_inicio_produccion: "",
-        fecha_fin_produccion: "",
-        tiempo_neto_minutos: 0,
-        fecha_entrega: "",
-        qc_aprobado: false,
-        factura_bloqueada: false
+        monto_total: 40.0,
+        monto_abonado: 0.0,
+        saldo_pendiente: 40.0,
+        fecha_ingreso: "2026-11-18T10:45:00.000Z",
+        repuestos_comprados_taller: false,
+        items_repuestos: [],
+        historial_abonos: []
       },
-      // Estado 2: Esperando Aprobación
+      // 3. TROQUEL #1557: DODGE runner (Jose manue) - Estado 1: Recepción / Diagnóstico
       {
-        id_orden: "ORD-1002",
-        cliente_id: "CLI-002",
-        documento_cliente: "V-12884910",
-        nombre_cliente: "Luis Mecánico (Taller Aliado)",
-        telefono_cliente: "0424-6884411",
-        codigo_troquel: "1510",
+        id_orden: "ORD-1557",
+        cliente_id: "CLI-JOSEMANUE",
+        documento_cliente: "V-26559977",
+        nombre_cliente: "Jose manue",
+        telefono_cliente: "0412-0696868",
+        direccion_cliente: "su casa",
+        tipo_cliente: "particular",
+        codigo_troquel: "1557",
         datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "Runner",
-          modelo: "Toyota 4Runner V6 4.0",
-          serial: "1GR-774821",
-          observaciones: "Servicio de rectificación de asientos y plano."
+          tipo_pieza: "Cámara / Culata",
+          marca: "DODGE",
+          modelo: "runner",
+          serial: "234234",
+          observaciones: "Presenta recalentamiento entre cilindros 2 y 3. Revisar plano y prueba hidráulica."
         },
-        galeria_fotos_pieza: [DEMO_PHOTOS.camaraRunner],
-        galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorolla],
-        estado_actual: "esperando_aprobacion_abono",
+        galeria_fotos_pieza: [],
+        galeria_fotos_repuestos: [],
+        estado_actual: "diagnostico_presupuesto",
         subestado_ejecucion: "pendiente",
-        tipo_condicion_pago: "credito",
-        excepcion_taller_aliado: true,
-        monto_total: 120,
-        monto_abonado: 0,
-        saldo_pendiente: 120,
-        metodo_pago: "n/a",
-        comprobante_pago_foto: "",
-        prioridad_alta: false,
-        devuelto_calidad: false,
-        motivo_rechazo_qc: "",
-        fecha_ingreso: "2026-11-09 10:15",
-        fecha_inicio_produccion: "",
-        fecha_fin_produccion: "",
-        tiempo_neto_minutos: 0,
-        fecha_entrega: "",
-        qc_aprobado: false,
-        factura_bloqueada: false
-      },
-      // Estado 3: Asignación y Ejecución
-      {
-        id_orden: "ORD-1001",
-        cliente_id: "CLI-001",
-        documento_cliente: "V-14589320",
-        nombre_cliente: "José Gregorio Morales",
-        telefono_cliente: "0414-6219988",
-        codigo_troquel: "5017",
-        datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "Chevrolet",
-          modelo: "Corsa 1.6 8V",
-          serial: "GM-90400187",
-          observaciones: "Lavado químico, cepillado de plano y cambio de guías."
-        },
-        galeria_fotos_pieza: [DEMO_PHOTOS.camaraCorsa],
-        galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorsa],
-        estado_actual: "asignacion_ejecucion",
-        subestado_ejecucion: "empezado",
-        tipo_condicion_pago: "pago_total",
-        excepcion_taller_aliado: false,
-        monto_total: 100,
-        monto_abonado: 100,
-        saldo_pendiente: 0,
-        metodo_pago: "pago_movil",
-        comprobante_pago_foto: DEMO_PHOTOS.pagoMovilCapture,
-        prioridad_alta: true,
-        devuelto_calidad: false,
-        motivo_rechazo_qc: "",
-        fecha_ingreso: "2026-11-09 08:30",
-        fecha_inicio_produccion: "2026-11-09 09:15",
-        fecha_fin_produccion: "",
-        tiempo_neto_minutos: 110,
-        fecha_entrega: "",
-        qc_aprobado: false,
-        factura_bloqueada: false
-      },
-      // Estado 4: Terminado (El técnico finalizó con foto, listo para pasar a Control de Calidad)
-      {
-        id_orden: "ORD-1004",
-        cliente_id: "CLI-003",
-        documento_cliente: "V-18920411",
-        nombre_cliente: "Gonzalo González",
-        telefono_cliente: "0412-7553310",
-        codigo_troquel: "1507",
-        datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "Hilux",
-          modelo: "Toyota Hilux 2.7 2TR-FE",
-          serial: "2TR-88912",
-          observaciones: "Trabajo finalizado por Heiber y Carlos con foto de evidencia. Lista para evaluación de Control de Calidad."
-        },
-        galeria_fotos_pieza: [DEMO_PHOTOS.camaraHilux],
-        galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorolla],
-        estado_actual: "terminado",
-        subestado_ejecucion: "terminado",
-        tipo_condicion_pago: "abono",
-        excepcion_taller_aliado: true,
-        monto_total: 115,
-        monto_abonado: 95,
-        saldo_pendiente: 20,
-        metodo_pago: "efectivo",
-        comprobante_pago_foto: DEMO_PHOTOS.pagoMovilCapture,
-        prioridad_alta: false,
-        devuelto_calidad: false,
-        motivo_rechazo_qc: "",
-        fecha_ingreso: "2026-11-08 09:00",
-        fecha_inicio_produccion: "2026-11-08 10:00",
-        fecha_fin_produccion: "2026-11-09 11:20",
-        tiempo_neto_minutos: 280,
-        fecha_entrega: "",
-        qc_aprobado: false,
-        factura_bloqueada: false
-      },
-      // Estado 5: Control de Calidad (En evaluación de tolerancias y acabado por el Jefe de Taller)
-      {
-        id_orden: "ORD-1005",
-        cliente_id: "CLI-004",
-        documento_cliente: "V-11405982",
-        nombre_cliente: "Kerales (Mecánico Aliado)",
-        telefono_cliente: "0414-6901234",
-        codigo_troquel: "1509",
-        datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "Astra",
-          modelo: "Chevrolet Astra 1.8 16V",
-          serial: "GM-ASTRA-18",
-          observaciones: "En mesa de Control de Calidad para verificar tolerancia de cepillado y sellado de válvulas antes de entregar."
-        },
-        galeria_fotos_pieza: [DEMO_PHOTOS.camaraAstra],
-        galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorsa],
-        estado_actual: "control_calidad",
-        subestado_ejecucion: "terminado",
-        tipo_condicion_pago: "abono",
-        excepcion_taller_aliado: true,
-        monto_total: 90,
-        monto_abonado: 60,
-        saldo_pendiente: 30,
-        metodo_pago: "pago_movil",
-        comprobante_pago_foto: DEMO_PHOTOS.pagoMovilCapture,
-        prioridad_alta: false,
-        devuelto_calidad: false,
-        motivo_rechazo_qc: "",
-        fecha_ingreso: "2026-11-07 14:00",
-        fecha_inicio_produccion: "2026-11-07 15:00",
-        fecha_fin_produccion: "2026-11-08 17:30",
-        tiempo_neto_minutos: 215,
-        fecha_entrega: "",
-        qc_aprobado: false,
-        factura_bloqueada: false
-      },
-      // Estado 6: Entregado (Con ejemplo de "Entregada y Por Cobrar" de taller aliado como explicó Jesús en el Audio 4)
-      {
-        id_orden: "ORD-1006",
-        cliente_id: "CLI-002",
-        documento_cliente: "V-12884910",
-        nombre_cliente: "Luis Mecánico (Taller Aliado)",
-        telefono_cliente: "0424-6884411",
-        codigo_troquel: "1498",
-        datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "Toyota",
-          modelo: "Hilux Kavak 4.0",
-          serial: "1GR-1498",
-          observaciones: "Entregada a Luis Mecánico bajo modalidad Taller Aliado. Factura cerrada, pendiente liquidar resto de $45."
-        },
-        galeria_fotos_pieza: [DEMO_PHOTOS.camaraHilux],
-        galeria_fotos_repuestos: [DEMO_PHOTOS.repuestosCorolla],
-        estado_actual: "entregado",
-        subestado_ejecucion: "terminado",
-        tipo_condicion_pago: "credito",
-        excepcion_taller_aliado: true,
-        monto_total: 105,
-        monto_abonado: 60,
-        saldo_pendiente: 45,
-        metodo_pago: "efectivo",
-        comprobante_pago_foto: DEMO_PHOTOS.pagoMovilCapture,
-        prioridad_alta: false,
-        devuelto_calidad: false,
-        motivo_rechazo_qc: "",
-        fecha_ingreso: "2026-11-05 09:00",
-        fecha_inicio_produccion: "2026-11-05 10:30",
-        fecha_fin_produccion: "2026-11-06 16:00",
-        tiempo_neto_minutos: 240,
-        fecha_entrega: "2026-11-07 11:00",
-        qc_aprobado: true,
-        factura_bloqueada: true
+        tipo_condicion_pago: "pendiente_definir",
+        monto_total: 50.0,
+        monto_abonado: 0.0,
+        saldo_pendiente: 50.0,
+        fecha_ingreso: "2026-11-18T11:10:00.000Z",
+        repuestos_comprados_taller: false,
+        items_repuestos: [],
+        historial_abonos: []
       }
     ],
     subtareas: [
-      // ORD-1001 (Troquel #5017 - En Ejecución)
+      // Subtareas Orden #1548
       {
-        id_subtarea: "SUB-501",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        descripcion_servicio: "Lavado Químico y Descarbonizado Profundo",
-        tecnico_id: "USR-JEISON",
-        nombre_tecnico: "Jeison",
-        monto_servicio: 15,
-        comision_base_tecnico: 4,
+        id_subtarea: "SUB-1548-1",
+        orden_id: "ORD-1548",
+        codigo_troquel: "1548",
+        descripcion_servicio: "Cámara 4C",
+        tecnico_id: "USR-HAVELL",
+        nombre_tecnico: "Havell Bracho",
+        monto_servicio: 30.0,
+        comision_base_tecnico: 10.0,
         estado_subtarea: "terminado",
-        fecha_inicio: "2026-11-09 08:50",
-        fecha_fin: "2026-11-09 09:35",
-        tiempo_neto_min: 45,
-        foto_evidencia_terminado: DEMO_PHOTOS.evidenciaTerminado,
-        checklist_salida: { piezasCompletas: true, sinFaltantes: true, notaNovedad: "Lavado listo, quedan las 3 bujías puestas como llegó." },
-        comision_pagada: false
+        minutos_acumulados: 45
       },
       {
-        id_subtarea: "SUB-502",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        descripcion_servicio: "Aplanado / Cepillado de Superficie de Cámara",
-        tecnico_id: "USR-HEIBER",
-        nombre_tecnico: "Heiber",
-        monto_servicio: 25,
-        comision_base_tecnico: 8,
-        estado_subtarea: "empezado",
-        fecha_inicio: "2026-11-09 09:45",
-        fecha_fin: "",
-        tiempo_neto_min: 65,
-        foto_evidencia_terminado: "",
-        checklist_salida: null,
-        comision_pagada: false
-      },
-      {
-        id_subtarea: "SUB-503",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        descripcion_servicio: "Cambio de Guías y Asentamiento de Válvulas",
-        tecnico_id: "USR-HEIBER",
-        nombre_tecnico: "Heiber",
-        monto_servicio: 60,
-        comision_base_tecnico: 20,
-        estado_subtarea: "pendiente",
-        fecha_inicio: "",
-        fecha_fin: "",
-        tiempo_neto_min: 0,
-        foto_evidencia_terminado: "",
-        checklist_salida: null,
-        comision_pagada: false
-      },
-      // ORD-1002 (Troquel #1510 - Runner - Esperando Aprobación)
-      {
-        id_subtarea: "SUB-504",
-        orden_id: "ORD-1002",
-        codigo_troquel: "1510",
-        descripcion_servicio: "Lavado Químico + Aplanado de Cámaras Runner V6",
+        id_subtarea: "SUB-1548-2",
+        orden_id: "ORD-1548",
+        codigo_troquel: "1548",
+        descripcion_servicio: "Adicional",
         tecnico_id: "",
         nombre_tecnico: "Sin asignar",
-        monto_servicio: 65,
-        comision_base_tecnico: 22,
-        estado_subtarea: "pendiente",
-        fecha_inicio: "",
-        fecha_fin: "",
-        tiempo_neto_min: 0,
-        foto_evidencia_terminado: "",
-        checklist_salida: null,
-        comision_pagada: false
-      },
-      {
-        id_subtarea: "SUB-505",
-        orden_id: "ORD-1002",
-        codigo_troquel: "1510",
-        descripcion_servicio: "Rectificación de Asientos y Calibración V6",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 55,
-        comision_base_tecnico: 18,
-        estado_subtarea: "pendiente",
-        fecha_inicio: "",
-        fecha_fin: "",
-        tiempo_neto_min: 0,
-        foto_evidencia_terminado: "",
-        checklist_salida: null,
-        comision_pagada: false
-      },
-      // ORD-1003 (Troquel #1513 - Toyota Jhon Colinas - Diagnóstico)
-      {
-        id_subtarea: "SUB-507",
-        orden_id: "ORD-1003",
-        codigo_troquel: "1513",
-        descripcion_servicio: "Lavado Químico + Aplanado de Cámara Toyota",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 40,
-        comision_base_tecnico: 12,
-        estado_subtarea: "pendiente",
-        fecha_inicio: "",
-        fecha_fin: "",
-        tiempo_neto_min: 0,
-        foto_evidencia_terminado: "",
-        checklist_salida: null,
-        comision_pagada: false
-      },
-      {
-        id_subtarea: "SUB-508",
-        orden_id: "ORD-1003",
-        codigo_troquel: "1513",
-        descripcion_servicio: "Cambio de Guías y Gomitas de Válvula",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 30,
-        comision_base_tecnico: 10,
-        estado_subtarea: "pendiente",
-        fecha_inicio: "",
-        fecha_fin: "",
-        tiempo_neto_min: 0,
-        foto_evidencia_terminado: "",
-        checklist_salida: null,
-        comision_pagada: false
-      },
-      // ORD-1004 (Troquel #1507 - Hilux Gonzalo González - Estado 4: Terminado)
-      {
-        id_subtarea: "SUB-509",
-        orden_id: "ORD-1004",
-        codigo_troquel: "1507",
-        descripcion_servicio: "Soldadura en Aluminio y Cepillado Cámara Hilux 2.7",
-        tecnico_id: "USR-CARLOS",
-        nombre_tecnico: "Carlos",
-        monto_servicio: 65,
-        comision_base_tecnico: 22,
+        monto_servicio: 0.0,
+        comision_base_tecnico: 0.0,
         estado_subtarea: "terminado",
-        fecha_inicio: "2026-11-08 10:10",
-        fecha_fin: "2026-11-08 15:00",
-        tiempo_neto_min: 140,
-        foto_evidencia_terminado: DEMO_PHOTOS.evidenciaTerminado,
-        checklist_salida: { piezasCompletas: true, sinFaltantes: true, notaNovedad: "Soldadura rellena en pase de agua 4 y cepillada a 0.004 pulg." },
-        comision_pagada: false
+        minutos_acumulados: 0
       },
       {
-        id_subtarea: "SUB-510",
-        orden_id: "ORD-1004",
-        codigo_troquel: "1507",
-        descripcion_servicio: "Asentamiento de Válvulas y Calibración Completa",
-        tecnico_id: "USR-HEIBER",
-        nombre_tecnico: "Heiber",
-        monto_servicio: 50,
-        comision_base_tecnico: 18,
+        id_subtarea: "SUB-1548-3",
+        orden_id: "ORD-1548",
+        codigo_troquel: "1548",
+        descripcion_servicio: "Químico",
+        tecnico_id: "USR-JOSE",
+        nombre_tecnico: "Jose Villasmil",
+        monto_servicio: 10.0,
+        comision_base_tecnico: 2.5,
         estado_subtarea: "terminado",
-        fecha_inicio: "2026-11-09 08:15",
-        fecha_fin: "2026-11-09 11:15",
-        tiempo_neto_min: 140,
-        foto_evidencia_terminado: DEMO_PHOTOS.camaraHilux,
-        checklist_salida: { piezasCompletas: true, sinFaltantes: true, notaNovedad: "Calibrada admisión 0.20mm / escape 0.30mm." },
-        comision_pagada: false
+        minutos_acumulados: 25
       },
-      // ORD-1005 (Troquel #1509 - Astra Kerales - Estado 5: Control de Calidad)
+      // Subtareas Orden #1576
       {
-        id_subtarea: "SUB-511",
-        orden_id: "ORD-1005",
-        codigo_troquel: "1509",
-        descripcion_servicio: "Aplanado, Cambio de Guías y Asentamiento Astra 1.8",
-        tecnico_id: "USR-HEIBER",
-        nombre_tecnico: "Heiber",
-        monto_servicio: 90,
-        comision_base_tecnico: 30,
-        estado_subtarea: "terminado",
-        fecha_inicio: "2026-11-07 15:00",
-        fecha_fin: "2026-11-08 17:30",
-        tiempo_neto_min: 215,
-        foto_evidencia_terminado: DEMO_PHOTOS.camaraAstra,
-        checklist_salida: { piezasCompletas: true, sinFaltantes: true, notaNovedad: "16 válvulas asentadas y calibradas." },
-        comision_pagada: false
+        id_subtarea: "SUB-1576-1",
+        orden_id: "ORD-1576",
+        codigo_troquel: "1576",
+        descripcion_servicio: "Cámara 4C",
+        tecnico_id: "USR-HAVELL",
+        nombre_tecnico: "Havell Bracho",
+        monto_servicio: 30.0,
+        comision_base_tecnico: 10.0,
+        estado_subtarea: "pendiente",
+        minutos_acumulados: 0
       },
-      // ORD-1006 (Troquel #1498 - Entregada con saldo pendiente por cobrar)
       {
-        id_subtarea: "SUB-512",
-        orden_id: "ORD-1006",
-        codigo_troquel: "1498",
-        descripcion_servicio: "Servicio Completo de Rectificación Hilux Kavak",
-        tecnico_id: "USR-HEIBER",
-        nombre_tecnico: "Heiber",
-        monto_servicio: 105,
-        comision_base_tecnico: 35,
-        estado_subtarea: "terminado",
-        fecha_inicio: "2026-11-05 10:30",
-        fecha_fin: "2026-11-06 16:00",
-        tiempo_neto_min: 240,
-        foto_evidencia_terminado: DEMO_PHOTOS.camaraHilux,
-        checklist_salida: { piezasCompletas: true, sinFaltantes: true, notaNovedad: "Entregada conforme." },
-        comision_pagada: true
+        id_subtarea: "SUB-1576-2",
+        orden_id: "ORD-1576",
+        codigo_troquel: "1576",
+        descripcion_servicio: "Químico",
+        tecnico_id: "USR-ANGEL",
+        nombre_tecnico: "Angel",
+        monto_servicio: 10.0,
+        comision_base_tecnico: 2.5,
+        estado_subtarea: "pendiente",
+        minutos_acumulados: 0
+      },
+      // Subtareas Orden #1557
+      {
+        id_subtarea: "SUB-1557-1",
+        orden_id: "ORD-1557",
+        codigo_troquel: "1557",
+        descripcion_servicio: "Lavado Químico",
+        tecnico_id: "USR-ANGEL",
+        nombre_tecnico: "Angel",
+        monto_servicio: 20.0,
+        comision_base_tecnico: 5.0,
+        estado_subtarea: "pendiente",
+        minutos_acumulados: 0
+      },
+      {
+        id_subtarea: "SUB-1557-2",
+        orden_id: "ORD-1557",
+        codigo_troquel: "1557",
+        descripcion_servicio: "Aplanado 4C",
+        tecnico_id: "USR-HAVELL",
+        nombre_tecnico: "Havell Bracho",
+        monto_servicio: 30.0,
+        comision_base_tecnico: 10.0,
+        estado_subtarea: "pendiente",
+        minutos_acumulados: 0
       }
     ],
     bitacora: [
       {
-        id_mensaje: "MSG-01",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        autor_id: "USR-RECEPCION",
-        autor_nombre: "Recepción Taller",
-        autor_rol: "Recepción",
-        tipo_evento: "ingreso",
-        mensaje: "Orden recibida y troquelada (#5017).",
-        foto_adjunta_url: "",
-        fecha_hora: "2026-11-09 08:32"
-      },
-      {
-        id_mensaje: "MSG-02",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        autor_id: "USR-ENRIQUE",
-        autor_nombre: "Sr. Enrique Andrade",
+        id_mensaje: "MSG-1548-01",
+        orden_id: "ORD-1548",
+        codigo_troquel: "1548",
+        autor_id: "USR-JESUS",
+        autor_nombre: "Jesús Andrade",
         autor_rol: "Jefe de Taller",
-        tipo_evento: "asignacion",
-        mensaje: "Pago 100% verificado. Subtareas asignadas a Jeison y Heiber.",
+        tipo_evento: "sistema",
+        mensaje: "Orden recepcionada y entregada con garantía de 1 año (Job 8:7).",
         foto_adjunta_url: "",
-        fecha_hora: "2026-11-09 08:45"
+        fecha_hora: "2026-11-18 11:30"
       },
       {
-        id_mensaje: "MSG-04",
-        orden_id: "ORD-1004",
-        codigo_troquel: "1507",
-        autor_id: "USR-HEIBER",
-        autor_nombre: "Heiber",
-        autor_rol: "Técnico",
-        tipo_evento: "calibracion",
-        mensaje: "Calibración Hilux #1507 lista. Enviada a Terminado.",
+        id_mensaje: "MSG-1576-01",
+        orden_id: "ORD-1576",
+        codigo_troquel: "1576",
+        autor_id: "USR-JESUS",
+        autor_nombre: "Jesús Andrade",
+        autor_rol: "Jefe de Taller",
+        tipo_evento: "recepcion",
+        mensaje: "Ingresada pieza en recepción para revisión y descarbonizado químico.",
         foto_adjunta_url: "",
-        fecha_hora: "2026-11-09 11:18"
+        fecha_hora: "2026-11-18 10:45"
+      },
+      {
+        id_mensaje: "MSG-1557-01",
+        orden_id: "ORD-1557",
+        codigo_troquel: "1557",
+        autor_id: "USR-JESUS",
+        autor_nombre: "Jesús Andrade",
+        autor_rol: "Jefe de Taller",
+        tipo_evento: "recepcion",
+        mensaje: "Ingresada culata DODGE runner con recalentamiento entre cilindros 2 y 3.",
+        foto_adjunta_url: "",
+        fecha_hora: "2026-11-18 11:10"
       }
     ],
     finanzas: [
       {
-        id_movimiento: "FIN-001",
-        fecha_hora: "2026-11-09 08:40",
-        tipo_movimiento: "INGRESO",
-        categoria_cuenta: "Ingreso por Servicio de Rectificación",
-        concepto: "Pago Total 100% Orden ORD-1001 (Troquel #5017 - Corsa 1.6)",
-        orden_id: "ORD-1001",
-        codigo_troquel: "5017",
-        monto_usd: 100,
-        metodo_pago: "pago_movil",
-        referencia: "PM-948271",
-        comprobante_foto: DEMO_PHOTOS.pagoMovilCapture,
-        registrado_por: "Recepción Taller"
-      },
-      {
-        id_movimiento: "FIN-002",
-        fecha_hora: "2026-11-08 11:00",
-        tipo_movimiento: "INGRESO",
-        categoria_cuenta: "Abono / Liquidación de Orden",
-        concepto: "Abono Orden ORD-1004 (Troquel #1507 - Hilux Gonzalo González)",
-        orden_id: "ORD-1004",
-        codigo_troquel: "1507",
-        monto_usd: 95,
+        id_movimiento: "MOV-1548-01",
+        fecha_hora: "2026-11-18 11:30",
+        tipo_movimiento: "ingreso",
+        categoria_cuenta: "Liquidación Total de Orden",
+        concepto: "Liquidación 100% de Orden #1548 (CHEVROLET z24 - Jesús Andrade)",
+        orden_id: "ORD-1548",
+        codigo_troquel: "1548",
+        monto_usd: 40.0,
         metodo_pago: "efectivo",
-        referencia: "Adelanto efectivo",
-        comprobante_foto: DEMO_PHOTOS.pagoMovilCapture,
-        registrado_por: "Jesús Andrade"
-      },
-      {
-        id_movimiento: "FIN-003",
-        fecha_hora: "2026-11-07 15:00",
-        tipo_movimiento: "INGRESO",
-        categoria_cuenta: "Abono / Liquidación de Orden",
-        concepto: "Abono Orden ORD-1005 (Troquel #1509 - Astra Kerales)",
-        orden_id: "ORD-1005",
-        codigo_troquel: "1509",
-        monto_usd: 60,
-        metodo_pago: "pago_movil",
-        referencia: "PM-11209",
-        comprobante_foto: DEMO_PHOTOS.pagoMovilCapture,
-        registrado_por: "Sr. Enrique Andrade"
-      },
-      {
-        id_movimiento: "FIN-004",
-        fecha_hora: "2026-11-09 09:10",
-        tipo_movimiento: "EGRESO",
-        categoria_cuenta: "Compra de Insumos y Químicos",
-        concepto: "Compra de desengrasante alcalino para tanque de lavado y lijas",
-        orden_id: "-",
-        codigo_troquel: "-",
-        monto_usd: 22,
-        metodo_pago: "efectivo",
-        referencia: "Factura #410",
+        referencia: "Recibo-1548",
         comprobante_foto: "",
         registrado_por: "Jesús Andrade"
       }
     ],
     asistencia: [
-      { id_asistencia: "ASI-01", fecha: "2026-11-09", usuario_id: "USR-HEIBER", nombre_usuario: "Heiber", turno_modalidad: "Jornada Completa (8am-1pm / 3pm-8pm)", hora_registro: "07:55 AM", estado_hoy: "Presente en Taller" },
-      { id_asistencia: "ASI-02", fecha: "2026-11-09", usuario_id: "USR-JEISON", nombre_usuario: "Jeison", turno_modalidad: "Medio Turno Mañana (Estudia en la tarde)", hora_registro: "08:05 AM", estado_hoy: "Presente (Turno Mañana)" },
-      { id_asistencia: "ASI-03", fecha: "2026-11-09", usuario_id: "USR-CARLOS", nombre_usuario: "Carlos", turno_modalidad: "Jornada Completa (8am-1pm / 3pm-8pm)", hora_registro: "08:02 AM", estado_hoy: "Presente en Taller" }
-    ],
-    cuentas_por_pagar: [
+      { id_asistencia: "ASI-01", fecha: "2026-11-18", usuario_id: "USR-HAVELL", nombre_usuario: "Havell Bracho", turno_modalidad: "Jornada Completa", hora_registro: "07:50 AM", estado_hoy: "Presente en Taller (Puntual)" },
+      { id_asistencia: "ASI-02", fecha: "2026-11-18", usuario_id: "USR-ANGEL", nombre_usuario: "Angel", turno_modalidad: "Jornada Completa", hora_registro: "08:00 AM", estado_hoy: "Presente en Taller (Puntual)" },
+      { id_asistencia: "ASI-03", fecha: "2026-11-18", usuario_id: "USR-JOSE", nombre_usuario: "Jose Villasmil", turno_modalidad: "Jornada Completa", hora_registro: "08:10 AM", estado_hoy: "Presente en Taller (Puntual)" }
+    ],    cuentas_por_pagar: [
       {
         id_cxp: "CXP-001",
         acreedor: "Distribuidora Repuestos Occidente",
@@ -1226,26 +959,101 @@ function normalizeDatabaseSchema(d) {
     }
   });
 
-  d.ordenes = (d.ordenes || []).filter((o) => String(o.codigo_troquel || o.id_orden || "").trim() !== "");
+  // PURGA RIGUROSA: Eliminar órdenes de prueba/demo (ORD-1001 a ORD-1006) para mantener SOLO las 3 órdenes reales de Jesús Andrade y nuevas
+  d.ordenes = (d.ordenes || []).filter((o) => {
+    if (!o) return false;
+    const id = String(o.id_orden || "").trim();
+    const troquel = String(o.codigo_troquel || "").trim();
+    if (!id && !troquel) return false;
+    // Filtrar explícitamente las de prueba
+    if (/^ORD-100[1-6]$/i.test(id) || /^ORD-100[1-6]/i.test(id)) return false;
+    if (troquel === "1513" || troquel === "1508" || troquel === "1504" || troquel === "1499" || troquel === "1492" || troquel === "1485") return false;
+    return true;
+  });
+
+  // Asegurar las 3 órdenes reales creadas por Jesús Andrade (#1548, #1576, #1557)
+  const initialDbData = getInitialDatabase();
+  ["ORD-1548", "ORD-1576", "ORD-1557"].forEach((realId) => {
+    if (!d.ordenes.some((o) => o.id_orden === realId)) {
+      const foundReal = initialDbData.ordenes.find((o) => o.id_orden === realId);
+      if (foundReal) {
+        d.ordenes.push(JSON.parse(JSON.stringify(foundReal)));
+      }
+    }
+  });
+
   d.ordenes.forEach((o) => {
     o.fecha_ingreso = cleanDateISO(o.fecha_ingreso, true);
     if (o.estado_actual === "entregado" && !o.fecha_garantia_hasta) {
       const baseDate = o.fecha_entrega ? new Date(o.fecha_entrega) : new Date();
       o.fecha_garantia_hasta = new Date(baseDate.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     }
+    if (o.repuestos_comprados_taller === undefined) o.repuestos_comprados_taller = false;
+    if (!Array.isArray(o.items_repuestos)) o.items_repuestos = [];
   });
 
-  d.subtareas = (d.subtareas || []).filter((s) => String(s.descripcion_servicio || s.id_subtarea || "").trim() !== "");
+  const validOrderIds = new Set(d.ordenes.map((o) => o.id_orden));
+
+  // Subtareas: eliminar las que pertenecían a órdenes de prueba
+  d.subtareas = (d.subtareas || []).filter((s) => {
+    if (!s || !s.orden_id) return false;
+    if (/^ORD-100[1-6]/i.test(s.orden_id)) return false;
+    return validOrderIds.has(s.orden_id);
+  });
+
+  // Asegurar subtareas de las 3 órdenes de Jesús
+  ["ORD-1548", "ORD-1576", "ORD-1557"].forEach((realId) => {
+    const hasSubs = d.subtareas.some((s) => s.orden_id === realId);
+    if (!hasSubs) {
+      const initSubs = initialDbData.subtareas.filter((s) => s.orden_id === realId);
+      initSubs.forEach((s) => d.subtareas.push(JSON.parse(JSON.stringify(s))));
+    }
+  });
+
   d.subtareas.forEach((s) => {
     if (s.minutos_acumulados === undefined) s.minutos_acumulados = Number(s.tiempo_neto_min || 0);
     if (s.foto_terminado_url === undefined) s.foto_terminado_url = s.foto_evidencia_terminado || "";
     if (s.fecha_terminado) s.fecha_terminado = cleanDateISO(s.fecha_terminado, false);
   });
 
-  d.bitacora = (d.bitacora || []).filter((b) => String(b.mensaje || b.foto_adjunta_url || "").trim() !== "");
+  // Bitácora: purgar mensajes huérfanos de pruebas
+  d.bitacora = (d.bitacora || []).filter((b) => {
+    if (!b) return false;
+    if (/^ORD-100[1-6]/i.test(b.orden_id)) return false;
+    return !b.orden_id || b.orden_id === "-" || validOrderIds.has(b.orden_id);
+  });
   d.bitacora.forEach((b) => {
     b.fecha_hora = cleanDateISO(b.fecha_hora, true);
   });
+
+  // Asegurar bitácora de las 3 órdenes de Jesús
+  ["ORD-1548", "ORD-1576", "ORD-1557"].forEach((realId) => {
+    const hasBit = d.bitacora.some((b) => b.orden_id === realId);
+    if (!hasBit) {
+      const initBits = initialDbData.bitacora.filter((b) => b.orden_id === realId);
+      initBits.forEach((b) => d.bitacora.push(JSON.parse(JSON.stringify(b))));
+    }
+  });
+
+  // Finanzas: purgar movimientos de prueba
+  if (Array.isArray(d.finanzas_movimientos)) {
+    d.finanzas_movimientos = d.finanzas_movimientos.filter((f) => {
+      if (!f) return false;
+      if (/^ORD-100[1-6]/i.test(f.orden_id)) return false;
+      return true;
+    });
+  }
+
+  // Asegurar clientes de Jesús
+  if (!Array.isArray(d.clientes) || d.clientes.length === 0) {
+    d.clientes = initialDbData.clientes;
+  } else {
+    initialDbData.clientes.forEach((ic) => {
+      if (!d.clientes.some((c) => c.documento_identidad === ic.documento_identidad || c.nombre_completo === ic.nombre_completo)) {
+        d.clientes.push(ic);
+      }
+    });
+  }
 
   return d;
 }
@@ -2599,6 +2407,17 @@ function renderApp() {
   if (btnNewOrder) {
     if (currentUser.rol === "tecnico") btnNewOrder.classList.add("hidden");
     else btnNewOrder.classList.remove("hidden");
+  }
+
+  const btnKiosk = document.getElementById("btn-topbar-attendance-kiosk");
+  if (btnKiosk) {
+    if (currentUser.rol === "tecnico") btnKiosk.classList.add("hidden");
+    else btnKiosk.classList.remove("hidden");
+  }
+
+  const btnScan = document.getElementById("btn-topbar-attendance-scan");
+  if (btnScan) {
+    btnScan.classList.remove("hidden");
   }
 
   const tabs = getTabsForRole(currentUser.rol);
@@ -4699,8 +4518,12 @@ function renderOrderCardTelegramStyle(order) {
                 </div>
               </div>
               <div class="service-right">
-                <div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>
-                <div class="comm-val">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
+                ${currentUser && currentUser.rol === "tecnico" ? "" : <div class="price-val">{Number(s.monto_servicio).toFixed(2)}</div>}
+                ${
+                  currentUser && currentUser.rol === "tecnico"
+                    ? (s.tecnico_id === currentUser.id_usuario ? <div class="comm-val" style="color:var(--renacer-gold); font-weight:800;">Mi Comisión: {Number(s.comision_base_tecnico || 0).toFixed(2)}</div> : "")
+                    : <div class="comm-val">Com: {Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
+                }
               </div>
             </div>
           `;
@@ -4949,21 +4772,27 @@ function renderOrderCardTelegramStyle(order) {
           ${subtasksListHtml}
         </div>
 
-        <!-- Strip Financiero Total / Abonado / Resto dentro de Servicios (Imagen 6) -->
-        <div class="order-clean-finance-strip">
-          <div class="finance-cell">
-            <span class="lbl">TOTAL</span>
-            <strong class="val val--total">$${Number(order.monto_total).toFixed(2)}</strong>
-          </div>
-          <div class="finance-cell">
-            <span class="lbl">ABONADO</span>
-            <strong class="val val--abonado">$${Number(order.monto_abonado).toFixed(2)}</strong>
-          </div>
-          <div class="finance-cell">
-            <span class="lbl">RESTO</span>
-            <strong class="val val--resto" style="color:${order.saldo_pendiente > 0 ? "#f87171" : "#22c55e"};">$${Number(order.saldo_pendiente).toFixed(2)}</strong>
-          </div>
-        </div>
+        <!-- Strip Financiero Total / Abonado / Resto (Oculto para Técnicos por Privacidad) -->
+        ${
+          currentUser && currentUser.rol === "tecnico"
+            ? ""
+            : 
+            <div class="order-clean-finance-strip">
+              <div class="finance-cell">
+                <span class="lbl">TOTAL</span>
+                <strong class="val val--total">{Number(order.monto_total).toFixed(2)}</strong>
+              </div>
+              <div class="finance-cell">
+                <span class="lbl">ABONADO</span>
+                <strong class="val val--abonado">{Number(order.monto_abonado).toFixed(2)}</strong>
+              </div>
+              <div class="finance-cell">
+                <span class="lbl">RESTO</span>
+                <strong class="val val--resto" style="color:;">{Number(order.saldo_pendiente).toFixed(2)}</strong>
+              </div>
+            </div>
+            
+        }
       </div>
 
       <!-- 4. BLOQUE 2: ASIGNACIONES / COMISIONES POR TÉCNICO (DISEÑO IMAGEN 6) -->
@@ -4996,8 +4825,12 @@ function renderOrderCardTelegramStyle(order) {
             <i class="fab fa-whatsapp"></i>
           </button>
           <span style="color:#334155;">|</span>
-          <button type="button" class="order-clean-pill-btn" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket de Recepción (Políticas)">
+          <button type="button" class="order-clean-pill-btn" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket de Recepción 80mm (Políticas)">
             <i class="fas fa-print"></i>
+          </button>
+          <span style="color:#334155;">|</span>
+          <button type="button" class="order-clean-pill-btn" onclick="printOrderExcelSheet('${order.id_orden}')" title="Planilla y Hoja de Servicio Oficial (Formato Tabla / Excel)">
+            <i class="fas fa-file-excel" style="color:#22c55e;"></i>
           </button>
           ${
             canManage && order.estado_actual !== "anulado" && order.estado_actual !== "entregado"
@@ -5017,6 +4850,13 @@ function renderOrderCardTelegramStyle(order) {
         </div>
 
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          ${
+            order.estado_actual !== "anulado" && order.estado_actual !== "archivado" && Number(order.saldo_pendiente) > 0 && !(currentUser && currentUser.rol === "tecnico")
+              ? <button type="button" class="btn btn--warning" onclick="openFinancialApprovalModal('')" title="Registrar abono o liquidación total" style="padding:7px 12px; font-size:12px; font-weight:800;">
+                   <i class="fas fa-hand-holding-usd"></i> Abono / Pago
+                 </button>
+              : ""
+          }
           ${primaryActionBtn}
         </div>
       </div>
@@ -5747,6 +5587,41 @@ function handleFastAlliedSelect(val) {
   }
 }
 
+function handleClientNameAutocomplete(nameVal) {
+  if (!nameVal || !nameVal.trim()) return;
+  const search = nameVal.trim().toLowerCase();
+  const match = (db.clientes || []).find((c) => {
+    const full = (c.nombre_completo || c.nombre_cliente || "").toLowerCase().trim();
+    return full === search || (search.length >= 3 && full.includes(search));
+  });
+  if (match) {
+    const docTypeEl = document.getElementById("new-cli-doc-type");
+    const docNumEl = document.getElementById("new-cli-doc-num");
+    const docFullEl = document.getElementById("new-cli-doc");
+    const phoneEl = document.getElementById("new-cli-phone");
+    const addrEl = document.getElementById("new-cli-address");
+    const alliedEl = document.getElementById("new-cli-allied");
+
+    const parts = (match.documento_identidad || "").split("-");
+    if (docTypeEl && parts.length > 1) docTypeEl.value = parts[0] + "-";
+    if (docNumEl) docNumEl.value = parts.slice(1).join("-") || match.documento_identidad || "";
+    if (docFullEl) docFullEl.value = match.documento_identidad || "";
+    if (phoneEl && match.telefono) phoneEl.value = match.telefono;
+    if (addrEl && match.direccion) addrEl.value = match.direccion;
+    if (alliedEl) {
+      const isAllied = String(match.tipo_cliente || "").toLowerCase().includes("aliado");
+      alliedEl.value = isAllied ? "true" : "false";
+    }
+    if (typeof tempNewOrderState !== "undefined") {
+      tempNewOrderState.clienteEncontradoId = match.id_cliente;
+    }
+    const statusEl = document.getElementById("cli-lookup-status");
+    if (statusEl) {
+      statusEl.innerHTML = `<span style="color:#22c55e;"><i class="fas fa-check-circle"></i> Cliente encontrado: ${match.nombre_completo || match.nombre_cliente} (${match.documento_identidad})</span>`;
+    }
+  }
+}
+
 function toggleSellSparesSection(checked) {
   const box = document.getElementById("sell-spares-container");
   if (!box) return;
@@ -5800,10 +5675,7 @@ function openNewOrderModal() {
     clienteEncontradoId: null,
     galeriaPieza: [],
     galeriaRepuestos: [],
-    itemsPresupuesto: [
-      { id_temp: "T1", descripcion: "Lavado Químico y Descarbonizado", monto: 20, comision: 6 },
-      { id_temp: "T2", descripcion: "Aplanado / Cepillado de Superficie", monto: 35, comision: 12 }
-    ]
+    itemsPresupuesto: []
   };
 
   const catalogOptions = db.catalogo_servicios
@@ -5863,8 +5735,18 @@ function openNewOrderModal() {
               </span>
             </div>
             <div class="form-field">
-              <label>Nombre Completo o Taller *</label>
-              <input type="text" id="new-cli-name" placeholder="Nombre del cliente o mecánico" required />
+              <label>Nombre Completo o Taller * (Autocompleta clientes registrados)</label>
+              <input
+                type="text"
+                id="new-cli-name"
+                placeholder="Nombre del cliente o taller aliado"
+                list="renacer-clientes-autocomplete"
+                oninput="handleClientNameAutocomplete(this.value)"
+                required
+              />
+              <datalist id="renacer-clientes-autocomplete">
+                ${(db.clientes || []).map((c) => `<option value="${c.nombre_completo || c.nombre_cliente}">${c.documento_identidad} - ${c.telefono}</option>`).join("")}
+              </datalist>
             </div>
             <div class="form-field">
               <label>Teléfono / WhatsApp *</label>
@@ -5878,13 +5760,6 @@ function openNewOrderModal() {
             </div>
             <div class="form-field">
               <label>Tipo de Cliente</label>
-              <select id="new-cli-allied">
-                <option value="false">Cliente Particular</option>
-                <option value="true">Mecánico / Taller Aliado Recurrente</option>
-              </select>
-            </div>
-          </div>
-        </div>
               <select id="new-cli-allied">
                 <option value="false">Cliente Particular</option>
                 <option value="true">Mecánico / Taller Aliado Recurrente</option>
@@ -12381,6 +12256,1126 @@ function deleteCatalogService(catId) {
   showToast(`Servicio "${s.nombre}" eliminado del catálogo.`);
 }
 
+
+/* ============================================================================
+   EDICIÓN COMPLETA DE ÓRDENES (JESÚS ANDRADE - DISEÑO 2 RENACER)
+   ============================================================================ */
+let tempEditOrderState = {
+  orderId: null,
+  services: [],
+  repuestos: [],
+  comproRepuestosTaller: false
+};
+
+function openEditCompleteOrderModal(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) {
+    showToast("Orden no encontrada.", "error");
+    return;
+  }
+
+  const existingSubs = db.subtareas.filter((s) => s.orden_id === orderId);
+  tempEditOrderState = {
+    orderId: order.id_orden,
+    services: existingSubs.map((s) => ({
+      id_subtarea: s.id_subtarea,
+      descripcion_servicio: s.descripcion_servicio || "",
+      monto_servicio: Number(s.monto_servicio) || 0,
+      comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
+      tecnico_id: s.tecnico_id || "",
+      nombre_tecnico: s.nombre_tecnico || "Sin asignar",
+      estado_subtarea: s.estado_subtarea || "pendiente",
+      minutos_acumulados: s.minutos_acumulados || 0
+    })),
+    repuestos: Array.isArray(order.items_repuestos) ? JSON.parse(JSON.stringify(order.items_repuestos)) : [],
+    comproRepuestosTaller: Boolean(order.repuestos_comprados_taller)
+  };
+
+  const catalogOptions = (db.catalogo_servicios || [])
+    .map((c) => `<option value="${c.id_cat}">${c.nombre} — $${c.precio_sugerido} (Comisión: $${c.comision_sugerida})</option>`)
+    .join("");
+
+  const inventoryOptions = (db.inventario_repuestos || [])
+    .map((r) => `<option value="${r.id_repuesto}">${r.nombre} — $${Number(r.precio_venta).toFixed(2)} (Stock: ${r.stock_actual} ${r.unidad || "pz"})</option>`)
+    .join("");
+
+  openModal({
+    title: `Modificar Orden #${order.codigo_troquel} (Edición Completa)`,
+    icon: "fa-edit",
+    wide: true,
+    body: `
+      <form id="form-edit-complete-order" onsubmit="event.preventDefault(); saveEditedCompleteOrder('${order.id_orden}');">
+        <!-- 0. CABECERA: TROQUEL, ESTADO ACTUAL Y PRIORIDAD -->
+        <div class="form-section-box" style="border-color:rgba(245,196,0,0.7); background:rgba(245,196,0,0.05);">
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+            <span><i class="fas fa-tag"></i> 0. Correlativo, Estado Actual y Prioridad</span>
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:800; color:#ef4444;">
+              <input type="checkbox" id="edit-ord-priority" ${order.prioridad_alta ? "checked" : ""} style="accent-color:#ef4444; width:17px; height:17px;" />
+              <i class="fas fa-bolt"></i> Prioridad Alta / Urgente
+            </label>
+          </div>
+          <div class="form-grid-3">
+            <div class="form-field">
+              <label>Código de Troquel *</label>
+              <input type="text" id="edit-ord-troquel" value="${order.codigo_troquel}" required style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:#0f1638;" />
+            </div>
+            <div class="form-field">
+              <label>Fase / Estado del Proceso *</label>
+              <select id="edit-ord-estado" style="font-weight:800;">
+                <option value="diagnostico_presupuesto" ${order.estado_actual === "diagnostico_presupuesto" || order.estado_actual === "recepcion" ? "selected" : ""}>1. Recepción (Diagnóstico / Presupuesto)</option>
+                <option value="diagnostico" ${order.estado_actual === "diagnostico" ? "selected" : ""}>2. Diagnóstico Técnico</option>
+                <option value="aprobacion" ${order.estado_actual === "aprobacion" || order.estado_actual === "esperando_aprobacion_abono" ? "selected" : ""}>3. Aprobación y Abono</option>
+                <option value="servicio" ${order.estado_actual === "servicio" || order.estado_actual === "asignacion_ejecucion" ? "selected" : ""}>4. En Servicio Técnico (Mecanizado)</option>
+                <option value="calidad" ${order.estado_actual === "calidad" || order.estado_actual === "control_calidad" ? "selected" : ""}>5. Control de Calidad</option>
+                <option value="entrega" ${order.estado_actual === "entrega" || order.estado_actual === "entregado" ? "selected" : ""}>6. Entrega y Liquidación</option>
+                <option value="archivado" ${order.estado_actual === "archivado" ? "selected" : ""}>Archivada (Histórico / Garantía 1 Año)</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Condición Financiera</label>
+              <select id="edit-ord-pago-condicion" style="font-weight:700;">
+                <option value="pendiente_definir" ${order.tipo_condicion_pago === "pendiente_definir" ? "selected" : ""}>Sin Abono (Pendiente)</option>
+                <option value="abono" ${order.tipo_condicion_pago === "abono" ? "selected" : ""}>Abono Parcial Registrado</option>
+                <option value="pago_total" ${order.tipo_condicion_pago === "pago_total" ? "selected" : ""}>Pago Total 100% (Liquidada)</option>
+                <option value="credito" ${order.tipo_condicion_pago === "credito" ? "selected" : ""}>Taller Aliado / Cuenta por Cobrar</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 1. DATOS DEL CLIENTE / TALLER ALIADO -->
+        <div class="form-section-box">
+          <div class="form-section-title">
+            <i class="fas fa-user-edit"></i> 1. Identificación del Cliente o Taller Aliado
+          </div>
+          <div class="form-grid-3">
+            <div class="form-field">
+              <label>Nombre Completo o Taller * (Autocompleta)</label>
+              <input type="text" id="edit-cli-name" value="${order.nombre_cliente || ''}" list="renacer-edit-clientes-list" oninput="handleEditClientAutocomplete(this.value)" required />
+              <datalist id="renacer-edit-clientes-list">
+                ${(db.clientes || []).map((c) => `<option value="${c.nombre_completo || c.nombre_cliente}">${c.documento_identidad} - ${c.telefono}</option>`).join("")}
+              </datalist>
+            </div>
+            <div class="form-field">
+              <label>Cédula o RIF *</label>
+              <input type="text" id="edit-cli-doc" value="${order.documento_cliente || ''}" required />
+            </div>
+            <div class="form-field">
+              <label>Teléfono / WhatsApp *</label>
+              <input type="text" id="edit-cli-phone" value="${order.telefono_cliente || ''}" required />
+            </div>
+          </div>
+          <div class="form-grid-2" style="margin-top:10px;">
+            <div class="form-field">
+              <label>Dirección</label>
+              <input type="text" id="edit-cli-address" value="${order.direccion_cliente || ''}" placeholder="Sector o dirección del cliente" />
+            </div>
+            <div class="form-field">
+              <label>Tipo de Cliente</label>
+              <select id="edit-cli-type">
+                <option value="particular" ${order.tipo_cliente === "particular" ? "selected" : ""}>Cliente Particular</option>
+                <option value="taller_aliado" ${String(order.tipo_cliente || '').toLowerCase().includes("aliado") ? "selected" : ""}>Taller Aliado Recurrente (Crédito)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. DATOS DE VEHÍCULO / MOTOR -->
+        <div class="form-section-box">
+          <div class="form-section-title">
+            <i class="fas fa-car-side"></i> 2. Datos del Vehículo / Motor
+          </div>
+          <div class="form-grid-4">
+            <div class="form-field">
+              <label>Tipo de Pieza *</label>
+              <input type="text" id="edit-ord-pieza" value="${order.datos_motor.tipo_pieza || 'Cámara / Culata'}" required />
+            </div>
+            <div class="form-field">
+              <label>Marca *</label>
+              <input type="text" id="edit-ord-marca" value="${order.datos_motor.marca || ''}" required />
+            </div>
+            <div class="form-field">
+              <label>Modelo / Motor *</label>
+              <input type="text" id="edit-ord-modelo" value="${order.datos_motor.modelo || ''}" required />
+            </div>
+            <div class="form-field">
+              <label>Serial de Motor / Fundición</label>
+              <input type="text" id="edit-ord-serial" value="${order.datos_motor.serial || ''}" />
+            </div>
+          </div>
+          <div class="form-field" style="margin-top:10px;">
+            <label>Observaciones Técnicas / Diagnóstico de Entrada</label>
+            <textarea id="edit-ord-obs" rows="2" style="width:100%; border-radius:10px; border:1.5px solid var(--border-color); padding:8px 10px; background:var(--bg-input); color:var(--text-main);">${order.datos_motor.observaciones || ''}</textarea>
+          </div>
+        </div>
+
+        <!-- 3. SERVICIOS Y PRESUPUESTO EDITABLE -->
+        <div class="form-section-box">
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span><i class="fas fa-tools"></i> 3. Desglose de Servicios y Comisiones de Técnicos</span>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder()">
+                <i class="fas fa-plus"></i> Fila Libre
+              </button>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+            <select id="edit-select-cat-service" style="flex:1; min-width:220px; padding:8px 10px; border-radius:8px; border:1.5px solid var(--border-color); font-weight:700;">
+              <option value="">-- Añadir servicio del catálogo frecuente --</option>
+              ${catalogOptions}
+            </select>
+            <button type="button" class="btn btn--primary" onclick="addServiceToEditOrder()" style="padding:8px 12px;">
+              <i class="fas fa-plus-circle"></i> Agregar
+            </button>
+          </div>
+          <div id="edit-services-table-wrapper" style="overflow-x:auto;"></div>
+        </div>
+
+        <!-- 4. REPUESTOS DEL TALLER (ÁREA JAVIER ANDRADE) -->
+        <div class="form-section-box" style="border:1.5px solid rgba(56, 189, 248, 0.45); background:rgba(56, 189, 248, 0.03);">
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span><i class="fas fa-boxes-stacked" style="color:#38bdf8;"></i> 4. Repuestos del Taller (Área Javier Andrade)</span>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:800;">
+              <input type="checkbox" id="edit-toggle-spares" ${tempEditOrderState.comproRepuestosTaller ? "checked" : ""} onchange="toggleEditSparesSection(this.checked)" style="width:17px; height:17px; accent-color:#0284c7;" />
+              ¿Compró repuestos en el taller?
+            </label>
+          </div>
+          <div id="edit-spares-box" class="${tempEditOrderState.comproRepuestosTaller ? '' : 'hidden'}" style="margin-top:10px;">
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+              <select id="edit-select-spare-inv" style="flex:1; min-width:220px; padding:8px 10px; border-radius:8px; border:1.5px solid var(--border-color); font-weight:700;">
+                <option value="">-- Seleccionar repuesto de inventario --</option>
+                ${inventoryOptions}
+              </select>
+              <input type="number" id="edit-spare-qty" min="1" value="1" style="width:70px; padding:8px; border-radius:8px; font-weight:800;" placeholder="Cant." />
+              <button type="button" class="btn btn--primary" onclick="addSpareToEditOrder()" style="padding:8px 12px;">
+                <i class="fas fa-plus"></i> Añadir Repuesto
+              </button>
+            </div>
+            <div id="edit-spares-list-wrapper"></div>
+          </div>
+        </div>
+
+        <!-- RESUMEN FINANCIERO TOTALIZADO -->
+        <div class="form-section-box" style="background:var(--bg-card); border-color:var(--renacer-gold);">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+              <span style="font-size:12px; font-weight:800; color:var(--text-muted);">TOTAL SERVICIOS + REPUESTOS:</span>
+              <div id="edit-order-grand-total" style="font-size:24px; font-weight:900; color:var(--renacer-gold);">$${Number(order.monto_total).toFixed(2)}</div>
+            </div>
+            <div>
+              <span style="font-size:12px; font-weight:800; color:var(--text-muted);">MONTO YA ABONADO:</span>
+              <div style="font-size:20px; font-weight:900; color:#22c55e;">$${Number(order.monto_abonado).toFixed(2)}</div>
+            </div>
+            <div>
+              <span style="font-size:12px; font-weight:800; color:var(--text-muted);">RESTO / SALDO PENDIENTE:</span>
+              <div id="edit-order-saldo" style="font-size:22px; font-weight:900; color:${order.saldo_pendiente > 0 ? '#f87171' : '#22c55e'};">$${Number(order.saldo_pendiente).toFixed(2)}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- BOTONES DE ACCIÓN PRINCIPALES -->
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:16px;">
+          <div style="display:flex; gap:8px;">
+            <button type="submit" class="btn btn--gold btn--lg" style="font-weight:900; padding:12px 24px;">
+              <i class="fas fa-save"></i> Guardar Todos los Cambios
+            </button>
+            <button type="button" class="btn btn--ghost btn--lg" onclick="closeModal()">
+              Cancelar
+            </button>
+          </div>
+          <button type="button" class="btn btn--danger" onclick="cancelOrArchiveFromEditModal('${order.id_orden}')" style="padding:10px 16px; font-weight:800;">
+            <i class="fas fa-ban"></i> Anular / Archivar Orden
+          </button>
+        </div>
+      </form>
+    `
+  });
+
+  renderEditServicesTable();
+  renderEditSparesTable();
+}
+
+function handleEditClientAutocomplete(nameVal) {
+  if (!nameVal || !nameVal.trim()) return;
+  const search = nameVal.trim().toLowerCase();
+  const match = (db.clientes || []).find((c) => {
+    const full = (c.nombre_completo || c.nombre_cliente || "").toLowerCase().trim();
+    return full === search || (search.length >= 3 && full.includes(search));
+  });
+  if (match) {
+    const docEl = document.getElementById("edit-cli-doc");
+    const phoneEl = document.getElementById("edit-cli-phone");
+    const addrEl = document.getElementById("edit-cli-address");
+    const typeEl = document.getElementById("edit-cli-type");
+    if (docEl && match.documento_identidad) docEl.value = match.documento_identidad;
+    if (phoneEl && match.telefono) phoneEl.value = match.telefono;
+    if (addrEl && match.direccion) addrEl.value = match.direccion;
+    if (typeEl && match.tipo_cliente) {
+      typeEl.value = String(match.tipo_cliente).toLowerCase().includes("aliado") ? "taller_aliado" : "particular";
+    }
+  }
+}
+
+function renderEditServicesTable() {
+  const wrapper = document.getElementById("edit-services-table-wrapper");
+  if (!wrapper) return;
+
+  if (tempEditOrderState.services.length === 0) {
+    wrapper.innerHTML = `<div style="text-align:center; padding:16px; color:var(--text-muted); font-size:12px;">No hay servicios agregados. Selecciona del catálogo o añade fila libre.</div>`;
+    recalcEditTotals();
+    return;
+  }
+
+  const rows = tempEditOrderState.services
+    .map((s, idx) => `
+      <tr style="border-bottom:1px solid var(--border-subtle);">
+        <td style="padding:6px 8px; width:40%;">
+          <input type="text" value="${s.descripcion_servicio}" onchange="updateEditServiceField(${idx}, 'descripcion_servicio', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:700;" placeholder="Descripción" />
+        </td>
+        <td style="padding:6px 8px; width:25%;">
+          <select onchange="updateEditServiceTech(${idx}, this.value)" style="width:100%; padding:6px; border-radius:6px; font-size:12px; font-weight:700;">
+            <option value="">-- Sin asignar --</option>
+            ${(db.usuarios || [])
+              .filter((u) => u.rol === "tecnico" || u.rol === "outsourcing" || u.es_externo)
+              .map((u) => `<option value="${u.id_usuario}" ${s.tecnico_id === u.id_usuario ? "selected" : ""}>${u.nombre}</option>`)
+              .join("")}
+          </select>
+        </td>
+        <td style="padding:6px 8px; width:15%;">
+          <input type="number" step="0.5" min="0" value="${s.monto_servicio}" oninput="updateEditServiceField(${idx}, 'monto_servicio', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:900;" placeholder="Precio $" />
+        </td>
+        <td style="padding:6px 8px; width:15%;">
+          <input type="number" step="0.5" min="0" value="${s.comision_base_tecnico}" oninput="updateEditServiceField(${idx}, 'comision_base_tecnico', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:800; color:var(--renacer-gold);" placeholder="Comisión $" />
+        </td>
+        <td style="padding:6px 8px; text-align:center;">
+          <button type="button" class="btn btn--danger btn--xs" onclick="removeServiceFromEditOrder(${idx})" title="Eliminar fila" style="padding:5px 8px;">
+            <i class="fas fa-trash-alt"></i>
+          </button>
+        </td>
+      </tr>
+    `)
+    .join("");
+
+  wrapper.innerHTML = `
+    <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+      <thead>
+        <tr style="background:var(--bg-subtle); color:var(--text-muted); font-size:11px; text-transform:uppercase;">
+          <th style="padding:6px 8px; text-align:left;">Servicio / Trabajo</th>
+          <th style="padding:6px 8px; text-align:left;">Técnico Asignado</th>
+          <th style="padding:6px 8px; text-align:left;">Monto ($)</th>
+          <th style="padding:6px 8px; text-align:left;">Comisión ($)</th>
+          <th style="padding:6px 8px; text-align:center;">Quitar</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  `;
+
+  recalcEditTotals();
+}
+
+function updateEditServiceField(idx, field, val) {
+  if (!tempEditOrderState.services[idx]) return;
+  if (field === "monto_servicio" || field === "comision_base_tecnico") {
+    tempEditOrderState.services[idx][field] = Number(val) || 0;
+  } else {
+    tempEditOrderState.services[idx][field] = val;
+  }
+  recalcEditTotals();
+}
+
+function updateEditServiceTech(idx, techId) {
+  if (!tempEditOrderState.services[idx]) return;
+  tempEditOrderState.services[idx].tecnico_id = techId;
+  const u = (db.usuarios || []).find((x) => x.id_usuario === techId);
+  tempEditOrderState.services[idx].nombre_tecnico = u ? u.nombre : "Sin asignar";
+}
+
+function addServiceToEditOrder() {
+  const sel = document.getElementById("edit-select-cat-service");
+  if (!sel || !sel.value) {
+    showToast("Selecciona un servicio del catálogo.", "info");
+    return;
+  }
+  const cat = (db.catalogo_servicios || []).find((c) => c.id_cat === sel.value);
+  if (!cat) return;
+
+  tempEditOrderState.services.push({
+    id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+    descripcion_servicio: cat.nombre,
+    monto_servicio: Number(cat.precio_sugerido) || 25,
+    comision_base_tecnico: Number(cat.comision_sugerida) || 8,
+    tecnico_id: "",
+    nombre_tecnico: "Sin asignar",
+    estado_subtarea: "pendiente",
+    minutos_acumulados: 0
+  });
+
+  sel.value = "";
+  renderEditServicesTable();
+}
+
+function addCustomServiceToEditOrder() {
+  tempEditOrderState.services.push({
+    id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+    descripcion_servicio: "Servicio Adicional",
+    monto_servicio: 10,
+    comision_base_tecnico: 3,
+    tecnico_id: "",
+    nombre_tecnico: "Sin asignar",
+    estado_subtarea: "pendiente",
+    minutos_acumulados: 0
+  });
+  renderEditServicesTable();
+}
+
+function removeServiceFromEditOrder(idx) {
+  tempEditOrderState.services.splice(idx, 1);
+  renderEditServicesTable();
+}
+
+function toggleEditSparesSection(checked) {
+  tempEditOrderState.comproRepuestosTaller = checked;
+  const box = document.getElementById("edit-spares-box");
+  if (box) {
+    if (checked) box.classList.remove("hidden");
+    else box.classList.add("hidden");
+  }
+  recalcEditTotals();
+}
+
+function renderEditSparesTable() {
+  const wrapper = document.getElementById("edit-spares-list-wrapper");
+  if (!wrapper) return;
+
+  if (tempEditOrderState.repuestos.length === 0) {
+    wrapper.innerHTML = `<div style="font-size:11.5px; color:var(--text-muted); padding:6px 0;">No se han agregado repuestos aún.</div>`;
+    return;
+  }
+
+  const rows = tempEditOrderState.repuestos
+    .map((r, idx) => `
+      <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-subtle); padding:6px 10px; border-radius:8px; margin-bottom:4px; font-size:12px;">
+        <div><strong>${r.nombre}</strong> (x${r.cantidad})</div>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <span style="font-weight:800; color:#38bdf8;">$${(Number(r.precio_unitario) * Number(r.cantidad)).toFixed(2)}</span>
+          <button type="button" class="btn btn--danger btn--xs" onclick="removeSpareFromEditOrder(${idx})" style="padding:2px 6px;">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      </div>
+    `)
+    .join("");
+
+  wrapper.innerHTML = rows;
+  recalcEditTotals();
+}
+
+function addSpareToEditOrder() {
+  const sel = document.getElementById("edit-select-spare-inv");
+  const qtyEl = document.getElementById("edit-spare-qty");
+  if (!sel || !sel.value) return;
+
+  const item = (db.inventario_repuestos || []).find((r) => r.id_repuesto === sel.value);
+  if (!item) return;
+  const qty = Math.max(1, Number(qtyEl.value) || 1);
+
+  tempEditOrderState.repuestos.push({
+    id_repuesto: item.id_repuesto,
+    nombre: item.nombre,
+    cantidad: qty,
+    precio_unitario: Number(item.precio_venta) || 0,
+    subtotal: (Number(item.precio_venta) || 0) * qty
+  });
+
+  sel.value = "";
+  qtyEl.value = "1";
+  renderEditSparesTable();
+}
+
+function removeSpareFromEditOrder(idx) {
+  tempEditOrderState.repuestos.splice(idx, 1);
+  renderEditSparesTable();
+}
+
+function recalcEditTotals() {
+  const servTotal = tempEditOrderState.services.reduce((acc, s) => acc + (Number(s.monto_servicio) || 0), 0);
+  const repTotal = tempEditOrderState.comproRepuestosTaller
+    ? tempEditOrderState.repuestos.reduce((acc, r) => acc + (Number(r.subtotal) || (Number(r.precio_unitario) * Number(r.cantidad)) || 0), 0)
+    : 0;
+  const grandTotal = servTotal + repTotal;
+
+  const order = db.ordenes.find((o) => o.id_orden === tempEditOrderState.orderId);
+  const abonado = order ? Number(order.monto_abonado) || 0 : 0;
+  const saldo = Math.max(0, grandTotal - abonado);
+
+  const gtEl = document.getElementById("edit-order-grand-total");
+  const saldoEl = document.getElementById("edit-order-saldo");
+  if (gtEl) gtEl.textContent = "$" + grandTotal.toFixed(2);
+  if (saldoEl) {
+    saldoEl.textContent = "$" + saldo.toFixed(2);
+    saldoEl.style.color = saldo > 0 ? "#f87171" : "#22c55e";
+  }
+}
+
+function saveEditedCompleteOrder(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+
+  const troquel = (document.getElementById("edit-ord-troquel")?.value || "").trim();
+  const estado = document.getElementById("edit-ord-estado")?.value || order.estado_actual;
+  const condPago = document.getElementById("edit-ord-pago-condicion")?.value || order.tipo_condicion_pago;
+  const isPriority = Boolean(document.getElementById("edit-ord-priority")?.checked);
+
+  const cliName = (document.getElementById("edit-cli-name")?.value || "").trim();
+  const cliDoc = (document.getElementById("edit-cli-doc")?.value || "").trim();
+  const cliPhone = (document.getElementById("edit-cli-phone")?.value || "").trim();
+  const cliAddr = (document.getElementById("edit-cli-address")?.value || "").trim();
+  const cliType = document.getElementById("edit-cli-type")?.value || "particular";
+
+  const pieza = document.getElementById("edit-ord-pieza")?.value || order.datos_motor.tipo_pieza;
+  const marca = (document.getElementById("edit-ord-marca")?.value || "").trim();
+  const modelo = (document.getElementById("edit-ord-modelo")?.value || "").trim();
+  const serial = (document.getElementById("edit-ord-serial")?.value || "").trim();
+  const obs = (document.getElementById("edit-ord-obs")?.value || "").trim();
+
+  if (!troquel || !cliName || !cliDoc || !marca || !modelo) {
+    showToast("Por favor completa los campos obligatorios (*).", "error");
+    return;
+  }
+
+  // Actualizar campos de la orden
+  order.codigo_troquel = troquel;
+  order.estado_actual = estado;
+  order.tipo_condicion_pago = condPago;
+  order.prioridad_alta = isPriority;
+
+  order.nombre_cliente = cliName;
+  order.documento_cliente = cliDoc;
+  order.telefono_cliente = cliPhone;
+  order.direccion_cliente = cliAddr;
+  order.tipo_cliente = cliType;
+
+  order.datos_motor.tipo_pieza = pieza;
+  order.datos_motor.marca = marca;
+  order.datos_motor.modelo = modelo;
+  order.datos_motor.serial = serial;
+  order.datos_motor.observaciones = obs;
+
+  order.repuestos_comprados_taller = tempEditOrderState.comproRepuestosTaller;
+  order.items_repuestos = tempEditOrderState.repuestos;
+
+  // Reemplazar subtareas de esta orden
+  db.subtareas = db.subtareas.filter((s) => s.orden_id !== orderId);
+  tempEditOrderState.services.forEach((s) => {
+    db.subtareas.push({
+      id_subtarea: s.id_subtarea || "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+      orden_id: orderId,
+      codigo_troquel: troquel,
+      descripcion_servicio: s.descripcion_servicio,
+      tecnico_id: s.tecnico_id || "",
+      nombre_tecnico: s.nombre_tecnico || "Sin asignar",
+      monto_servicio: Number(s.monto_servicio) || 0,
+      comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
+      estado_subtarea: s.estado_subtarea || "pendiente",
+      minutos_acumulados: s.minutos_acumulados || 0
+    });
+  });
+
+  // Calcular totales actualizados
+  const servTotal = tempEditOrderState.services.reduce((acc, s) => acc + (Number(s.monto_servicio) || 0), 0);
+  const repTotal = tempEditOrderState.comproRepuestosTaller
+    ? tempEditOrderState.repuestos.reduce((acc, r) => acc + (Number(r.subtotal) || (Number(r.precio_unitario) * Number(r.cantidad)) || 0), 0)
+    : 0;
+  order.monto_total = servTotal + repTotal;
+  order.saldo_pendiente = Math.max(0, order.monto_total - (Number(order.monto_abonado) || 0));
+
+  // Registrar en bitácora
+  db.bitacora.push({
+    id_mensaje: "MSG-" + Date.now(),
+    orden_id: order.id_orden,
+    codigo_troquel: order.codigo_troquel,
+    autor_id: currentUser ? currentUser.id_usuario : "USR-ADMIN",
+    autor_nombre: currentUser ? currentUser.nombre : "Sistema",
+    autor_rol: currentUser ? currentUser.rol_label : "Administrador",
+    tipo_evento: "modificacion",
+    mensaje: `Modificación completa guardada para Orden #${troquel}. Total: $${order.monto_total.toFixed(2)}.`,
+    foto_adjunta_url: "",
+    fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+  });
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  showToast(`Orden #${troquel} actualizada correctamente.`);
+}
+
+function cancelOrArchiveFromEditModal(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+
+  Swal.fire({
+    title: `¿Anular o Archivar la Orden #${order.codigo_troquel}?`,
+    text: "Selecciona la acción requerida. Al anular, se conserva el correlativo para auditoría sin deuda.",
+    icon: "warning",
+    showDenyButton: true,
+    showCancelButton: true,
+    confirmButtonText: "🚫 Anular Orden",
+    confirmButtonColor: "#ef4444",
+    denyButtonText: "📦 Archivar Orden",
+    denyButtonColor: "#0284c7",
+    cancelButtonText: "Cancelar"
+  }).then((res) => {
+    if (res.isConfirmed) {
+      Swal.fire({
+        title: "Motivo de la Anulación",
+        input: "text",
+        inputPlaceholder: "Ej: Cliente retiró la pieza sin trabajo / Error de ingreso",
+        showCancelButton: true,
+        confirmButtonText: "Confirmar Anulación",
+        cancelButtonText: "Cancelar"
+      }).then((r) => {
+        if (r.isConfirmed && r.value) {
+          order.estado_actual = "anulado";
+          order.motivo_anulacion = r.value;
+          order.saldo_pendiente = 0;
+          saveDatabase();
+          closeModal();
+          renderApp();
+          showToast(`Orden #${order.codigo_troquel} anulada.`);
+        }
+      });
+    } else if (res.isDenied) {
+      archiveOrder(orderId);
+      closeModal();
+    }
+  });
+}
+
+/* ============================================================================
+   CONTROL DE ASISTENCIA PRESENCIAL POR QR DINÁMICO (ANTI-FRAUDE 45S)
+   ============================================================================ */
+let kioskTimerInterval = null;
+let html5QrCodeScannerInstance = null;
+
+function openAttendanceKioskModal() {
+  if (kioskTimerInterval) clearInterval(kioskTimerInterval);
+
+  let secondsLeft = 45;
+
+  openModal({
+    title: "Kiosco de Asistencia Presencial (QR Dinámico Anti-Fraude)",
+    icon: "fa-qrcode",
+    wide: false,
+    body: `
+      <div class="attendance-kiosk-wrapper">
+        <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
+          <i class="fas fa-shield-alt" style="color:var(--renacer-gold);"></i> 
+          <strong>Verificación de Presencia Física en Taller</strong>
+        </div>
+        <p style="font-size:12px; color:var(--text-main); margin-bottom:12px;">
+          Los técnicos deben escanear este código en vivo desde la app en su teléfono móvil. Se regenera automáticamente cada 45 segundos para impedir reenvíos de foto por WhatsApp desde casa.
+        </p>
+
+        <div class="attendance-qr-card">
+          <div id="kiosk-qr-canvas"></div>
+        </div>
+
+        <div id="kiosk-timer-display" class="qr-countdown-badge">
+          <i class="fas fa-stopwatch"></i> Actualizando en: <strong id="kiosk-secs-num">45</strong>s
+        </div>
+
+        <div style="margin-top:18px; display:flex; gap:8px; width:100%; justify-content:center;">
+          <button type="button" class="btn btn--ghost btn--sm" onclick="promptManualPinAttendance()" style="font-size:12px;">
+            <i class="fas fa-keyboard"></i> Registrar PIN Manual
+          </button>
+          <button type="button" class="btn btn--primary btn--sm" onclick="generateNewKioskQr()" style="font-size:12px;">
+            <i class="fas fa-sync-alt"></i> Regenerar Ahora
+          </button>
+        </div>
+      </div>
+    `
+  });
+
+  window.generateNewKioskQr = function() {
+    const canvasBox = document.getElementById("kiosk-qr-canvas");
+    if (!canvasBox) return;
+    canvasBox.innerHTML = "";
+    secondsLeft = 45;
+
+    const token = `RENACER_PRESENCIAL|${Date.now()}|${Math.floor(100000 + Math.random() * 900000)}`;
+
+    if (typeof QRCode !== "undefined") {
+      new QRCode(canvasBox, {
+        text: token,
+        width: 240,
+        height: 240,
+        colorDark: "#0f1638",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    } else {
+      canvasBox.innerHTML = `<div style="padding:40px; font-weight:800; color:#ef4444;">Error cargando librería QRCode</div>`;
+    }
+  };
+
+  generateNewKioskQr();
+
+  kioskTimerInterval = setInterval(() => {
+    secondsLeft--;
+    const numEl = document.getElementById("kiosk-secs-num");
+    const badgeEl = document.getElementById("kiosk-timer-display");
+    if (numEl) numEl.textContent = secondsLeft;
+    if (badgeEl) {
+      if (secondsLeft <= 10) badgeEl.classList.add("warning");
+      else badgeEl.classList.remove("warning");
+    }
+    if (secondsLeft <= 0) {
+      generateNewKioskQr();
+    }
+  }, 1000);
+}
+
+function openTechnicianQrScanModal() {
+  if (html5QrCodeScannerInstance) {
+    try {
+      html5QrCodeScannerInstance.stop().catch(() => {});
+    } catch (e) {}
+  }
+
+  openModal({
+    title: "Escanear QR de Asistencia Presencial",
+    icon: "fa-camera",
+    wide: false,
+    body: `
+      <div style="text-align:center; padding:12px;">
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
+          Apunta la cámara de tu teléfono a la pantalla de recepción para validar tu asistencia presencial de hoy.
+        </p>
+
+        <div id="tech-qr-reader" class="attendance-scanner-box"></div>
+
+        <div id="tech-scan-status" style="font-size:12px; font-weight:800; color:var(--text-main); margin-top:12px;">
+          <i class="fas fa-camera"></i> Iniciando cámara...
+        </div>
+
+        <div style="margin-top:14px;">
+          <button type="button" class="btn btn--ghost btn--sm" onclick="promptManualPinAttendance()">
+            ¿Problemas con la cámara? Registrar con PIN
+          </button>
+        </div>
+      </div>
+    `
+  });
+
+  setTimeout(() => {
+    if (typeof Html5Qrcode === "undefined") {
+      const statusEl = document.getElementById("tech-scan-status");
+      if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Error: Librería Html5Qrcode no encontrada.</span>`;
+      return;
+    }
+
+    html5QrCodeScannerInstance = new Html5Qrcode("tech-qr-reader");
+    html5QrCodeScannerInstance
+      .start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
+        (decodedText) => {
+          handleScannedAttendanceToken(decodedText);
+        },
+        () => {}
+      )
+      .then(() => {
+        const statusEl = document.getElementById("tech-scan-status");
+        if (statusEl) statusEl.innerHTML = `<span style="color:#22c55e;"><i class="fas fa-check-circle"></i> Cámara lista. Escaneando código en pantalla...</span>`;
+      })
+      .catch((err) => {
+        const statusEl = document.getElementById("tech-scan-status");
+        if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> No se pudo activar la cámara (${err}). Usa la opción de PIN.</span>`;
+      });
+  }, 350);
+}
+
+function handleScannedAttendanceToken(token) {
+  if (!token || !token.startsWith("RENACER_PRESENCIAL|")) {
+    showToast("Código QR no válido para asistencia de Renacer.", "error");
+    return;
+  }
+
+  const parts = token.split("|");
+  const timestamp = Number(parts[1]) || 0;
+  const ageMs = Date.now() - timestamp;
+
+  // Verificación anti-fraude: menos de 90 segundos
+  if (ageMs > 90000) {
+    Swal.fire({
+      icon: "error",
+      title: "Código QR Expirado",
+      text: "El código escaneado ha vencido o fue tomado de una fotografía vieja. Debes escanear el código que se está mostrando en vivo en la pantalla del taller."
+    });
+    return;
+  }
+
+  if (html5QrCodeScannerInstance) {
+    html5QrCodeScannerInstance.stop().catch(() => {});
+  }
+
+  recordAttendanceSuccess("qr_dinamico_presencial");
+}
+
+function promptManualPinAttendance() {
+  const users = (db.usuarios || []).filter((u) => u.activo && (u.rol === "tecnico" || u.rol === "admin" || u.rol === "jefe_taller"));
+  const optionsHtml = users.map((u) => `<option value="${u.id_usuario}">${u.nombre} (${u.rol_label || u.rol})</option>`).join("");
+
+  Swal.fire({
+    title: "Registro de Asistencia con PIN",
+    html: `
+      <div style="text-align:left; font-size:13px; display:grid; gap:10px;">
+        <div>
+          <label style="font-weight:700;">Selecciona tu Nombre:</label>
+          <select id="swal-pin-user" class="swal2-input" style="width:100%; margin:4px 0 10px 0; font-size:13px;">
+            ${optionsHtml}
+          </select>
+        </div>
+        <div>
+          <label style="font-weight:700;">PIN Numérico:</label>
+          <input type="password" id="swal-pin-code" class="swal2-input" inputmode="numeric" placeholder="Ingresa tu PIN" style="width:100%; margin:4px 0 0 0;" />
+        </div>
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: "Registrar Asistencia",
+    confirmButtonColor: "#f5c400",
+    cancelButtonText: "Cancelar",
+    preConfirm: () => {
+      const uId = document.getElementById("swal-pin-user")?.value;
+      const pin = document.getElementById("swal-pin-code")?.value;
+      if (!uId || !pin) {
+        Swal.showValidationMessage("Selecciona tu usuario e ingresa el PIN.");
+        return false;
+      }
+      const user = db.usuarios.find((x) => x.id_usuario === uId);
+      if (!user || String(user.pin || "000000").trim() !== pin.trim()) {
+        Swal.showValidationMessage("PIN incorrecto.");
+        return false;
+      }
+      return user;
+    }
+  }).then((res) => {
+    if (res.isConfirmed && res.value) {
+      recordAttendanceSuccess("pin_manual_kiosco", res.value);
+    }
+  });
+}
+
+function recordAttendanceSuccess(method, targetUser = null) {
+  const user = targetUser || currentUser || db.usuarios.find((u) => u.rol === "tecnico") || db.usuarios[0];
+  const now = new Date();
+  const todayIso = now.toISOString().slice(0, 10);
+
+  // Verificación de puntualidad (después de 8:15 AM se considera tardanza)
+  const isLate = now.getHours() > 8 || (now.getHours() === 8 && now.getMinutes() > 15);
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const record = {
+    id_asist: "ASI-" + Date.now(),
+    fecha: todayIso,
+    usuario_id: user.id_usuario,
+    nombre: user.nombre,
+    hora_registro: timeStr,
+    hora_entrada: timeStr,
+    estado: isLate ? "Tardanza" : "Puntual",
+    metodo: method,
+    observacion: isLate
+      ? "Llegada posterior a las 8:15 AM (Tardanza registrada - Deducción en nómina semanal)"
+      : "Asistencia presencial verificada puntual en taller",
+    dispositivo: navigator.userAgent.slice(0, 50)
+  };
+
+  db.asistencias.unshift(record);
+  saveDatabase();
+  closeModal();
+
+  Swal.fire({
+    icon: isLate ? "warning" : "success",
+    title: isLate ? "¡Asistencia Registrada con Tardanza!" : "¡Asistencia Registrada Puntual!",
+    html: `
+      <div style="font-size:14px; line-height:1.6;">
+        <p><strong>${user.nombre}</strong></p>
+        <p>Hora: <strong>${timeStr}</strong> · Estado: <strong style="color:${isLate ? '#f59e0b' : '#22c55e'};">${isLate ? 'Tardanza' : 'Puntual'}</strong></p>
+        <p style="font-size:12px; color:#94a3b8;">${record.observacion}</p>
+      </div>
+    `,
+    confirmButtonColor: "#f5c400"
+  });
+
+  if (currentTab === "attendance" || currentTab === "commissions_hr") {
+    renderScreen();
+  }
+}
+
+/* ============================================================================
+   PLANILLA / HOJA DE SERVICIO EN FORMATO TABLA / EXCEL (RECTIFICADORA RENACER)
+   ============================================================================ */
+function printOrderExcelSheet(orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) {
+    showToast("Orden no encontrada.", "error");
+    return;
+  }
+
+  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  const repuestos = Array.isArray(order.items_repuestos) ? order.items_repuestos : [];
+
+  let itemsHtml = "";
+  let counter = 1;
+
+  subtasks.forEach((s) => {
+    itemsHtml += `
+      <tr>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${counter++}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${s.descripcion_servicio}</strong></td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">Servicio Técnico</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;">${s.nombre_tecnico || "Taller Renacer"}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">1</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right;">$${Number(s.monto_servicio).toFixed(2)}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right; font-weight:800;">$${Number(s.monto_servicio).toFixed(2)}</td>
+      </tr>
+    `;
+  });
+
+  repuestos.forEach((r) => {
+    const sub = (Number(r.precio_unitario) || 0) * (Number(r.cantidad) || 1);
+    itemsHtml += `
+      <tr>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${counter++}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${r.nombre}</strong> (Repuesto)</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">Repuesto Taller</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;">Inventario Javier Andrade</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${r.cantidad}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right;">$${Number(r.precio_unitario).toFixed(2)}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right; font-weight:800;">$${sub.toFixed(2)}</td>
+      </tr>
+    `;
+  });
+
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    showToast("Por favor permite las ventanas emergentes para imprimir la planilla.", "warning");
+    return;
+  }
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <title>Planilla de Control y Hoja de Servicio - Orden #${order.codigo_troquel}</title>
+      <style>
+        body {
+          font-family: 'Segoe UI', Arial, sans-serif;
+          color: #0f172a;
+          margin: 20px;
+          line-height: 1.4;
+          font-size: 13px;
+        }
+        .header-box {
+          border-bottom: 2px solid #0f1638;
+          padding-bottom: 12px;
+          margin-bottom: 16px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .title-company {
+          font-size: 22px;
+          font-weight: 900;
+          color: #0f1638;
+          letter-spacing: 0.5px;
+        }
+        .biblical-quote {
+          font-style: italic;
+          font-size: 11px;
+          color: #b45309;
+          font-weight: bold;
+        }
+        .order-badge-box {
+          text-align: right;
+          background: #f8fafc;
+          border: 2px solid #cbd5e1;
+          border-radius: 8px;
+          padding: 8px 14px;
+        }
+        .grid-info {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        .info-card {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 10px 14px;
+        }
+        .info-card h4 {
+          margin: 0 0 6px 0;
+          font-size: 12px;
+          color: #0f1638;
+          text-transform: uppercase;
+          border-bottom: 1px solid #e2e8f0;
+          padding-bottom: 4px;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 16px;
+        }
+        th {
+          background: #0f1638;
+          color: #ffffff;
+          padding: 8px 10px;
+          font-size: 11px;
+          text-transform: uppercase;
+        }
+        .totals-table {
+          width: 320px;
+          margin-left: auto;
+          margin-bottom: 16px;
+        }
+        .policies-box {
+          background: #fffbeb;
+          border: 1px dashed #d97706;
+          border-radius: 8px;
+          padding: 10px 14px;
+          font-size: 11px;
+          margin-bottom: 24px;
+        }
+        .signatures-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1fr;
+          gap: 20px;
+          margin-top: 40px;
+          text-align: center;
+        }
+        .sig-line {
+          border-top: 1px solid #475569;
+          padding-top: 6px;
+          font-size: 11.5px;
+          font-weight: bold;
+        }
+        @media print {
+          body { margin: 0; }
+          .no-print { display: none; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header-box">
+        <div>
+          <div class="title-company">RECTIFICADORA RENACER C.A.</div>
+          <div class="biblical-quote">"Aunque tu principio haya sido pequeño, tu postrer estado será muy grande." (Job 8:7)</div>
+          <div style="font-size:11px; color:#64748b; margin-top:3px;">
+            Especialistas en Rectificación de Motores, Cámaras, Cigüeñales y Bloques · Maracaibo, Zulia
+          </div>
+        </div>
+        <div class="order-badge-box">
+          <div style="font-size:11px; color:#64748b; font-weight:bold;">HOJA DE SERVICIO</div>
+          <div style="font-size:22px; font-weight:900; color:#0f1638; font-family:monospace;">ORDEN #${order.codigo_troquel}</div>
+          <div style="font-size:11px; color:#0284c7; font-weight:bold;">Fecha: ${formatDateHuman(order.fecha_ingreso, false)}</div>
+        </div>
+      </div>
+
+      <div class="grid-info">
+        <div class="info-card">
+          <h4>Datos del Cliente / Taller</h4>
+          <div><strong>Cliente:</strong> ${order.nombre_cliente}</div>
+          <div><strong>Cédula / RIF:</strong> ${order.documento_cliente}</div>
+          <div><strong>Teléfono:</strong> ${order.telefono_cliente}</div>
+          <div><strong>Dirección:</strong> ${order.direccion_cliente || "No especificada"}</div>
+          <div><strong>Tipo de Cliente:</strong> ${order.tipo_cliente || "Particular"}</div>
+        </div>
+        <div class="info-card">
+          <h4>Datos Técnicos de la Pieza / Motor</h4>
+          <div><strong>Pieza:</strong> ${order.datos_motor.tipo_pieza || "Cámara"}</div>
+          <div><strong>Vehículo / Marca:</strong> ${order.datos_motor.marca} ${order.datos_motor.modelo || ""}</div>
+          <div><strong>Serial Fundición:</strong> ${order.datos_motor.serial || "S/N"}</div>
+          <div><strong>Diagnóstico Inicial:</strong> ${order.datos_motor.observaciones || "Ingreso regular a taller"}</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th style="text-align:left;">Descripción del Trabajo / Repuesto</th>
+            <th>Categoría</th>
+            <th style="text-align:left;">Responsable</th>
+            <th>Cant.</th>
+            <th style="text-align:right;">P. Unit ($)</th>
+            <th style="text-align:right;">Total ($)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemsHtml}
+        </tbody>
+      </table>
+
+      <table class="totals-table">
+        <tr>
+          <td style="padding:4px 8px; font-weight:bold;">Total Facturado:</td>
+          <td style="padding:4px 8px; text-align:right; font-weight:900; font-size:16px;">$${Number(order.monto_total).toFixed(2)}</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 8px; color:#16a34a; font-weight:bold;">Monto Abonado:</td>
+          <td style="padding:4px 8px; text-align:right; color:#16a34a; font-weight:900;">$${Number(order.monto_abonado).toFixed(2)}</td>
+        </tr>
+        <tr style="border-top:2px solid #0f1638;">
+          <td style="padding:6px 8px; font-weight:bold; color:${order.saldo_pendiente > 0 ? '#dc2626' : '#16a34a'};">Saldo Pendiente:</td>
+          <td style="padding:6px 8px; text-align:right; font-weight:900; font-size:16px; color:${order.saldo_pendiente > 0 ? '#dc2626' : '#16a34a'};">$${Number(order.saldo_pendiente).toFixed(2)}</td>
+        </tr>
+      </table>
+
+      <div class="policies-box">
+        <strong style="text-transform:uppercase; color:#b45309;">Políticas Oficiales y Términos de Garantía Renacer:</strong>
+        <ol style="margin:4px 0 0 18px; padding:0;">
+          <li><strong>Garantía Oficial de 1 Año:</strong> Garantía de 365 días sobre tolerancias de rectificación y cepillado (no cubre recalentamiento severo posterior por falta de refrigerante).</li>
+          <li><strong>Plazo de Aprobación:</strong> El cliente dispone de un plazo mínimo de 3 días para aprobar presupuesto o retirar piezas.</li>
+          <li><strong>Custodia y Retiro:</strong> La rectificadora no asume responsabilidad por piezas tras 30 días sin concretar trabajo. Retiro exclusivo previa liquidación del 100%.</li>
+          <li><strong>Ajustes por Limpieza:</strong> Daños o fisuras internas descubiertas durante el baño químico serán notificadas de inmediato.</li>
+        </ol>
+      </div>
+
+      <div class="signatures-grid">
+        <div class="sig-line">
+          Firma Técnico Especialista
+        </div>
+        <div class="sig-line">
+          Firma Control de Calidad
+        </div>
+        <div class="sig-line">
+          Firma y Cédula del Cliente
+        </div>
+      </div>
+
+      <div class="no-print" style="margin-top:30px; text-align:center;">
+        <button type="button" onclick="window.print()" style="padding:10px 20px; font-size:14px; font-weight:bold; background:#0f1638; color:#fff; border:none; border-radius:6px; cursor:pointer;">
+          🖨️ Imprimir Hoja de Servicio
+        </button>
+      </div>
+
+      <script>
+        window.onload = function() {
+          setTimeout(() => { window.print(); }, 400);
+        };
+      </script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+}
 /* ============================================================================
    INSTALACIÓN PWA Y ARRANQUE AUTOMÁTICO CON RELOJ EN TIEMPO REAL
    ============================================================================ */
