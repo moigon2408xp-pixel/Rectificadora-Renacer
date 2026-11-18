@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.18.v22";
+const CURRENT_APP_VERSION = "2026.11.18.v25";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -269,12 +269,12 @@ function getInitialDatabase() {
         id_usuario: "USR-JESUS",
         nombre: "Jesús Andrade",
         rol: "jefe_taller",
-        rol_label: "Jefe de Taller",
+        rol_label: "Jefe de Taller / Gerencia",
         especialidad: "Dirección de Taller, Control de Calidad, Finanzas y Comisiones",
         pin: "123456",
         telefono: "0414-6001122",
         salario_fijo_semanal: 100,
-        huella_registrada: false,
+        huella_registrada: true,
         activo: true,
         modalidad_horario: "Tiempo Completo (Jefe de Taller)"
       },
@@ -282,7 +282,7 @@ function getInitialDatabase() {
         id_usuario: "USR-ENRIQUE",
         nombre: "Sr. Enrique Andrade",
         rol: "jefe_taller",
-        rol_label: "Jefe de Taller",
+        rol_label: "Jefe de Taller / Gerencia",
         especialidad: "Diagnóstico Maestro, Asignación, Supervisión y Cobranzas",
         pin: "111111",
         telefono: "0414-6003344",
@@ -295,7 +295,7 @@ function getInitialDatabase() {
         id_usuario: "USR-RECEPCION",
         nombre: "Recepción Taller",
         rol: "recepcion",
-        rol_label: "Recepción e Ingreso (Teléfono Fijo)",
+        rol_label: "Recepción e Ingreso",
         especialidad: "Atención al Cliente, Fotos de Ingreso y Presupuestos",
         pin: "222222",
         telefono: "0412-0001122",
@@ -303,45 +303,24 @@ function getInitialDatabase() {
         modalidad_horario: "8:00 AM - 1:00 PM / 3:00 PM - 8:00 PM"
       },
       {
-        id_usuario: "USR-HEIBER",
-        nombre: "Heiber",
-        rol: "tecnico",
-        rol_label: "Técnico Rectificador Senior",
-        especialidad: "Aplanado, Cambio de Guías, Asientos y Calibración",
-        pin: "000000",
-        telefono: "0424-6112233",
+        id_usuario: "USR-JAVIER",
+        nombre: "Javier Andrade",
+        rol: "inventario",
+        rol_label: "Inventario y Repuestos",
+        especialidad: "Control de Repuestos, Stock de Válvulas, Guías, Sellos y Empacaduras",
+        pin: "333333",
+        telefono: "0414-6005566",
+        salario_fijo_semanal: 80,
         activo: true,
-        modalidad_horario: "Jornada Completa (8am-1pm / 3pm-8pm)"
-      },
-      {
-        id_usuario: "USR-JEISON",
-        nombre: "Jeison",
-        rol: "tecnico",
-        rol_label: "Técnico de Cámaras y Válvulas",
-        especialidad: "Desarme, Lavado Químico, Asentamiento y Armado",
-        pin: "000000",
-        telefono: "0412-6445566",
-        activo: true,
-        modalidad_horario: "Medio Turno Mañana (Estudia en la tarde)"
-      },
-      {
-        id_usuario: "USR-CARLOS",
-        nombre: "Carlos",
-        rol: "tecnico",
-        rol_label: "Técnico Soldadura y Bloques",
-        especialidad: "Soldadura en Aluminio, Prueba Hidrostática y Cepillado",
-        pin: "000000",
-        telefono: "0414-6778899",
-        activo: true,
-        modalidad_horario: "Jornada Completa (8am-1pm / 3pm-8pm)"
+        modalidad_horario: "Tiempo Completo (Inventario)"
       },
       {
         id_usuario: "USR-HAVELL",
         nombre: "Havell Bracho",
         rol: "tecnico",
-        rol_label: "Técnico Especialista de Cámaras",
+        rol_label: "Trabajador de Taller",
         especialidad: "Servicio de Cámara, Cepillada y Armado",
-        pin: "000000",
+        pin: "444444",
         telefono: "0412-5551122",
         activo: true,
         modalidad_horario: "Jornada Completa"
@@ -350,9 +329,9 @@ function getInitialDatabase() {
         id_usuario: "USR-ANGEL",
         nombre: "Angel",
         rol: "tecnico",
-        rol_label: "Técnico Lavado y Químico",
+        rol_label: "Trabajador de Taller",
         especialidad: "Lavado Químico y Descarbonizado",
-        pin: "000000",
+        pin: "555555",
         telefono: "0414-5552233",
         activo: true,
         modalidad_horario: "Jornada Completa"
@@ -361,25 +340,12 @@ function getInitialDatabase() {
         id_usuario: "USR-JOSE",
         nombre: "Jose Villasmil",
         rol: "tecnico",
-        rol_label: "Técnico Calibración y Válvulas",
+        rol_label: "Trabajador de Taller",
         especialidad: "Calibración, Asientos y Válvulas",
-        pin: "000000",
+        pin: "666666",
         telefono: "0424-5553344",
         activo: true,
         modalidad_horario: "Jornada Completa"
-      },
-      {
-        id_usuario: "USR-SOLTECA",
-        nombre: "Rectificadora Solteca",
-        rol: "outsourcing",
-        tipo: "taller_externo",
-        rol_label: "Taller Externo Aliado (Outsourcing)",
-        especialidad: "Rectificación de Cigüeñal, Bancadas y Encamisado Especial",
-        pin: "000000",
-        telefono: "0414-SOLTECA",
-        activo: true,
-        es_externo: true,
-        modalidad_horario: "Tercerizado Externo"
       }
     ],
     catalogo: [
@@ -772,84 +738,126 @@ function normalizeDatabaseSchema(d) {
     d.cuentas_por_pagar = getInitialDatabase().cuentas_por_pagar || [];
   }
 
-  if (!Array.isArray(d.usuarios) || d.usuarios.length === 0) {
-    d.usuarios = getInitialDatabase().usuarios;
-  } else {
-    // Asegurar usuario Moises Gonzalez con nombre sin acentos y PIN 240804
-    const moises = d.usuarios.find(
-      (u) => u.id_usuario === "USR-MOISES" || (u.nombre && u.nombre.toLowerCase().includes("moises"))
-    );
-    if (moises) {
-      moises.nombre = "Moises Gonzalez";
-      moises.pin = "240804";
-      moises.rol = "admin";
-      moises.rol_label = "Administrador del Sistema";
+  // Lista estricta de usuarios y trabajadores reales de Rectificadora Renacer
+  const REAL_USERS = [
+    {
+      id_usuario: "USR-MOISES",
+      nombre: "Moises Gonzalez",
+      rol: "admin",
+      rol_label: "Administrador del Sistema",
+      especialidad: "Dirección General, Control Total y Auditoría del Taller",
+      pin: "240804",
+      telefono: "0414-0000000",
+      salario_fijo_semanal: 100,
+      huella_registrada: false,
+      activo: true,
+      modalidad_horario: "Acceso Total Administrador"
+    },
+    {
+      id_usuario: "USR-JESUS",
+      nombre: "Jesús Andrade",
+      rol: "jefe_taller",
+      rol_label: "Jefe de Taller / Gerencia",
+      especialidad: "Dirección de Taller, Control de Calidad, Finanzas y Comisiones",
+      pin: "123456",
+      telefono: "0414-6001122",
+      salario_fijo_semanal: 100,
+      huella_registrada: true,
+      activo: true,
+      modalidad_horario: "Tiempo Completo (Jefe de Taller)"
+    },
+    {
+      id_usuario: "USR-ENRIQUE",
+      nombre: "Sr. Enrique Andrade",
+      rol: "jefe_taller",
+      rol_label: "Jefe de Taller / Gerencia",
+      especialidad: "Diagnóstico Maestro, Asignación, Supervisión y Cobranzas",
+      pin: "111111",
+      telefono: "0414-6003344",
+      salario_fijo_semanal: 100,
+      huella_registrada: false,
+      activo: true,
+      modalidad_horario: "Tiempo Completo (Jefe de Taller)"
+    },
+    {
+      id_usuario: "USR-RECEPCION",
+      nombre: "Recepción Taller",
+      rol: "recepcion",
+      rol_label: "Recepción e Ingreso",
+      especialidad: "Atención al Cliente, Fotos de Ingreso y Presupuestos",
+      pin: "222222",
+      telefono: "0412-0001122",
+      activo: true,
+      modalidad_horario: "8:00 AM - 1:00 PM / 3:00 PM - 8:00 PM"
+    },
+    {
+      id_usuario: "USR-JAVIER",
+      nombre: "Javier Andrade",
+      rol: "inventario",
+      rol_label: "Inventario y Repuestos",
+      especialidad: "Control de Repuestos, Stock de Válvulas, Guías, Sellos y Empacaduras",
+      pin: "333333",
+      telefono: "0414-6005566",
+      salario_fijo_semanal: 80,
+      activo: true,
+      modalidad_horario: "Tiempo Completo (Inventario)"
+    },
+    {
+      id_usuario: "USR-HAVELL",
+      nombre: "Havell Bracho",
+      rol: "tecnico",
+      rol_label: "Trabajador de Taller",
+      especialidad: "Servicio de Cámara, Cepillada y Armado",
+      pin: "444444",
+      telefono: "0412-5551122",
+      activo: true,
+      modalidad_horario: "Jornada Completa"
+    },
+    {
+      id_usuario: "USR-ANGEL",
+      nombre: "Angel",
+      rol: "tecnico",
+      rol_label: "Trabajador de Taller",
+      especialidad: "Lavado Químico y Descarbonizado",
+      pin: "555555",
+      telefono: "0414-5552233",
+      activo: true,
+      modalidad_horario: "Jornada Completa"
+    },
+    {
+      id_usuario: "USR-JOSE",
+      nombre: "Jose Villasmil",
+      rol: "tecnico",
+      rol_label: "Trabajador de Taller",
+      especialidad: "Calibración, Asientos y Válvulas",
+      pin: "666666",
+      telefono: "0424-5553344",
+      activo: true,
+      modalidad_horario: "Jornada Completa"
     }
+  ];
 
-    // Asegurar trabajadores de taller (Havell, Angel, Jose) y Outsourcing (Rectificadora Solteca)
-    const defaultWorkers = [
-      {
-        id_usuario: "USR-HAVELL",
-        nombre: "Havell Bracho",
-        rol: "tecnico",
-        rol_label: "Técnico Especialista de Cámaras",
-        especialidad: "Servicio de Cámara, Cepillada y Armado",
-        pin: "000000",
-        telefono: "0412-5551122",
-        activo: true,
-        modalidad_horario: "Jornada Completa"
-      },
-      {
-        id_usuario: "USR-ANGEL",
-        nombre: "Angel",
-        rol: "tecnico",
-        rol_label: "Técnico Lavado y Químico",
-        especialidad: "Lavado Químico y Descarbonizado",
-        pin: "000000",
-        telefono: "0414-5552233",
-        activo: true,
-        modalidad_horario: "Jornada Completa"
-      },
-      {
-        id_usuario: "USR-JOSE",
-        nombre: "Jose Villasmil",
-        rol: "tecnico",
-        rol_label: "Técnico Calibración y Válvulas",
-        especialidad: "Calibración, Asientos y Válvulas",
-        pin: "000000",
-        telefono: "0424-5553344",
-        activo: true,
-        modalidad_horario: "Jornada Completa"
-      },
-      {
-        id_usuario: "USR-SOLTECA",
-        nombre: "Rectificadora Solteca",
-        rol: "outsourcing",
-        tipo: "taller_externo",
-        rol_label: "Taller Externo Aliado (Outsourcing)",
-        especialidad: "Rectificación de Cigüeñal, Bancadas y Encamisado Especial",
-        pin: "000000",
-        telefono: "0414-SOLTECA",
-        activo: true,
-        es_externo: true,
-        modalidad_horario: "Tercerizado Externo"
-      },
-      {
-        id_usuario: "USR-JAVIER",
-        nombre: "Javier Andrade",
-        rol: "inventario",
-        rol_label: "Encargado de Inventario y Repuestos",
-        especialidad: "Control de Repuestos, Stock de Válvulas, Guías, Sellos y Empacaduras",
-        pin: "1234",
-        telefono: "0414-6005566",
-        salario_fijo_semanal: 80,
-        activo: true,
-        modalidad_horario: "Tiempo Completo (Inventario)"
-      }
-    ];
-    defaultWorkers.forEach((dw) => {
-      if (!d.usuarios.some((u) => u.id_usuario === dw.id_usuario || (u.nombre && u.nombre.toLowerCase().trim() === dw.nombre.toLowerCase().trim()))) {
-        d.usuarios.push(dw);
+  const allowedIds = REAL_USERS.map((u) => u.id_usuario);
+  if (!Array.isArray(d.usuarios) || d.usuarios.length === 0) {
+    d.usuarios = REAL_USERS;
+  } else {
+    // Purgar inmediatamente cualquier usuario ficticio o de prueba anterior
+    d.usuarios = d.usuarios.filter((u) => allowedIds.includes(u.id_usuario));
+
+    // Garantizar que los 8 perfiles oficiales reales existan con sus roles y credenciales
+    REAL_USERS.forEach((ru) => {
+      let existing = d.usuarios.find((u) => u.id_usuario === ru.id_usuario);
+      if (!existing) {
+        d.usuarios.push(ru);
+      } else {
+        existing.nombre = ru.nombre;
+        existing.rol = ru.rol;
+        existing.rol_label = ru.rol_label;
+        existing.especialidad = ru.especialidad;
+        existing.activo = true;
+        if (!existing.pin || existing.pin === "000000" || existing.pin === "1234") {
+          existing.pin = ru.pin;
+        }
       }
     });
   }
@@ -1236,17 +1244,23 @@ function hydrateDatabaseFromSheets(cloudData) {
     ? cloudData.usuarios.filter((u) => String(u.id_usuario || u.nombre || "").trim() !== "")
     : [];
   const usuarios = validUsers.length
-    ? validUsers.map((u) => ({
-        id_usuario: String(u.id_usuario || ""),
-        nombre: String(u.nombre || ""),
-        rol: String(u.rol || "tecnico"),
-        rol_label: roleLabels[u.rol] || "Jefe de Taller",
-        especialidad: String(u.especialidad || ""),
-        pin: String(u.pin || "123456"),
-        telefono: String(u.telefono || ""),
-        activo: u.activo === true || String(u.activo).toLowerCase() === "true",
-        modalidad_horario: String(u.modalidad_horario || "Producción por Destajo")
-      }))
+    ? validUsers.map((u) => {
+        const baseUser = base.usuarios.find(
+          (bu) => bu.id_usuario === u.id_usuario || (bu.nombre && bu.nombre.toLowerCase().trim() === String(u.nombre || "").toLowerCase().trim())
+        );
+        const resolvedPin = String(u.pin || (baseUser ? baseUser.pin : "")).trim() || (baseUser ? baseUser.pin : "000000");
+        return {
+          id_usuario: String(u.id_usuario || (baseUser ? baseUser.id_usuario : "")),
+          nombre: String(u.nombre || (baseUser ? baseUser.nombre : "")),
+          rol: String(u.rol || (baseUser ? baseUser.rol : "tecnico")),
+          rol_label: roleLabels[u.rol] || (baseUser ? baseUser.rol_label : "Jefe de Taller"),
+          especialidad: String(u.especialidad || (baseUser ? baseUser.especialidad : "")),
+          pin: resolvedPin,
+          telefono: String(u.telefono || (baseUser ? baseUser.telefono : "")),
+          activo: u.activo === true || String(u.activo).toLowerCase() === "true",
+          modalidad_horario: String(u.modalidad_horario || (baseUser ? baseUser.modalidad_horario : "Producción por Destajo"))
+        };
+      })
     : base.usuarios;
 
   const validClients = Array.isArray(cloudData.clientes)
@@ -1544,9 +1558,6 @@ function openCloudSyncModal() {
           <button type="button" class="btn btn--danger" onclick="clearAllTestOrders()">
             <i class="fas fa-trash-alt"></i> Limpiar Pedidos de Prueba (Dejar en Cero)
           </button>
-          <button type="button" class="btn btn--ghost" onclick="closeModal(); resetDemoDatabase();">
-            <i class="fas fa-rotate"></i> Restaurar Órdenes de Ejemplo
-          </button>
         </div>
       </div>
     `,
@@ -1837,19 +1848,44 @@ function handleManualLogin(e) {
 
   if (!rawInput) {
     showToast("Ingresa tu nombre de usuario (ej. Moises Gonzalez).", "error");
+    const uInp = document.getElementById("login-username-input");
+    if (uInp) uInp.focus();
     return;
   }
 
-  // Buscar usuario de forma flexible (coincidencia exacta sin acentos, o por ID, o primer nombre)
-  let user = db.usuarios.find((u) => normalizeLoginString(u.nombre) === normInput);
-  if (!user) {
-    user = db.usuarios.find((u) => normalizeLoginString(u.id_usuario) === normInput);
+  // 1. Búsqueda inteligente y flexible de usuario
+  let user = null;
+
+  // Búsqueda exacta por nombre o ID normalizado
+  user = db.usuarios.find(
+    (u) => normalizeLoginString(u.nombre) === normInput || normalizeLoginString(u.id_usuario) === normInput
+  );
+
+  // Coincidencia para Moisés González / Admin
+  if (!user && (normInput.includes("moises") || normInput === "admin" || normInput === "administrador")) {
+    user = db.usuarios.find(
+      (u) => u.id_usuario === "USR-MOISES" || u.rol === "admin" || normalizeLoginString(u.nombre).includes("moises")
+    );
   }
+
+  // Coincidencia para Jesús Andrade
+  if (!user && normInput.includes("jesus")) {
+    user = db.usuarios.find(
+      (u) => u.id_usuario === "USR-JESUS" || normalizeLoginString(u.nombre).includes("jesus")
+    );
+  }
+
+  // Búsqueda por coincidencia parcial (starts-with o includes)
   if (!user && normInput.length >= 3) {
-    user = db.usuarios.find((u) => normalizeLoginString(u.nombre).startsWith(normInput));
+    user = db.usuarios.find((u) => {
+      const uNorm = normalizeLoginString(u.nombre);
+      return uNorm.startsWith(normInput) || uNorm.includes(normInput) || normInput.includes(uNorm);
+    });
   }
-  if (!user && (normInput === "admin" || normInput === "administrador")) {
-    user = db.usuarios.find((u) => u.rol === "admin" || u.id_usuario === "USR-MOISES");
+
+  // Coincidencia por rol recepción
+  if (!user && (normInput === "recepcion" || normInput.includes("recepcion"))) {
+    user = db.usuarios.find((u) => u.rol === "recepcion" || u.id_usuario === "USR-RECEPCION");
   }
 
   if (!user) {
@@ -1862,25 +1898,33 @@ function handleManualLogin(e) {
     return;
   }
 
-  // Validación rigurosa de PIN según las credenciales del usuario (sin atajos ni contraseñas genéricas)
+  // 2. Validación de Credencial Única (Sin claves de respaldo ni comodines)
   const expectedPin = String(user.pin || "").trim();
   if (!pinInput) {
     Swal.fire({
       title: "PIN Requerido",
-      text: `Debes ingresar el PIN de acceso para el perfil de ${user.nombre}.`,
+      text: `Por favor ingresa tu credencial única de acceso para el perfil de ${user.nombre}.`,
       icon: "warning",
       confirmButtonColor: "#182254"
     });
+    const pInp = document.getElementById("login-pin-input");
+    if (pInp) pInp.focus();
     return;
   }
 
+  // Validación estricta 1 a 1: ÚNICAMENTE la credencial asignada a este usuario es válida
   if (pinInput !== expectedPin) {
     Swal.fire({
-      title: "PIN Incorrecto",
-      text: `El PIN ingresado no coincide con el perfil de ${user.nombre}. Por favor ingresa tu credencial correcta.`,
+      title: "Credencial Inválida",
+      text: `La contraseña o PIN ingresado no coincide con el perfil de ${user.nombre}. Cada perfil cuenta con una credencial única y confidencial.`,
       icon: "error",
       confirmButtonColor: "#182254"
     });
+    const pInp = document.getElementById("login-pin-input");
+    if (pInp) {
+      pInp.select();
+      pInp.focus();
+    }
     return;
   }
 
@@ -2134,41 +2178,59 @@ function enrollBiometrics(userId) {
 }
 
 function loginSuccess(user) {
-  currentUser = user;
-  localStorage.setItem(SESSION_KEY, user.id_usuario);
+  try {
+    currentUser = user;
+    localStorage.setItem(SESSION_KEY, user.id_usuario);
 
-  // Registrar día activo automáticamente si es técnico
-  if (user.rol === "tecnico") {
-    const today = cleanDateISO(new Date().toISOString(), false);
-    if (!Array.isArray(db.asistencias)) db.asistencias = [];
-    const exists = db.asistencias.find((a) => a.fecha === today && a.usuario_id === user.id_usuario);
-    if (!exists) {
-      db.asistencias.unshift({
-        id_asist: "ASI-" + Date.now().toString().slice(-4),
-        usuario_id: user.id_usuario,
-        nombre: user.nombre,
-        fecha: today,
-        hora_entrada: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        hora_salida: "Por destajo",
-        estado: "Activo en Taller",
-        observacion: "Producción por trabajo realizado"
-      });
-      saveDatabase();
+    // Registrar día activo automáticamente si es técnico
+    if (user.rol === "tecnico") {
+      const today = cleanDateISO(new Date().toISOString(), false);
+      if (!Array.isArray(db.asistencias)) db.asistencias = [];
+      const exists = db.asistencias.find((a) => a.fecha === today && a.usuario_id === user.id_usuario);
+      if (!exists) {
+        db.asistencias.unshift({
+          id_asist: "ASI-" + Date.now().toString().slice(-4),
+          usuario_id: user.id_usuario,
+          nombre: user.nombre,
+          fecha: today,
+          hora_entrada: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          hora_salida: "Por destajo",
+          estado: "Activo en Taller",
+          observacion: "Producción por trabajo realizado"
+        });
+        saveDatabase();
+      }
     }
-  }
 
-  // Seleccionar pestaña inicial según el rol
-  if (user.rol === "tecnico") {
-    currentTab = "worker_panel";
-  } else {
-    currentTab = "pipeline";
-  }
+    // Seleccionar pestaña inicial según el rol
+    if (user.rol === "tecnico") {
+      currentTab = "worker_panel";
+    } else {
+      currentTab = "pipeline";
+    }
 
-  document.getElementById("login-view").classList.add("hidden");
-  document.getElementById("workspace").classList.remove("hidden");
-  initPushNotifications();
-  renderApp();
-  showToast(`Sesión iniciada: ${user.nombre}`);
+    // Transición visual garantizada
+    const loginView = document.getElementById("login-view");
+    const workspace = document.getElementById("workspace");
+    if (loginView) loginView.classList.add("hidden");
+    if (workspace) workspace.classList.remove("hidden");
+
+    try {
+      initPushNotifications();
+    } catch (e) {
+      console.warn("Aviso de notificaciones push:", e);
+    }
+
+    renderApp();
+    showToast(`Sesión iniciada: ${user.nombre} (${user.rol_label || user.rol})`, "success");
+  } catch (err) {
+    console.error("Error al ingresar a la sesión:", err);
+    const loginView = document.getElementById("login-view");
+    const workspace = document.getElementById("workspace");
+    if (loginView) loginView.classList.add("hidden");
+    if (workspace) workspace.classList.remove("hidden");
+    try { renderApp(); } catch (e) { console.error("Error en renderApp:", e); }
+  }
 }
 
 function logout() {
@@ -2279,7 +2341,7 @@ function attemptSwitchUserWithPin(userId) {
       if (entered && entered === expected) {
         quickLoginAs(userId);
       } else {
-        Swal.fire("PIN Incorrecto", "El código ingresado no coincide con este perfil.", "error");
+        Swal.fire("PIN Incorrecto", "El código ingresado no coincide con la credencial única de este perfil.", "error");
       }
     }
   });
@@ -4005,7 +4067,7 @@ function renderEnriqueHub() {
         </div>
         <div>
           <div class="giant-tile-title">3. Asignar Trabajo a Técnicos</div>
-          <div class="giant-tile-desc">Repartir cada servicio (Lavado, Aplanado, Guías, Calibración) a Heiber, Jeison o Carlos y agregar ítems extra a la factura abierta.</div>
+          <div class="giant-tile-desc">Repartir cada servicio (Lavado, Aplanado, Guías, Calibración) a los trabajadores de taller (Havell, Angel o Jose) y agregar ítems extra a la factura abierta.</div>
         </div>
       </div>
 
