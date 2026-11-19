@@ -5328,41 +5328,101 @@ body {
 
 /* ==================== PERSONALIZADOR DE TEXTOS CON PESTAÑAS Y LIVE PREVIEW (JESÚS ANDRADE) ==================== */
 .cust-tabs-nav {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 8px;
-  margin-bottom: 16px;
-  border-bottom: 1.5px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  scrollbar-width: thin;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  overflow: visible !important;
+  padding: 4px 0 12px 0 !important;
+  margin-bottom: 14px !important;
+  border-bottom: 1.5px solid rgba(245, 223, 0, 0.25) !important;
 }
 
 .cust-tab-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-muted, #94a3b8);
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.2s ease;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 8px 13px !important;
+  border-radius: 10px !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.18) !important;
+  background: rgba(30, 41, 59, 0.95) !important;
+  color: #f8fafc !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  transition: all 0.2s ease !important;
 }
 
 .cust-tab-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-main, #f8fafc);
+  background: rgba(245, 223, 0, 0.15) !important;
+  border-color: var(--renacer-gold, #f5df00) !important;
+  color: #ffffff !important;
 }
 
 .cust-tab-btn.active {
+  background: var(--renacer-gold, #f5df00) !important;
+  color: #0f1638 !important;
+  border-color: var(--renacer-gold, #f5df00) !important;
+  font-weight: 900 !important;
+  box-shadow: 0 4px 14px rgba(245, 223, 0, 0.35) !important;
+}
+
+/* ==================== MODO EDICIÓN DIRECTA EN PANTALLA (IN-PLACE TEXT EDITING) ==================== */
+.renacer-editable-text {
+  outline: 2px dashed var(--renacer-gold, #f5df00) !important;
+  outline-offset: 4px !important;
+  border-radius: 6px !important;
+  cursor: text !important;
+  background: rgba(245, 223, 0, 0.12) !important;
+  box-shadow: 0 0 14px rgba(245, 223, 0, 0.25) !important;
+  transition: all 0.2s ease !important;
+  position: relative !important;
+}
+
+.renacer-editable-text:hover,
+.renacer-editable-text:focus {
+  outline: 2.5px solid var(--renacer-gold, #f5df00) !important;
+  background: rgba(245, 223, 0, 0.22) !important;
+  box-shadow: 0 0 20px rgba(245, 223, 0, 0.45) !important;
+}
+
+.renacer-editable-text::after {
+  content: "✎ Clic para editar";
+  position: absolute;
+  top: -12px;
+  right: 4px;
   background: var(--renacer-gold, #f5df00);
   color: #0f1638;
-  border-color: var(--renacer-gold, #f5df00);
-  box-shadow: 0 4px 14px rgba(245, 223, 0, 0.25);
+  font-size: 9px;
+  font-weight: 900;
+  padding: 1px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  z-index: 100;
+  line-height: 1.2;
+}
+
+/* BARRA FLOTANTE FIJA SUPERIOR/INFERIOR DEL MODO EDICIÓN */
+.renacer-live-edit-bar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250000;
+  background: #0b1329;
+  border: 2px solid var(--renacer-gold, #f5df00);
+  border-radius: 16px;
+  padding: 12px 22px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  animation: renacerDockSlideUp 0.25s ease-out;
+  max-width: 95vw;
 }
 
 .cust-preview-box {
