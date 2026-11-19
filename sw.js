@@ -1,9 +1,11 @@
-const CACHE_NAME = 'renacer-taller-v30';
+const CACHE_NAME = 'renacer-taller-v31';
 const STATIC_ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './qrcode.min.js',
+  './html5-qrcode.min.js',
   './logo_renacer.png',
   './icon-192.png',
   './icon-512.png',
