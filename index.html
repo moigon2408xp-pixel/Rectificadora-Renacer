@@ -11,9 +11,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=20261118_v27" />
+  <link rel="stylesheet" href="./styles.css?v=20261118_v28" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -165,9 +165,17 @@
                 type="search"
                 id="global-search-input"
                 class="topbar-search-input"
+                name="renacer_search_no_autofill"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
                 placeholder="Buscar Orden, Cédula o Motor..."
                 oninput="handleGlobalSearch(this.value)"
               />
+              <button type="button" id="clear-search-btn" class="clear-search-btn hidden" onclick="clearGlobalSearch()" title="Limpiar búsqueda">
+                <i class="fas fa-times-circle"></i>
+              </button>
             </div>
 
             <!-- Rango de Fechas (Diseño Jesús Andrade) -->
@@ -204,12 +212,6 @@
             <button type="button" id="btn-topbar-attendance-kiosk" class="btn-topbar-action btn-topbar-action--dark" onclick="openAttendanceKioskModal()" title="Kiosco de Asistencia Presencial con QR Dinámico" style="border-color:rgba(56,189,248,0.4); color:#38bdf8;">
               <i class="fas fa-qrcode"></i>
               <span>Kiosco QR</span>
-            </button>
-
-            <!-- Botón Marcar Asistencia con Cámara (Técnicos) -->
-            <button type="button" id="btn-topbar-attendance-scan" class="btn-topbar-action btn-topbar-action--gold" onclick="openTechnicianQrScanModal()" title="Escanear QR Dinámico de Asistencia">
-              <i class="fas fa-camera"></i>
-              <span>Marcar Asistencia</span>
             </button>
 
             <!-- Selector / Perfil Interactivo de Usuario -->
