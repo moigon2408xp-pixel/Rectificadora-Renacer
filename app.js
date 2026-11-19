@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.19.v31";
+const CURRENT_APP_VERSION = "2026.11.19.v32";
 
 /* ==================== V31: SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS ==================== */
 const DEFAULT_TEXT_CUSTOMIZATIONS = {
@@ -2586,6 +2586,19 @@ function renderApp() {
   const roleSubtitle = document.getElementById("header-subtitle-role");
   if (roleSubtitle) roleSubtitle.textContent = currentUser.rol_label;
 
+  const sidebarBadgeEl = document.querySelector(".sidebar-brand-sub");
+  if (sidebarBadgeEl) {
+    sidebarBadgeEl.innerHTML = `<i class="fas fa-book-open"></i> ${escapeHtml(getCustomText("biblical_badge", "JOB 8:7"))}`;
+  }
+  const loginBiblicalBadgeEl = document.querySelector(".login-biblical-badge");
+  if (loginBiblicalBadgeEl) {
+    loginBiblicalBadgeEl.innerHTML = `<i class="fas fa-book-open"></i> ${escapeHtml(getCustomText("biblical_badge", "JOB 8:7"))}`;
+  }
+  const loginCleanSubEl = document.querySelector(".login-clean-sub");
+  if (loginCleanSubEl) {
+    loginCleanSubEl.textContent = getCustomText("app_subtitle", "Sistema de Gestión de Taller y Producción");
+  }
+
   const btnNewOrder = document.getElementById("btn-header-new-order");
   if (btnNewOrder) {
     if (currentUser.rol === "tecnico") btnNewOrder.classList.add("hidden");
@@ -3784,10 +3797,14 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
           </div>
           <div class="form-field" style="grid-column:1/-1;">
             <label><i class="fas fa-camera"></i> Foto del Comprobante / Recibo / Captura (OBLIGATORIO) *</label>
-            <input type="file" id="adv-partner-photo" accept="image/*" capture="environment" style="display:none;" onchange="handlePartnerAdvancePhotoUpload(this)" />
-            <div style="display:flex; gap:10px; align-items:center; margin-top:4px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('adv-partner-photo').click()">
-                <i class="fas fa-camera"></i> Subir Foto del Recibo / Comprobante
+            <input type="file" id="adv-partner-photo-cam" accept="image/*" capture="environment" style="display:none;" onchange="handlePartnerAdvancePhotoUpload(this)" />
+            <input type="file" id="adv-partner-photo-gal" accept="image/*" style="display:none;" onchange="handlePartnerAdvancePhotoUpload(this)" />
+            <div style="display:flex; gap:8px; align-items:center; margin-top:4px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('adv-partner-photo-cam').click()" title="Tomar foto directa con la cámara del teléfono">
+                <i class="fas fa-camera"></i> Tomar Foto
+              </button>
+              <button type="button" class="btn btn--ghost btn--sm" style="border-color:rgba(245,223,0,0.5); color:#fde047;" onclick="document.getElementById('adv-partner-photo-gal').click()" title="Subir foto o captura desde la galería">
+                <i class="fas fa-images"></i> Galería / Capture
               </button>
               <span id="adv-partner-photo-name" style="font-size:12px; color:var(--text-muted); font-style:italic;">Ningún comprobante seleccionado</span>
             </div>
@@ -3959,7 +3976,16 @@ function openLiquidatePartnerWeeklyModal(userId) {
             <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">
               Toma una foto de los billetes entregados en efectivo o adjunta el comprobante de Pago Móvil
             </div>
-            <input type="file" id="partner-liquidate-file" accept="image/*" capture="environment" onchange="handlePartnerLiquidatePhotoUpload(event)" style="font-size:12px;" />
+            <input type="file" id="partner-liquidate-cam" accept="image/*" capture="environment" style="display:none;" onchange="handlePartnerLiquidatePhotoUpload(event)" />
+            <input type="file" id="partner-liquidate-gal" accept="image/*" style="display:none;" onchange="handlePartnerLiquidatePhotoUpload(event)" />
+            <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-bottom:8px;">
+              <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('partner-liquidate-cam').click()" title="Tomar foto en el momento con la cámara">
+                <i class="fas fa-camera"></i> Tomar Foto (Cámara)
+              </button>
+              <button type="button" class="btn btn--ghost btn--sm" style="border-color:rgba(245,223,0,0.5); color:#fde047;" onclick="document.getElementById('partner-liquidate-gal').click()" title="Subir de la galería">
+                <i class="fas fa-images"></i> Subir de Galería
+              </button>
+            </div>
             <div id="partner-liquidate-photo-preview" class="photo-preview-box hidden">
               <img id="partner-liquidate-img" src="" alt="Comprobante" />
             </div>
@@ -4552,10 +4578,10 @@ function renderPipelineScreen(forcedState) {
     <!-- Barra Superior Limpia del Tablero con Selector de Vista -->
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
       <div>
-        <h2 style="font-size:19px; font-weight:900; color:var(--text-main);">
+        <h2 id="pipeline-screen-title" style="font-size:19px; font-weight:900; color:var(--text-main);">
           ${escapeHtml(getCustomText("pipeline_title", "Seguimiento de Órdenes y Producción (Por Código de Troquel)"))}
         </h2>
-        <p style="font-size:12.5px; color:var(--text-muted);">
+        <p id="pipeline-screen-subtitle" style="font-size:12.5px; color:var(--text-muted);">
           ${escapeHtml(getCustomText("pipeline_subtitle", "Flujo de 6 etapas del taller: 1. Recepción → 2. Diagnóstico → 3. Aprobación → 4. Servicio → 5. Calidad → 6. Entrega."))}
         </p>
       </div>
@@ -5875,71 +5901,408 @@ function jumpToOrderInPipeline(orderId) {
   }, 350);
 }
 
-function openTextCustomizerModal() {
-  const currentSub = getCustomText("app_subtitle", DEFAULT_TEXT_CUSTOMIZATIONS.app_subtitle);
-  const currentBadge = getCustomText("biblical_badge", DEFAULT_TEXT_CUSTOMIZATIONS.biblical_badge);
-  const currentPipeTitle = getCustomText("pipeline_title", DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_title);
-  const currentPipeSub = getCustomText("pipeline_subtitle", DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_subtitle);
-  const currentTerms = getCustomText("reception_terms", DEFAULT_TEXT_CUSTOMIZATIONS.reception_terms);
-  const currentArTitle = getCustomText("ar_title", DEFAULT_TEXT_CUSTOMIZATIONS.ar_title);
-  const currentAttNotice = getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice);
-  const currentPayrollNotice = getCustomText("payroll_notice", DEFAULT_TEXT_CUSTOMIZATIONS.payroll_notice);
+/* ============================================================================
+   SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS — JESÚS ANDRADE (FASE 3)
+   Navegación interactiva pestaña por pestaña, vista previa en vivo y dock flotante
+   ============================================================================ */
+let activeCustomizerTab = "pipeline";
+let customizerDrafts = null;
+
+function initCustomizerDrafts() {
+  customizerDrafts = {
+    pipeline_title: getCustomText("pipeline_title", DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_title),
+    pipeline_subtitle: getCustomText("pipeline_subtitle", DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_subtitle),
+    ar_title: getCustomText("ar_title", DEFAULT_TEXT_CUSTOMIZATIONS.ar_title),
+    attendance_notice: getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice),
+    payroll_notice: getCustomText("payroll_notice", DEFAULT_TEXT_CUSTOMIZATIONS.payroll_notice),
+    app_subtitle: getCustomText("app_subtitle", DEFAULT_TEXT_CUSTOMIZATIONS.app_subtitle),
+    biblical_badge: getCustomText("biblical_badge", DEFAULT_TEXT_CUSTOMIZATIONS.biblical_badge),
+    reception_terms: getCustomText("reception_terms", DEFAULT_TEXT_CUSTOMIZATIONS.reception_terms)
+  };
+}
+
+function syncCustomizerDraftsFromInputs() {
+  if (!customizerDrafts) initCustomizerDrafts();
+  const map = {
+    pipeline_title: "cust-pipeline-title",
+    pipeline_subtitle: "cust-pipeline-subtitle",
+    ar_title: "cust-ar-title",
+    attendance_notice: "cust-attendance-notice",
+    payroll_notice: "cust-payroll-notice",
+    app_subtitle: "cust-app-subtitle",
+    biblical_badge: "cust-biblical-badge",
+    reception_terms: "cust-reception-terms"
+  };
+  for (const [key, elId] of Object.entries(map)) {
+    const el = document.getElementById(elId);
+    if (el) {
+      customizerDrafts[key] = el.value.trim();
+    }
+  }
+}
+
+function switchCustomizerTab(tabKey, navigateApp = true) {
+  syncCustomizerDraftsFromInputs();
+  activeCustomizerTab = tabKey;
+
+  // Navegar de fondo a la pestaña del taller correspondiente para inspección en vivo
+  if (navigateApp) {
+    if (tabKey === "pipeline") navigateTab("pipeline");
+    else if (tabKey === "cuentas_cobrar") navigateTab("accounts_receivable");
+    else if (tabKey === "asistencia") navigateTab("asistencia");
+    else if (tabKey === "personal") navigateTab("personal");
+    else if (tabKey === "general") navigateTab("default");
+    else if (tabKey === "recepcion") navigateTab("pipeline");
+  }
+
+  // Actualizar botones de navegación en el modal
+  document.querySelectorAll(".cust-tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabKey);
+  });
+
+  const area = document.getElementById("cust-tab-content-area");
+  if (area) {
+    area.innerHTML = renderCustomizerTabContent(tabKey);
+  }
+  updateCustomizerLivePreview();
+}
+
+function renderCustomizerTabContent(tabKey) {
+  if (!customizerDrafts) initCustomizerDrafts();
+
+  if (tabKey === "pipeline") {
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
+          <i class="fas fa-tasks" style="color:var(--renacer-gold);"></i> <strong>Tablero de Órdenes y Producción</strong> (Pestaña: Seguimiento de Órdenes)
+        </span>
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('pipeline'); showToast('Mostrando pestaña Seguimiento en pantalla');">
+          <i class="fas fa-eye"></i> Ver esta Pestaña en el Taller
+        </button>
+      </div>
+
+      <div class="form-field">
+        <label><i class="fas fa-heading"></i> Título Principal del Tablero</label>
+        <input type="text" id="cust-pipeline-title" value="${escapeHtml(customizerDrafts.pipeline_title)}" oninput="handleCustomizerInput(this, 'pipeline_title')" placeholder="Ej: Seguimiento de Órdenes y Producción (Por Código de Troquel)" />
+      </div>
+
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-info-circle"></i> Subtítulo / Flujo de 6 Etapas</label>
+        <input type="text" id="cust-pipeline-subtitle" value="${escapeHtml(customizerDrafts.pipeline_subtitle)}" oninput="handleCustomizerInput(this, 'pipeline_subtitle')" placeholder="Ej: Flujo de 6 etapas del taller: 1. Recepción → 2. Diagnóstico..." />
+      </div>
+
+      <!-- Vista previa en vivo idéntica a la cabecera real del Pipeline -->
+      <div class="cust-preview-box">
+        <div class="cust-preview-badge"><i class="fas fa-desktop"></i> Vista Previa en Vivo · Cabecera de Seguimiento</div>
+        <h2 id="prev-cust-pipeline-title" style="font-size:17px; font-weight:900; color:var(--text-main); margin:0 0 4px 0;">
+          ${escapeHtml(customizerDrafts.pipeline_title)}
+        </h2>
+        <p id="prev-cust-pipeline-subtitle" style="font-size:12px; color:var(--text-muted); margin:0;">
+          ${escapeHtml(customizerDrafts.pipeline_subtitle)}
+        </p>
+      </div>
+    `;
+  }
+
+  if (tabKey === "cuentas_cobrar") {
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
+          <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> <strong>Módulo Financiero y Cobranzas</strong> (Pestaña: Facturas por cobrar)
+        </span>
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('accounts_receivable'); showToast('Mostrando Facturas por Cobrar en pantalla');">
+          <i class="fas fa-eye"></i> Ver esta Pestaña en el Taller
+        </button>
+      </div>
+
+      <div class="form-field">
+        <label><i class="fas fa-heading"></i> Título de la Cartera de Cuentas por Cobrar</label>
+        <input type="text" id="cust-ar-title" value="${escapeHtml(customizerDrafts.ar_title)}" oninput="handleCustomizerInput(this, 'ar_title')" placeholder="Ej: Control General de Cuentas por Cobrar" />
+      </div>
+
+      <!-- Vista previa en vivo de Cuentas por Cobrar -->
+      <div class="cust-preview-box">
+        <div class="cust-preview-badge"><i class="fas fa-desktop"></i> Vista Previa en Vivo · Facturas por Cobrar</div>
+        <div style="background:var(--bg-card); border-radius:12px; padding:12px; border:1px solid var(--border-subtle);">
+          <span id="prev-cust-ar-title" style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase;">
+            <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> ${escapeHtml(customizerDrafts.ar_title)}
+          </span>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:26px; font-weight:900; color:#dc2626; margin-top:4px;">
+            $ 90.00 <span style="font-size:13px; color:#0284c7; font-weight:700;">≈ Bs. 4.122,00 (Tasa BCV)</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (tabKey === "asistencia") {
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
+          <i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> <strong>Presencia Física y Puntualidad</strong> (Pestaña: Control de Asistencia)
+        </span>
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('asistencia'); showToast('Mostrando Asistencia en pantalla');">
+          <i class="fas fa-eye"></i> Ver esta Pestaña en el Taller
+        </button>
+      </div>
+
+      <div class="form-field">
+        <label><i class="fas fa-clock"></i> Aviso Oficial de Horario y Puntualidad (Kiosco y Tabla)</label>
+        <textarea id="cust-attendance-notice" rows="2" style="font-size:12.5px; width:100%; border-radius:8px; padding:8px;" oninput="handleCustomizerInput(this, 'attendance_notice')">${escapeHtml(customizerDrafts.attendance_notice)}</textarea>
+      </div>
+
+      <!-- Vista previa en vivo del Kiosco / Aviso de Asistencia -->
+      <div class="cust-preview-box">
+        <div class="cust-preview-badge"><i class="fas fa-desktop"></i> Vista Previa en Vivo · Aviso en Kiosco QR y Asistencia</div>
+        <div style="padding:10px 14px; background:rgba(245,196,0,0.08); border:1px dashed var(--renacer-gold); border-radius:10px; font-size:11.5px; color:var(--text-main);">
+          <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> 
+          <span id="prev-cust-attendance-notice">${escapeHtml(customizerDrafts.attendance_notice)}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  if (tabKey === "personal") {
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
+          <i class="fas fa-users-cog" style="color:var(--renacer-gold);"></i> <strong>Liquidación de Técnicos por Destajo</strong> (Pestaña: Personal y Comisiones)
+        </span>
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('personal'); showToast('Mostrando Personal y Comisiones en pantalla');">
+          <i class="fas fa-eye"></i> Ver esta Pestaña en el Taller
+        </button>
+      </div>
+
+      <div class="form-field">
+        <label><i class="fas fa-calendar-check"></i> Aviso Oficial de Ciclo Semanal (Corte Domingo)</label>
+        <input type="text" id="cust-payroll-notice" value="${escapeHtml(customizerDrafts.payroll_notice)}" oninput="handleCustomizerInput(this, 'payroll_notice')" placeholder="Ej: Semana laboral de Lunes a Domingo. Corte y liquidación los días Domingo." />
+      </div>
+
+      <!-- Vista previa en vivo del banner de Destajo -->
+      <div class="cust-preview-box">
+        <div class="cust-preview-badge"><i class="fas fa-desktop"></i> Vista Previa en Vivo · Banner de Destajo Semanal</div>
+        <div style="background:rgba(2,132,199,0.1); border:1px solid rgba(56,189,248,0.3); border-radius:12px; padding:12px 16px;">
+          <strong style="color:#38bdf8; font-size:12.5px;">Personal Técnico (Pago por Trabajo Realizado)</strong>
+          <p id="prev-cust-payroll-notice" style="font-size:11.5px; color:var(--text-muted); margin:4px 0 0 0;">
+            ${escapeHtml(customizerDrafts.payroll_notice)}
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
+  if (tabKey === "general") {
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
+          <i class="fas fa-id-badge" style="color:var(--renacer-gold);"></i> <strong>Identidad Institucional del Taller</strong> (Menú Lateral y Cabecera)
+        </span>
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('default'); showToast('Mostrando Inicio en pantalla');">
+          <i class="fas fa-eye"></i> Ver Pantalla Principal
+        </button>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label><i class="fas fa-heading"></i> Subtítulo Institucional del Taller</label>
+          <input type="text" id="cust-app-subtitle" value="${escapeHtml(customizerDrafts.app_subtitle)}" oninput="handleCustomizerInput(this, 'app_subtitle')" placeholder="Ej: Sistema de Gestión de Taller y Producción" />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-book-open"></i> Cita Bíblica / Badge Superior</label>
+          <input type="text" id="cust-biblical-badge" value="${escapeHtml(customizerDrafts.biblical_badge)}" oninput="handleCustomizerInput(this, 'biblical_badge')" placeholder="Ej: JOB 8:7" />
+        </div>
+      </div>
+
+      <!-- Vista previa en vivo de la Marca -->
+      <div class="cust-preview-box">
+        <div class="cust-preview-badge"><i class="fas fa-desktop"></i> Vista Previa en Vivo · Barra Lateral y Cabecera</div>
+        <div style="display:flex; align-items:center; gap:12px; padding:12px; background:#0f172a; border-radius:12px; border:1px solid var(--border-subtle);">
+          <div style="width:38px; height:38px; border-radius:50%; background:var(--renacer-gold); display:flex; align-items:center; justify-content:center; color:#0f1638; font-weight:900;">RR</div>
+          <div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <strong style="font-size:13.5px; color:#fff;">RECTIFICADORA RENACER</strong>
+              <span id="prev-cust-biblical-badge" style="font-size:10px; font-weight:900; background:var(--renacer-gold); color:#0f1638; padding:2px 6px; border-radius:4px;">
+                <i class="fas fa-book-open"></i> ${escapeHtml(customizerDrafts.biblical_badge)}
+              </span>
+            </div>
+            <div id="prev-cust-app-subtitle" style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              ${escapeHtml(customizerDrafts.app_subtitle)}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (tabKey === "recepcion") {
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
+          <i class="fas fa-file-contract" style="color:var(--renacer-gold);"></i> <strong>Condiciones Legales de Recepción</strong> (Impresión en Comprobantes y Pantalla)
+        </span>
+        <button type="button" class="btn btn--primary btn--xs" onclick="closeModal(); openNewOrderModal();">
+          <i class="fas fa-external-link-alt"></i> Probar en Modal de Nueva Orden
+        </button>
+      </div>
+
+      <div class="form-field">
+        <label><i class="fas fa-file-contract"></i> Cláusulas de Términos y Condiciones Oficiales</label>
+        <textarea id="cust-reception-terms" rows="4" style="font-size:12px; width:100%; border-radius:8px; padding:8px; line-height:1.45;" oninput="handleCustomizerInput(this, 'reception_terms')">${escapeHtml(customizerDrafts.reception_terms)}</textarea>
+      </div>
+
+      <!-- Vista previa en vivo de Términos de Recepción -->
+      <div class="cust-preview-box">
+        <div class="cust-preview-badge"><i class="fas fa-desktop"></i> Vista Previa en Vivo · Términos Impresos y en Pantalla</div>
+        <div style="background:rgba(245,223,0,0.06); border:1.5px dashed var(--renacer-gold-warm); border-radius:10px; padding:12px; font-size:11.5px; color:var(--text-main); white-space:pre-wrap; line-height:1.5;" id="prev-cust-reception-terms">
+${escapeHtml(customizerDrafts.reception_terms)}
+        </div>
+      </div>
+    `;
+  }
+
+  return "";
+}
+
+function handleCustomizerInput(inputEl, fieldKey) {
+  if (!customizerDrafts) initCustomizerDrafts();
+  customizerDrafts[fieldKey] = inputEl.value;
+
+  // Actualizar Preview local en el modal
+  const prevEl = document.getElementById(`prev-cust-${fieldKey.replace(/_/g, "-")}`);
+  if (prevEl) {
+    if (fieldKey === "biblical_badge") {
+      prevEl.innerHTML = `<i class="fas fa-book-open"></i> ${escapeHtml(inputEl.value || "JOB 8:7")}`;
+    } else {
+      prevEl.textContent = inputEl.value;
+    }
+  }
+
+  // Actualizar en tiempo real el elemento en la pantalla real si está visible
+  if (fieldKey === "pipeline_title") {
+    const el = document.getElementById("pipeline-screen-title");
+    if (el) el.textContent = inputEl.value;
+  } else if (fieldKey === "pipeline_subtitle") {
+    const el = document.getElementById("pipeline-screen-subtitle");
+    if (el) el.textContent = inputEl.value;
+  } else if (fieldKey === "ar_title") {
+    const el = document.getElementById("ar-screen-title");
+    if (el) el.innerHTML = `<i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> ${escapeHtml(inputEl.value)}`;
+  } else if (fieldKey === "attendance_notice") {
+    const el = document.getElementById("attendance-screen-notice");
+    if (el) el.textContent = inputEl.value;
+    const kEl = document.getElementById("kiosk-notice-display");
+    if (kEl) kEl.textContent = inputEl.value;
+  } else if (fieldKey === "payroll_notice") {
+    const el = document.getElementById("payroll-notice-display");
+    if (el) el.textContent = inputEl.value;
+  }
+}
+
+function updateCustomizerLivePreview() {
+  if (!customizerDrafts) initCustomizerDrafts();
+}
+
+function minimizeTextCustomizerToDock() {
+  syncCustomizerDraftsFromInputs();
+  closeModal();
+
+  let dock = document.getElementById("text-customizer-dock");
+  if (!dock) {
+    dock = document.createElement("div");
+    dock.id = "text-customizer-dock";
+    dock.className = "text-customizer-dock";
+    document.body.appendChild(dock);
+  }
+
+  const tabLabels = {
+    pipeline: "Seguimiento de Órdenes",
+    cuentas_cobrar: "Facturas por Cobrar",
+    asistencia: "Control de Asistencia",
+    personal: "Personal y Destajo",
+    general: "Cabecera y Marca",
+    recepcion: "Términos de Recepción"
+  };
+
+  dock.innerHTML = `
+    <div class="dock-info">
+      <span class="dock-title"><i class="fas fa-edit"></i> Editando en Vivo:</span>
+      <span class="dock-subtitle">${tabLabels[activeCustomizerTab] || "Personalización"}</span>
+    </div>
+    <div style="display:flex; gap:6px; align-items:center;">
+      <button type="button" class="btn btn--gold btn--xs" onclick="expandTextCustomizerModal()" style="font-weight:900;">
+        <i class="fas fa-expand"></i> Reabrir Editor
+      </button>
+      <button type="button" class="btn btn--success btn--xs" onclick="saveCustomTexts()" style="font-weight:900;">
+        <i class="fas fa-save"></i> Guardar
+      </button>
+      <button type="button" class="btn btn--ghost btn--xs" onclick="closeTextCustomizerDock()" title="Cerrar barra flotante" style="color:#ef4444;">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  `;
+  dock.style.display = "flex";
+  showToast("Editor minimizado. Puedes navegar libremente por cualquier pestaña del sistema.", "info");
+}
+
+function expandTextCustomizerModal() {
+  closeTextCustomizerDock();
+  openTextCustomizerModal(activeCustomizerTab);
+}
+
+function closeTextCustomizerDock() {
+  const dock = document.getElementById("text-customizer-dock");
+  if (dock) dock.remove();
+}
+
+function openTextCustomizerModal(initialTab = null) {
+  if (initialTab) activeCustomizerTab = initialTab;
+  if (!customizerDrafts) initCustomizerDrafts();
 
   openModal({
     title: `Personalización de Textos y Avisos (Jesús Andrade / Dirección)`,
     icon: "fa-font",
     wide: true,
     body: `
-      <div style="margin-bottom:14px; font-size:12.5px; color:var(--text-muted); background:rgba(245,196,0,0.06); padding:10px 14px; border-radius:10px; border:1px solid rgba(245,196,0,0.25);">
-        <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> Los cambios que guardes aquí se almacenan en la base de datos y se sincronizan a Google Sheets. <strong>NUNCA se sobreescribirán al actualizar el código desde GitHub.</strong>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px; background:rgba(245,196,0,0.06); padding:10px 14px; border-radius:10px; border:1px solid rgba(245,196,0,0.25);">
+        <div style="font-size:12px; color:var(--text-muted); line-height:1.4;">
+          <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> 
+          Pasa de <strong>pestaña en pestaña</strong> para ver y modificar cada sección en vivo. Al cambiar de pestaña, el taller de fondo también navega a esa pantalla.
+        </div>
+        <button type="button" class="btn btn--ghost btn--xs" onclick="minimizeTextCustomizerToDock()" style="border-color:rgba(245,223,0,0.4); color:var(--renacer-gold); font-weight:800;" title="Minimiza el editor en una barra flotante para ver y usar la pantalla completa del taller">
+          <i class="fas fa-window-minimize"></i> Minimizar para Ver Pantalla Completa
+        </button>
       </div>
 
-      <div class="form-grid-2">
-        <div class="form-field">
-          <label><i class="fas fa-heading"></i> Subtítulo de Cabecera del Taller</label>
-          <input type="text" id="cust-app-subtitle" value="${escapeHtml(currentSub)}" placeholder="Ej: Sistema de Gestión de Taller y Producción" />
-        </div>
-        <div class="form-field">
-          <label><i class="fas fa-book-open"></i> Cita Bíblica / Badge Superior</label>
-          <input type="text" id="cust-biblical-badge" value="${escapeHtml(currentBadge)}" placeholder="Ej: JOB 8:7" />
-        </div>
+      <!-- Barra de Navegación por Pestañas del Sistema -->
+      <div class="cust-tabs-nav">
+        <button type="button" class="cust-tab-btn ${activeCustomizerTab === 'pipeline' ? 'active' : ''}" data-tab="pipeline" onclick="switchCustomizerTab('pipeline')">
+          <i class="fas fa-tasks"></i> 1. Seguimiento
+        </button>
+        <button type="button" class="cust-tab-btn ${activeCustomizerTab === 'cuentas_cobrar' ? 'active' : ''}" data-tab="cuentas_cobrar" onclick="switchCustomizerTab('cuentas_cobrar')">
+          <i class="fas fa-file-invoice-dollar"></i> 2. Facturas por Cobrar
+        </button>
+        <button type="button" class="cust-tab-btn ${activeCustomizerTab === 'asistencia' ? 'active' : ''}" data-tab="asistencia" onclick="switchCustomizerTab('asistencia')">
+          <i class="fas fa-user-clock"></i> 3. Asistencia y Kiosco
+        </button>
+        <button type="button" class="cust-tab-btn ${activeCustomizerTab === 'personal' ? 'active' : ''}" data-tab="personal" onclick="switchCustomizerTab('personal')">
+          <i class="fas fa-users-cog"></i> 4. Destajo y Personal
+        </button>
+        <button type="button" class="cust-tab-btn ${activeCustomizerTab === 'general' ? 'active' : ''}" data-tab="general" onclick="switchCustomizerTab('general')">
+          <i class="fas fa-id-badge"></i> 5. Cabecera y Marca
+        </button>
+        <button type="button" class="cust-tab-btn ${activeCustomizerTab === 'recepcion' ? 'active' : ''}" data-tab="recepcion" onclick="switchCustomizerTab('recepcion')">
+          <i class="fas fa-file-contract"></i> 6. Recepción y Términos
+        </button>
       </div>
 
-      <div class="form-grid-2" style="margin-top:10px;">
-        <div class="form-field">
-          <label><i class="fas fa-tasks"></i> Título del Tablero de Órdenes</label>
-          <input type="text" id="cust-pipeline-title" value="${escapeHtml(currentPipeTitle)}" />
-        </div>
-        <div class="form-field">
-          <label><i class="fas fa-file-invoice-dollar"></i> Título de Cuentas por Cobrar</label>
-          <input type="text" id="cust-ar-title" value="${escapeHtml(currentArTitle)}" />
-        </div>
-      </div>
-
-      <div class="form-field" style="margin-top:10px;">
-        <label><i class="fas fa-info"></i> Subtítulo / Flujo de Etapas en Tablero</label>
-        <input type="text" id="cust-pipeline-subtitle" value="${escapeHtml(currentPipeSub)}" />
-      </div>
-
-      <div class="form-field" style="margin-top:10px;">
-        <label><i class="fas fa-file-contract"></i> Términos y Condiciones Oficiales de Recepción (Impreso en Tickets y Pantalla)</label>
-        <textarea id="cust-reception-terms" rows="3" style="font-size:12.5px; width:100%; border-radius:8px; padding:8px;">${escapeHtml(currentTerms)}</textarea>
-      </div>
-
-      <div class="form-grid-2" style="margin-top:10px;">
-        <div class="form-field">
-          <label><i class="fas fa-user-clock"></i> Aviso Oficial de Asistencia / Kiosco</label>
-          <input type="text" id="cust-attendance-notice" value="${escapeHtml(currentAttNotice)}" />
-        </div>
-        <div class="form-field">
-          <label><i class="fas fa-money-check-alt"></i> Aviso de Nómina y Destajo Semanal</label>
-          <input type="text" id="cust-payroll-notice" value="${escapeHtml(currentPayrollNotice)}" />
-        </div>
+      <!-- Contenedor Dinámico de la Pestaña Activa -->
+      <div id="cust-tab-content-area">
+        ${renderCustomizerTabContent(activeCustomizerTab)}
       </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:20px; padding-top:14px; border-top:1px solid var(--border-subtle);">
         <button type="button" class="btn btn--ghost btn--sm" onclick="resetDefaultCustomTexts()">
-          <i class="fas fa-rotate-left"></i> Restaurar Textos por Defecto
+          <i class="fas fa-rotate-left"></i> Restaurar Oficiales
         </button>
         <div style="display:flex; gap:8px;">
           <button type="button" class="btn btn--secondary" onclick="closeModal()">Cancelar</button>
@@ -5953,15 +6316,17 @@ function openTextCustomizerModal() {
 }
 
 function saveCustomTexts() {
+  syncCustomizerDraftsFromInputs();
   if (!db.text_customizations) db.text_customizations = {};
-  db.text_customizations.app_subtitle = document.getElementById("cust-app-subtitle")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.app_subtitle;
-  db.text_customizations.biblical_badge = document.getElementById("cust-biblical-badge")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.biblical_badge;
-  db.text_customizations.pipeline_title = document.getElementById("cust-pipeline-title")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_title;
-  db.text_customizations.pipeline_subtitle = document.getElementById("cust-pipeline-subtitle")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_subtitle;
-  db.text_customizations.reception_terms = document.getElementById("cust-reception-terms")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.reception_terms;
-  db.text_customizations.ar_title = document.getElementById("cust-ar-title")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.ar_title;
-  db.text_customizations.attendance_notice = document.getElementById("cust-attendance-notice")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice;
-  db.text_customizations.payroll_notice = document.getElementById("cust-payroll-notice")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.payroll_notice;
+
+  db.text_customizations.app_subtitle = customizerDrafts.app_subtitle || DEFAULT_TEXT_CUSTOMIZATIONS.app_subtitle;
+  db.text_customizations.biblical_badge = customizerDrafts.biblical_badge || DEFAULT_TEXT_CUSTOMIZATIONS.biblical_badge;
+  db.text_customizations.pipeline_title = customizerDrafts.pipeline_title || DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_title;
+  db.text_customizations.pipeline_subtitle = customizerDrafts.pipeline_subtitle || DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_subtitle;
+  db.text_customizations.reception_terms = customizerDrafts.reception_terms || DEFAULT_TEXT_CUSTOMIZATIONS.reception_terms;
+  db.text_customizations.ar_title = customizerDrafts.ar_title || DEFAULT_TEXT_CUSTOMIZATIONS.ar_title;
+  db.text_customizations.attendance_notice = customizerDrafts.attendance_notice || DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice;
+  db.text_customizations.payroll_notice = customizerDrafts.payroll_notice || DEFAULT_TEXT_CUSTOMIZATIONS.payroll_notice;
 
   if (db.config) {
     db.config.text_customizations = db.text_customizations;
@@ -5969,18 +6334,21 @@ function saveCustomTexts() {
 
   saveDatabase();
   closeModal();
+  closeTextCustomizerDock();
   renderApp();
   syncToGoogleSheets(true);
-  showToast("Textos personalizados guardados y sincronizados correctamente.");
+  showToast("¡Textos y avisos personalizados guardados exitosamente!", "success");
 }
 
 function resetDefaultCustomTexts() {
+  customizerDrafts = Object.assign({}, DEFAULT_TEXT_CUSTOMIZATIONS);
   db.text_customizations = Object.assign({}, DEFAULT_TEXT_CUSTOMIZATIONS);
   if (db.config) db.config.text_customizations = db.text_customizations;
-  saveDatabase();
-  closeModal();
-  renderApp();
-  syncToGoogleSheets(true);
+
+  const area = document.getElementById("cust-tab-content-area");
+  if (area) {
+    area.innerHTML = renderCustomizerTabContent(activeCustomizerTab);
+  }
   showToast("Textos restaurados a sus valores oficiales.");
 }
 
@@ -6551,12 +6919,16 @@ function openNewOrderModal() {
                     Evidencia de cómo llega la cámara/bloque (rayones, fisuras o quemaduras).
                   </p>
                 </div>
-                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                   <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11px;" onclick="addDemoPhotoToTempOrder('pieza')" title="Cargar foto de prueba">
-                    Foto de Prueba
+                    Foto Prueba
                   </button>
-                  <label class="btn btn--primary" style="cursor:pointer; padding:6px 10px; font-size:11.5px;">
-                    <i class="fas fa-upload"></i> Subir Fotos
+                  <label class="btn btn--primary" style="cursor:pointer; padding:6px 11px; font-size:11.5px; font-weight:800; background:#0284c7;" title="Tomar foto en el momento con la cámara del teléfono">
+                    <i class="fas fa-camera"></i> Tomar Foto
+                    <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'pieza')" />
+                  </label>
+                  <label class="btn btn--ghost" style="cursor:pointer; padding:6px 11px; font-size:11.5px; font-weight:800; border-color:rgba(56,189,248,0.5); color:#38bdf8;" title="Elegir fotos existentes de la galería">
+                    <i class="fas fa-images"></i> Galería
                     <input type="file" accept="image/*" multiple style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'pieza')" />
                   </label>
                 </div>
@@ -6574,12 +6946,16 @@ function openNewOrderModal() {
                     Solo soporte visual de guías, válvulas, sellos o empacaduras traídas por el cliente (sin conteo de inventario).
                   </p>
                 </div>
-                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                   <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11px;" onclick="addDemoPhotoToTempOrder('repuestos')" title="Cargar foto de repuestos de prueba">
-                    Foto de Prueba
+                    Foto Prueba
                   </button>
-                  <label class="btn btn--gold" style="cursor:pointer; padding:6px 10px; font-size:11.5px;">
-                    <i class="fas fa-camera"></i> Subir Fotos
+                  <label class="btn btn--gold" style="cursor:pointer; padding:6px 11px; font-size:11.5px; font-weight:800;" title="Tomar foto en el momento con la cámara del teléfono">
+                    <i class="fas fa-camera"></i> Tomar Foto
+                    <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'repuestos')" />
+                  </label>
+                  <label class="btn btn--ghost" style="cursor:pointer; padding:6px 11px; font-size:11.5px; font-weight:800; border-color:rgba(245,223,0,0.5); color:#fde047;" title="Elegir fotos de repuestos de la galería">
+                    <i class="fas fa-images"></i> Galería
                     <input type="file" accept="image/*" multiple style="display:none;" onchange="handleNewOrderGalleryUpload(event, 'repuestos')" />
                   </label>
                 </div>
@@ -7302,10 +7678,14 @@ function selectFinCondition(optionKey, montoTotal) {
         <div style="font-size:13px; font-weight:900;"><i class="fas fa-camera"></i> Soporte Multimedia Obligatorio (Capture o Foto de Billetes)</div>
         <div style="font-size:11.5px; color:var(--text-muted);">Adjunta la captura de la transferencia/Pago Móvil o la foto de los billetes recibidos en efectivo.</div>
       </div>
-      <div style="display:flex; align-items:center; gap:10px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <img id="fin-proof-preview" src="${tempFinConditionState.proofPhotoDataUrl}" alt="Comprobante" style="width:68px; height:52px; object-fit:cover; border-radius:8px; border:1px solid var(--border-color);" />
-        <label class="btn btn--primary" style="cursor:pointer;">
-          <i class="fas fa-camera"></i> Subir Foto Capture / Billetes
+        <label class="btn btn--primary" style="cursor:pointer; padding:7px 12px; font-size:12px; font-weight:800; background:#0284c7;" title="Tomar foto con la cámara del teléfono">
+          <i class="fas fa-camera"></i> Tomar Foto
+          <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handlePaymentProofUpload(event)" />
+        </label>
+        <label class="btn btn--ghost" style="cursor:pointer; padding:7px 12px; font-size:12px; font-weight:800; border-color:rgba(56,189,248,0.5); color:#38bdf8;" title="Elegir captura o comprobante de la galería">
+          <i class="fas fa-images"></i> Galería / Capture
           <input type="file" accept="image/*" style="display:none;" onchange="handlePaymentProofUpload(event)" />
         </label>
       </div>
@@ -9063,7 +9443,7 @@ function renderAccountsReceivableScreen() {
     <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:20px 24px; margin-bottom:18px; box-shadow:var(--shadow-sm);">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
         <div>
-          <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
+          <span id="ar-screen-title" style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
             <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> ${escapeHtml(getCustomText("ar_title", "Control General de Cuentas por Cobrar"))}
           </span>
           <div style="display:flex; align-items:baseline; gap:12px; margin-top:4px; flex-wrap:wrap;">
@@ -10118,7 +10498,7 @@ function renderWorkerEarningsScreen() {
           <h3 style="font-size:17px; font-weight:900; margin-top:2px;">
             Historial de Vouchers y Liquidaciones de Nómina Semanal
           </h3>
-          <p style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+          <p id="payroll-notice-display" style="font-size:12px; color:var(--text-muted); margin-top:2px;">
             ${escapeHtml(getCustomText("payroll_notice", "Semana laboral de Lunes a Domingo. Corte y liquidación los días Domingo."))}
           </p>
         </div>
@@ -10270,10 +10650,16 @@ function openDualGalleryInspector(orderId) {
           <div class="form-section-title" style="margin-bottom:0;">
             <i class="fas fa-camera"></i> Galería 1: Fotos del Estado de la Pieza (${(order.galeria_fotos_pieza || []).length})
           </div>
-          <label class="btn btn--primary btn--xs" style="cursor:pointer; font-weight:800;">
-            <i class="fas fa-upload"></i> + Subir Fotos HD de Pieza
-            <input type="file" accept="image/*" multiple style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'pieza')" />
-          </label>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <label class="btn btn--primary btn--xs" style="cursor:pointer; font-weight:800; padding:5px 10px; background:#0284c7;" title="Tomar foto con la cámara del teléfono">
+              <i class="fas fa-camera"></i> Tomar Foto
+              <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'pieza')" />
+            </label>
+            <label class="btn btn--ghost btn--xs" style="cursor:pointer; font-weight:800; padding:5px 10px; border-color:rgba(56,189,248,0.5); color:#38bdf8;" title="Elegir fotos de la galería">
+              <i class="fas fa-images"></i> Galería
+              <input type="file" accept="image/*" multiple style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'pieza')" />
+            </label>
+          </div>
         </div>
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
           ${piezaImgs || `<div style="grid-column:1/-1; padding:20px; color:var(--text-muted); font-size:12px;">Sin fotos registradas de la pieza.</div>`}
@@ -10285,10 +10671,16 @@ function openDualGalleryInspector(orderId) {
           <div class="form-section-title" style="color:#b45309; margin-bottom:0;">
             <i class="fas fa-camera"></i> Galería 2: Fotos de Repuestos Aportados por el Cliente (${(order.galeria_fotos_repuestos || []).length})
           </div>
-          <label class="btn btn--gold btn--xs" style="cursor:pointer; font-weight:800;">
-            <i class="fas fa-camera"></i> + Subir Fotos HD de Repuestos
-            <input type="file" accept="image/*" multiple style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'repuestos')" />
-          </label>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <label class="btn btn--gold btn--xs" style="cursor:pointer; font-weight:800; padding:5px 10px;" title="Tomar foto con la cámara del teléfono">
+              <i class="fas fa-camera"></i> Tomar Foto
+              <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'repuestos')" />
+            </label>
+            <label class="btn btn--ghost btn--xs" style="cursor:pointer; font-weight:800; padding:5px 10px; border-color:rgba(245,223,0,0.5); color:#fde047;" title="Elegir fotos de repuestos de la galería">
+              <i class="fas fa-images"></i> Galería
+              <input type="file" accept="image/*" multiple style="display:none;" onchange="handleInspectionMultiUpload(event, '${order.id_orden}', 'repuestos')" />
+            </label>
+          </div>
         </div>
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
           Soporte visual exclusivo para que el técnico verifique en su mesa con qué guías, válvulas, sellos o empacaduras cuenta físicamente. Toca cualquier foto para ampliarla en pantalla completa con zoom.
@@ -11251,12 +11643,16 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
           Tome una fotografía a los billetes en efectivo entregados al trabajador o adjunte el comprobante digital de la transferencia/pago móvil para el respaldo del egreso.
         </p>
-        <input type="file" id="liq-worker-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="handleWorkerLiquidationPhotoUpload(event)" />
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <button type="button" class="btn btn--gold" onclick="document.getElementById('liq-worker-photo-input').click()">
-            <i class="fas fa-camera"></i> Tomar / Adjuntar Foto de Billetes o Comprobante
+        <input type="file" id="liq-worker-photo-cam" accept="image/*" capture="environment" style="display:none;" onchange="handleWorkerLiquidationPhotoUpload(event)" />
+        <input type="file" id="liq-worker-photo-gal" accept="image/*" style="display:none;" onchange="handleWorkerLiquidationPhotoUpload(event)" />
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('liq-worker-photo-cam').click()" title="Tomar foto directa con la cámara del teléfono">
+            <i class="fas fa-camera"></i> Tomar Foto (Cámara)
           </button>
-          <span style="font-size:11.5px; color:var(--text-muted);">Formatos admitidos: JPG, PNG, WEBP</span>
+          <button type="button" class="btn btn--ghost btn--sm" style="border-color:rgba(245,223,0,0.5); color:#fde047;" onclick="document.getElementById('liq-worker-photo-gal').click()" title="Subir de la galería o capture">
+            <i class="fas fa-images"></i> Galería / Comprobante
+          </button>
+          <span style="font-size:11.5px; color:var(--text-muted);">Formatos: JPG, PNG, WEBP</span>
         </div>
         <div id="liq-worker-photo-preview" style="margin-top:8px;"></div>
       </div>
@@ -11881,8 +12277,8 @@ function renderAttendanceScreen() {
           <i class="fas fa-shield-alt"></i> CONTROL DE ASISTENCIA Y PRESENCIA FÍSICA · RECTIFICADORA RENACER
         </span>
         <h2 style="font-size:20px; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> ${isTechnician ? 'Mi Asistencia y Horario de Trabajo' : 'Monitoreo de Horarios, Entrada, Almuerzo y Salida'}</h2>
-        <p style="font-size:12.5px; color:var(--text-muted); margin:0;">
-          Límite de entrada puntual: <strong>8:15 AM</strong>. Validación física mediante Kiosco con QR Dinámico (45s) o selección de perfil técnico con PIN.
+        <p id="attendance-screen-notice" style="font-size:12.5px; color:var(--text-muted); margin:0;">
+          ${escapeHtml(getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice))}
         </p>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -12425,10 +12821,14 @@ function openNewFinanceMovementModal(tipo) {
 
       <div class="form-field" style="margin-top:10px;">
         <label><i class="fas fa-camera"></i> Foto del Comprobante / Factura / Recibo ${tipo === 'egreso' ? '(OBLIGATORIO para egresos) *' : '(Opcional)'}</label>
-        <input type="file" id="mov-photo-file" accept="image/*" capture="environment" style="display:none;" onchange="handleMovementPhotoUpload(this)" />
-        <div style="display:flex; gap:10px; align-items:center; margin-top:4px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('mov-photo-file').click()">
-            <i class="fas fa-camera"></i> Adjuntar Soporte / Foto
+        <input type="file" id="mov-photo-file-cam" accept="image/*" capture="environment" style="display:none;" onchange="handleMovementPhotoUpload(this)" />
+        <input type="file" id="mov-photo-file-gal" accept="image/*" style="display:none;" onchange="handleMovementPhotoUpload(this)" />
+        <div style="display:flex; gap:8px; align-items:center; margin-top:4px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('mov-photo-file-cam').click()" title="Tomar foto directa con la cámara del teléfono">
+            <i class="fas fa-camera"></i> Tomar Foto
+          </button>
+          <button type="button" class="btn btn--ghost btn--sm" style="border-color:rgba(245,223,0,0.5); color:#fde047;" onclick="document.getElementById('mov-photo-file-gal').click()" title="Subir foto o captura de la galería">
+            <i class="fas fa-images"></i> Galería / Capture
           </button>
           <span id="mov-photo-name" style="font-size:12px; color:var(--text-muted); font-style:italic;">Ningún archivo seleccionado</span>
         </div>
@@ -14279,7 +14679,7 @@ function openAttendanceKioskModal() {
 
           <div style="margin-top:14px; padding:10px; background:rgba(245,196,0,0.06); border:1px dashed var(--renacer-gold); border-radius:10px; font-size:11px; color:var(--text-main);">
             <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> 
-            <strong>Horario oficial:</strong> Entrada puntual hasta las <strong>8:15 AM</strong>. Después de esa hora se marca <strong>Tardanza</strong> con deducción en nómina.
+            <span id="kiosk-notice-display">${escapeHtml(getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice))}</span>
           </div>
         </div>
       </div>
