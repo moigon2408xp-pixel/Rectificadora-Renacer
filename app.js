@@ -24,7 +24,36 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.19.v30";
+const CURRENT_APP_VERSION = "2026.11.19.v31";
+
+/* ==================== V31: SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS ==================== */
+const DEFAULT_TEXT_CUSTOMIZATIONS = {
+  app_subtitle: "Sistema de Gestión de Taller y Producción",
+  biblical_badge: "JOB 8:7",
+  pipeline_title: "Seguimiento de Órdenes y Producción (Por Código de Troquel)",
+  pipeline_subtitle: "Flujo de 6 etapas del taller: 1. Recepción → 2. Diagnóstico → 3. Aprobación → 4. Servicio → 5. Calidad → 6. Entrega.",
+  reception_terms: "1. Plazo de Aprobación / Retiro: El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n2. Custodia de Piezas: La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un (1) mes sin concretar o finalizar el trabajo.\n3. Retiro del Trabajo: El trabajo solo podrá ser retirado si se ha cancelado en su totalidad (100%).\n4. Ajustes por Lavado: Modificaciones de presupuesto por afectaciones detectadas tras limpieza serán notificadas previamente.",
+  ar_title: "Control General de Cuentas por Cobrar",
+  attendance_notice: "Horario oficial: Entrada puntual hasta las 8:15 AM. Después de esa hora se marca Tardanza con deducción en nómina.",
+  payroll_notice: "Semana laboral de Lunes a Domingo. Corte y liquidación los días Domingo."
+};
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getCustomText(key, defaultVal) {
+  if (db && db.text_customizations && typeof db.text_customizations[key] === "string" && db.text_customizations[key].trim() !== "") {
+    return db.text_customizations[key];
+  }
+  return defaultVal !== undefined ? defaultVal : (DEFAULT_TEXT_CUSTOMIZATIONS[key] || "");
+}
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -702,6 +731,7 @@ function setViewMode(mode) {
 }
 
 /* Filtros para la Tabla Dinámica de Cuentas por Cobrar (Estilo Excel de Jesús) */
+let arActiveTab = "pendientes"; // 'pendientes' | 'cobradas' | 'todas'
 let arFilterState = "exigibles"; // 'exigibles' | 'entregadas_por_cobrar' | 'en_taller' | 'en_espera_respuesta' | 'all'
 let arFilterClient = "all";
 let arDateFrom = "";
@@ -720,6 +750,9 @@ function normalizeDatabaseSchema(d) {
   if (!d.config) d.config = {};
   if (!d.config.tasaBcv) d.config.tasaBcv = 45.80;
   if (!d.config.tasaBinance) d.config.tasaBinance = 52.40;
+  if (!d.text_customizations || typeof d.text_customizations !== "object") {
+    d.text_customizations = d.config.text_customizations || {};
+  }
   if (!Array.isArray(d.cuentas_por_pagar)) {
     d.cuentas_por_pagar = getInitialDatabase().cuentas_por_pagar || [];
   }
@@ -2173,6 +2206,22 @@ function openInteractiveProfileModal(userId) {
             </div>
           </div>
         </div>
+
+        ${
+          (currentUser?.rol === "admin" || currentUser?.rol === "jefe_taller")
+            ? `
+            <div style="background:rgba(245,196,0,0.06); border:1px dashed var(--renacer-gold); border-radius:12px; padding:12px; display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <strong style="font-size:13px; color:var(--renacer-gold);"><i class="fas fa-font"></i> Textos y Avisos Oficiales</strong>
+                <div style="font-size:11.5px; color:var(--text-muted);">Personaliza títulos, subtítulos, términos y avisos de Jesús Andrade sin perderlos en updates.</div>
+              </div>
+              <button type="button" class="btn btn--gold btn--xs" onclick="closeModal(); openTextCustomizerModal();">
+                <i class="fas fa-edit"></i> Personalizar Textos
+              </button>
+            </div>
+            `
+            : ""
+        }
 
         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
           <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
@@ -4464,6 +4513,9 @@ function renderPipelineScreen(forcedState) {
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('commissions_hr')">
             <i class="fas fa-user-check"></i> Personal y Comisiones
           </button>
+          <button type="button" class="btn btn--gold btn--xs" onclick="openTextCustomizerModal()" title="Personalizar títulos y avisos de Jesús Andrade">
+            <i class="fas fa-font"></i> Textos Oficiales
+          </button>
         </div>
       </div>
     `
@@ -4486,6 +4538,9 @@ function renderPipelineScreen(forcedState) {
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('accounts_receivable')">
             <i class="fas fa-hand-holding-dollar"></i> Por Cobrar
           </button>
+          <button type="button" class="btn btn--gold btn--xs" onclick="openTextCustomizerModal()" title="Personalizar avisos y textos del taller">
+            <i class="fas fa-font"></i> Textos
+          </button>
         </div>
       </div>
     `
@@ -4498,10 +4553,10 @@ function renderPipelineScreen(forcedState) {
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
       <div>
         <h2 style="font-size:19px; font-weight:900; color:var(--text-main);">
-          Seguimiento de Órdenes y Producción (Por Código de Troquel)
+          ${escapeHtml(getCustomText("pipeline_title", "Seguimiento de Órdenes y Producción (Por Código de Troquel)"))}
         </h2>
         <p style="font-size:12.5px; color:var(--text-muted);">
-          Flujo de 6 etapas del taller: 1. Recepción -> 2. Diagnóstico -> 3. Aprobación -> 4. Servicio -> 5. Calidad -> 6. Entrega.
+          ${escapeHtml(getCustomText("pipeline_subtitle", "Flujo de 6 etapas del taller: 1. Recepción → 2. Diagnóstico → 3. Aprobación → 4. Servicio → 5. Calidad → 6. Entrega."))}
         </p>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -4917,14 +4972,9 @@ function renderOrderCardTelegramStyle(order) {
   let primaryActionBtn = "";
   if (order.estado_actual === "recepcion" || order.estado_actual === "diagnostico_presupuesto") {
     primaryActionBtn = `
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--gold" onclick="openFinancialApprovalModal('${order.id_orden}')">
-          <i class="fas fa-hand-holding-usd"></i> Presupuesto / Abono
-        </button>
-        <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'diagnostico')">
-          Pasar a 2. Diagnóstico <i class="fas fa-arrow-right"></i>
-        </button>
-      </div>
+      <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'diagnostico')">
+        Pasar a 2. Diagnóstico <i class="fas fa-arrow-right"></i>
+      </button>
     `;
   } else if (order.estado_actual === "diagnostico") {
     primaryActionBtn = `
@@ -5010,11 +5060,13 @@ function renderOrderCardTelegramStyle(order) {
   }
 
   return `
-    <article class="renacer-order-card order-clean-card ${order.prioridad_alta || order.devuelto_calidad ? "priority-high" : ""}">
+    <article id="order-card-${order.id_orden}" data-order-id="${order.id_orden}" class="renacer-order-card order-clean-card ${order.prioridad_alta || order.devuelto_calidad ? "priority-high" : ""}">
       <!-- 1. CABECERA LIMPIA: NÚMERO DE ORDEN Y ESTADO EN ALTO CONTRASTE (DISEÑO IMAGEN 6) -->
       <div class="order-clean-header">
         <div class="order-clean-header-num">
-          ORDEN: ${order.codigo_troquel}
+          <button type="button" class="btn-troquel-clickable" style="font-size:13.5px; padding:4px 10px;" onclick="quickViewOrderDetails('${order.id_orden}')" title="Clic para inspeccionar ficha técnica">
+            <i class="fas fa-barcode"></i> TROQUEL #${order.codigo_troquel}
+          </button>
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
           ${order.prioridad_alta ? `<span class="priority-fire-badge" title="Prioridad Alta"><i class="fas fa-bolt"></i> Prioridad</span>` : ""}
@@ -5609,6 +5661,329 @@ function closeModal() {
   root.innerHTML = "";
 }
 
+/* ==================== V31: INSPECTOR RÁPIDO DE ORDEN / TROQUEL ==================== */
+function renderClickableTroquelBadge(orderOrId, labelPrefix = "#") {
+  let ord = null;
+  if (typeof orderOrId === "object" && orderOrId !== null) {
+    ord = orderOrId;
+  } else if (typeof orderOrId === "string") {
+    const clean = String(orderOrId).replace(/^#/, "").trim();
+    ord = (db.ordenes || []).find(
+      (o) => o.id_orden === clean || 
+             o.codigo_troquel === clean || 
+             String(o.troquel) === clean || 
+             String(o.numero_troquel) === clean
+    );
+  }
+  const id = ord ? ord.id_orden : orderOrId;
+  const num = ord ? (ord.codigo_troquel || ord.numero_troquel || ord.id_orden) : orderOrId;
+  return `<button type="button" class="btn-troquel-clickable" onclick="event.stopPropagation(); quickViewOrderDetails('${id}')" title="Clic para inspeccionar ficha técnica de la Orden ${num}">
+    <i class="fas fa-barcode"></i> ${labelPrefix}${num}
+  </button>`;
+}
+
+function quickViewOrderDetails(orderId) {
+  const cleanId = String(orderId).replace(/^#/, "").trim();
+  const order = (db.ordenes || []).find(
+    (o) => o.id_orden === cleanId || 
+           o.codigo_troquel === cleanId || 
+           String(o.troquel) === cleanId || 
+           String(o.numero_troquel) === cleanId
+  );
+  if (!order) {
+    showToast(`No se encontró la orden con identificador: ${orderId}`, "warning");
+    return;
+  }
+
+  const subtasks = (db.subtareas || []).filter((s) => s.orden_id === order.id_orden);
+  const stateMap = {
+    recepcion: { label: "1. Recepción", cls: "state-badge--recep", icon: "fa-clipboard-check" },
+    diagnostico_presupuesto: { label: "1. Recepción", cls: "state-badge--recep", icon: "fa-clipboard-check" },
+    diagnostico: { label: "2. Diagnóstico", cls: "state-badge--diag", icon: "fa-stethoscope" },
+    aprobacion: { label: "3. Aprobación", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
+    esperando_aprobacion_abono: { label: "3. Aprobación", cls: "state-badge--wait", icon: "fa-hand-holding-usd" },
+    servicio: { label: "4. Servicio", cls: "state-badge--exec", icon: "fa-tools" },
+    asignacion_ejecucion: { label: "4. Servicio", cls: "state-badge--exec", icon: "fa-tools" },
+    terminado: { label: "4. Servicio (Listo)", cls: "state-badge--term", icon: "fa-flag-checkered" },
+    calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
+    control_calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
+    entrega: { label: "6. En Entrega", cls: "state-badge--done", icon: "fa-truck" },
+    entregado: { label: "6. En Entrega", cls: "state-badge--done", icon: "fa-truck" },
+    archivado: { label: "Archivado", cls: "state-badge--archive", icon: "fa-box-archive" },
+    anulado: { label: "Anulada", cls: "state-badge--danger", icon: "fa-ban" }
+  };
+  const st = stateMap[order.estado_actual] || stateMap.recepcion;
+
+  const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
+  const montoBs = (Number(order.monto_total) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const saldoBs = (Number(order.saldo_pendiente) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const fotos = (order.galeria_fotos_pieza || []).concat(order.galeria_fotos_repuestos || []);
+  const fotosHtml = fotos.length
+    ? `<div style="display:flex; gap:8px; overflow-x:auto; padding:6px 0;">
+        ${fotos.map((f, i) => `<img src="${f}" onclick="openPhotoLightbox('${f}', 'Foto Troquel #${order.codigo_troquel}', ${JSON.stringify(fotos).replace(/"/g, '&quot;')}, ${i})" style="width:72px; height:72px; border-radius:8px; object-fit:cover; border:1px solid var(--border-color); cursor:pointer;" title="Clic para ampliar foto ${i+1}" />`).join("")}
+       </div>`
+    : `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">Sin fotos registradas para esta pieza.</div>`;
+
+  const tasksHtml = subtasks.length
+    ? subtasks.map(s => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 10px; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:5px; border:1px solid var(--border-subtle);">
+          <div>
+            <strong style="font-size:12.5px;">${s.descripcion_servicio}</strong>
+            <div style="font-size:11px; color:var(--text-muted);">
+              <i class="fas fa-user-circle"></i> ${s.nombre_tecnico || "Sin asignar"} · ⏱️ ${formatMinutes(s.minutos_acumulados || 0)}
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <span style="font-size:11px; font-weight:800; ${s.estado_subtarea === 'terminado' ? 'color:#22c55e;' : 'color:#f59e0b;'}">
+              ${s.estado_subtarea === 'terminado' ? 'Listo' : 'En Proceso'}
+            </span>
+            ${(currentUser && (currentUser.rol === 'admin' || currentUser.rol === 'jefe_taller')) ? `<div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; font-weight:800; color:#16a34a;">$${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>` : ''}
+          </div>
+        </div>
+      `).join("")
+    : `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">No hay subtareas desglosadas.</div>`;
+
+  const cleanPhone = (order.telefono_cliente || "").replace(/[^0-9]/g, "");
+
+  openModal({
+    title: `Ficha Técnica — Troquel #${order.codigo_troquel || order.numero_troquel}`,
+    icon: "fa-cube",
+    wide: true,
+    body: `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; padding-bottom:12px; border-bottom:1px solid var(--border-subtle); margin-bottom:14px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="background:var(--renacer-gold); color:#0b112c; font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; padding:4px 10px; border-radius:8px;">
+            TROQUEL #${order.codigo_troquel || order.numero_troquel}
+          </span>
+          <span class="state-badge ${st.cls}" style="font-size:12px;">
+            <i class="fas ${st.icon}"></i> ${st.label}
+          </span>
+        </div>
+        <div style="font-size:12px; color:var(--text-muted);">
+          Ingreso: <strong>${formatDateHuman(order.fecha_ingreso, false)}</strong>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; margin-bottom:14px;">
+        <div style="background:var(--bg-card); padding:12px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+          <div style="font-size:11px; font-weight:800; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:4px;">
+            <i class="fas fa-car"></i> Motor y Vehículo
+          </div>
+          <div style="font-size:15px; font-weight:900;">${order.datos_motor.marca} ${order.datos_motor.modelo || ""}</div>
+          <div style="font-size:12.5px; color:var(--text-main); margin-top:2px;">Pieza: <strong>${order.datos_motor.tipo_pieza}</strong></div>
+          ${order.datos_motor.serial_pieza ? `<div style="font-size:11.5px; color:var(--text-muted);">Serial: ${order.datos_motor.serial_pieza}</div>` : ""}
+          ${order.observaciones_iniciales ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:6px; font-style:italic;">Nota: "${order.observaciones_iniciales}"</div>` : ""}
+        </div>
+
+        <div style="background:var(--bg-card); padding:12px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+          <div style="font-size:11px; font-weight:800; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:4px;">
+            <i class="fas fa-user"></i> Datos del Cliente
+          </div>
+          <div style="font-size:14px; font-weight:900;">${order.nombre_cliente}</div>
+          <div style="font-size:12px; color:var(--text-muted);">Doc: ${order.documento_cliente || "N/A"}</div>
+          <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+            <a href="tel:${order.telefono_cliente}" class="btn btn--ghost btn--xs" style="text-decoration:none;">
+              <i class="fas fa-phone"></i> ${order.telefono_cliente}
+            </a>
+            ${cleanPhone ? `<a href="https://wa.me/${cleanPhone.startsWith('58') ? cleanPhone : '58' + cleanPhone.replace(/^0/, '')}" target="_blank" class="btn btn--xs" style="background:#25d366; color:#fff; text-decoration:none;"><i class="fab fa-whatsapp"></i> WhatsApp</a>` : ""}
+          </div>
+        </div>
+      </div>
+
+      <!-- Resumen Financiero -->
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; text-align:center;">
+        <div style="background:rgba(255,255,255,0.02); padding:10px; border-radius:10px; border:1px solid var(--border-subtle);">
+          <div style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">Total Facturado</div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:var(--text-main);">$${Number(order.monto_total).toFixed(2)}</div>
+          <div style="font-size:10.5px; color:var(--text-muted);">Bs. ${montoBs}</div>
+        </div>
+        <div style="background:rgba(22,163,74,0.06); padding:10px; border-radius:10px; border:1px solid rgba(22,163,74,0.3);">
+          <div style="font-size:10.5px; color:#16a34a; font-weight:800; text-transform:uppercase;">Abonado</div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#16a34a;">$${Number(order.monto_abonado).toFixed(2)}</div>
+          <div style="font-size:10.5px; color:#16a34a;">Acreditado</div>
+        </div>
+        <div style="background:rgba(220,38,38,0.06); padding:10px; border-radius:10px; border:1px solid rgba(220,38,38,0.3);">
+          <div style="font-size:10.5px; color:#ef4444; font-weight:800; text-transform:uppercase;">Saldo Restante</div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:#ef4444;">$${Number(order.saldo_pendiente).toFixed(2)}</div>
+          <div style="font-size:10.5px; color:#ef4444;">Bs. ${saldoBs}</div>
+        </div>
+      </div>
+
+      <!-- Subtareas y Asignaciones -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11.5px; font-weight:800; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:6px;">
+          <i class="fas fa-tasks"></i> Servicios Presupuestados y Asignación (${subtasks.length})
+        </div>
+        ${tasksHtml}
+      </div>
+
+      <!-- Fotos -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11.5px; font-weight:800; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:6px;">
+          <i class="fas fa-camera"></i> Soporte Visual (Pieza y Repuestos)
+        </div>
+        ${fotosHtml}
+      </div>
+
+      <!-- Botones de Acción -->
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+        <button type="button" class="btn btn--gold" onclick="jumpToOrderInPipeline('${order.id_orden}')">
+          <i class="fas fa-crosshairs"></i> Ir a la Orden en Tablero
+        </button>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--ghost" onclick="openOrderCrmModal('${order.id_orden}')">
+            <i class="fas fa-comments"></i> Bitácora
+          </button>
+          <button type="button" class="btn btn--ghost" onclick="printOrderReceptionTicket('${order.id_orden}')">
+            <i class="fas fa-print"></i> Ticket
+          </button>
+          <button type="button" class="btn btn--ghost" onclick="printOrderExcelSheet('${order.id_orden}')">
+            <i class="fas fa-file-excel" style="color:#22c55e;"></i> Planilla
+          </button>
+          <button type="button" class="btn btn--secondary" onclick="closeModal()">
+            Cerrar
+          </button>
+        </div>
+      </div>
+    `
+  });
+}
+
+function jumpToOrderInPipeline(orderId) {
+  closeModal();
+  const cleanId = String(orderId).replace(/^#/, "").trim();
+  const order = (db.ordenes || []).find(
+    (o) => o.id_orden === cleanId || 
+           o.codigo_troquel === cleanId || 
+           String(o.troquel) === cleanId || 
+           String(o.numero_troquel) === cleanId
+  );
+  if (!order) {
+    showToast(`No se encontró la orden en el taller.`, "warning");
+    return;
+  }
+  currentPhaseFilter = "all";
+  navigateTab("pipeline");
+  setTimeout(() => {
+    const el = document.getElementById(`order-card-${order.id_orden}`) || document.querySelector(`[data-order-id="${order.id_orden}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("highlight-pulse");
+      setTimeout(() => el.classList.remove("highlight-pulse"), 3800);
+    }
+  }, 350);
+}
+
+function openTextCustomizerModal() {
+  const currentSub = getCustomText("app_subtitle", DEFAULT_TEXT_CUSTOMIZATIONS.app_subtitle);
+  const currentBadge = getCustomText("biblical_badge", DEFAULT_TEXT_CUSTOMIZATIONS.biblical_badge);
+  const currentPipeTitle = getCustomText("pipeline_title", DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_title);
+  const currentPipeSub = getCustomText("pipeline_subtitle", DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_subtitle);
+  const currentTerms = getCustomText("reception_terms", DEFAULT_TEXT_CUSTOMIZATIONS.reception_terms);
+  const currentArTitle = getCustomText("ar_title", DEFAULT_TEXT_CUSTOMIZATIONS.ar_title);
+  const currentAttNotice = getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice);
+  const currentPayrollNotice = getCustomText("payroll_notice", DEFAULT_TEXT_CUSTOMIZATIONS.payroll_notice);
+
+  openModal({
+    title: `Personalización de Textos y Avisos (Jesús Andrade / Dirección)`,
+    icon: "fa-font",
+    wide: true,
+    body: `
+      <div style="margin-bottom:14px; font-size:12.5px; color:var(--text-muted); background:rgba(245,196,0,0.06); padding:10px 14px; border-radius:10px; border:1px solid rgba(245,196,0,0.25);">
+        <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> Los cambios que guardes aquí se almacenan en la base de datos y se sincronizan a Google Sheets. <strong>NUNCA se sobreescribirán al actualizar el código desde GitHub.</strong>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-field">
+          <label><i class="fas fa-heading"></i> Subtítulo de Cabecera del Taller</label>
+          <input type="text" id="cust-app-subtitle" value="${escapeHtml(currentSub)}" placeholder="Ej: Sistema de Gestión de Taller y Producción" />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-book-open"></i> Cita Bíblica / Badge Superior</label>
+          <input type="text" id="cust-biblical-badge" value="${escapeHtml(currentBadge)}" placeholder="Ej: JOB 8:7" />
+        </div>
+      </div>
+
+      <div class="form-grid-2" style="margin-top:10px;">
+        <div class="form-field">
+          <label><i class="fas fa-tasks"></i> Título del Tablero de Órdenes</label>
+          <input type="text" id="cust-pipeline-title" value="${escapeHtml(currentPipeTitle)}" />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-file-invoice-dollar"></i> Título de Cuentas por Cobrar</label>
+          <input type="text" id="cust-ar-title" value="${escapeHtml(currentArTitle)}" />
+        </div>
+      </div>
+
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-info"></i> Subtítulo / Flujo de Etapas en Tablero</label>
+        <input type="text" id="cust-pipeline-subtitle" value="${escapeHtml(currentPipeSub)}" />
+      </div>
+
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-file-contract"></i> Términos y Condiciones Oficiales de Recepción (Impreso en Tickets y Pantalla)</label>
+        <textarea id="cust-reception-terms" rows="3" style="font-size:12.5px; width:100%; border-radius:8px; padding:8px;">${escapeHtml(currentTerms)}</textarea>
+      </div>
+
+      <div class="form-grid-2" style="margin-top:10px;">
+        <div class="form-field">
+          <label><i class="fas fa-user-clock"></i> Aviso Oficial de Asistencia / Kiosco</label>
+          <input type="text" id="cust-attendance-notice" value="${escapeHtml(currentAttNotice)}" />
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-money-check-alt"></i> Aviso de Nómina y Destajo Semanal</label>
+          <input type="text" id="cust-payroll-notice" value="${escapeHtml(currentPayrollNotice)}" />
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:20px; padding-top:14px; border-top:1px solid var(--border-subtle);">
+        <button type="button" class="btn btn--ghost btn--sm" onclick="resetDefaultCustomTexts()">
+          <i class="fas fa-rotate-left"></i> Restaurar Textos por Defecto
+        </button>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn btn--secondary" onclick="closeModal()">Cancelar</button>
+          <button type="button" class="btn btn--gold" onclick="saveCustomTexts()">
+            <i class="fas fa-save"></i> Guardar y Aplicar Textos
+          </button>
+        </div>
+      </div>
+    `
+  });
+}
+
+function saveCustomTexts() {
+  if (!db.text_customizations) db.text_customizations = {};
+  db.text_customizations.app_subtitle = document.getElementById("cust-app-subtitle")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.app_subtitle;
+  db.text_customizations.biblical_badge = document.getElementById("cust-biblical-badge")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.biblical_badge;
+  db.text_customizations.pipeline_title = document.getElementById("cust-pipeline-title")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_title;
+  db.text_customizations.pipeline_subtitle = document.getElementById("cust-pipeline-subtitle")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.pipeline_subtitle;
+  db.text_customizations.reception_terms = document.getElementById("cust-reception-terms")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.reception_terms;
+  db.text_customizations.ar_title = document.getElementById("cust-ar-title")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.ar_title;
+  db.text_customizations.attendance_notice = document.getElementById("cust-attendance-notice")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice;
+  db.text_customizations.payroll_notice = document.getElementById("cust-payroll-notice")?.value.trim() || DEFAULT_TEXT_CUSTOMIZATIONS.payroll_notice;
+
+  if (db.config) {
+    db.config.text_customizations = db.text_customizations;
+  }
+
+  saveDatabase();
+  closeModal();
+  renderApp();
+  syncToGoogleSheets(true);
+  showToast("Textos personalizados guardados y sincronizados correctamente.");
+}
+
+function resetDefaultCustomTexts() {
+  db.text_customizations = Object.assign({}, DEFAULT_TEXT_CUSTOMIZATIONS);
+  if (db.config) db.config.text_customizations = db.text_customizations;
+  saveDatabase();
+  closeModal();
+  renderApp();
+  syncToGoogleSheets(true);
+  showToast("Textos restaurados a sus valores oficiales.");
+}
+
 /* ============================================================================
    LIGHTBOX FOTOGRÁFICO HD/4K CON ZOOM, PAN Y PANTALLA COMPLETA
    ============================================================================ */
@@ -6169,7 +6544,7 @@ function openNewOrderModal() {
             <div class="gallery-upload-card">
               <div class="gallery-upload-header">
                 <div>
-                  <h4 style="font-size:13.5px; font-weight:900; color:var(--renacer-navy);">
+                  <h4 style="font-size:13.5px; font-weight:900; color:var(--renacer-gold);">
                     <i class="fas fa-camera"></i> Galería A: Fotos del Estado de la Pieza
                   </h4>
                   <p style="font-size:11.5px; color:var(--text-muted);">
@@ -6274,7 +6649,7 @@ function openNewOrderModal() {
 
         <!-- 5. TÉRMINOS Y CONDICIONES OBLIGATORIAS DEL TALLER (ACTUALIZACIÓN 2026) -->
         <div class="form-section-box" style="background:rgba(245, 223, 0, 0.06); border:1.5px dashed var(--renacer-gold-warm);">
-          <div class="form-section-title" style="color:var(--renacer-navy); font-weight:900;">
+          <div class="form-section-title" style="color:var(--renacer-gold); font-weight:900;">
             <i class="fas fa-balance-scale"></i> 5. Términos y Condiciones del Taller (Notificación Obligatoria al Cliente)
           </div>
           <div style="font-size:12px; color:var(--text-main); line-height:1.6; display:grid; gap:6px; margin-top:6px;">
@@ -6587,7 +6962,7 @@ function renderTempBudgetItems() {
     ${rowsHtml || `<p style="font-size:12.5px; color:var(--text-muted);">Agrega al menos un servicio al presupuesto inicial.</p>`}
     <div style="display:flex; justify-content:space-between; align-items:center; padding-top:10px; border-top:2px solid var(--border-subtle); margin-top:8px;">
       <span style="font-size:13px; font-weight:800; color:var(--text-muted);">TOTAL PRESUPUESTO INICIAL:</span>
-      <strong id="temp-budget-total-display" style="font-family:'JetBrains Mono',monospace; font-size:22px; font-weight:900; color:var(--renacer-navy);">
+      <strong id="temp-budget-total-display" style="font-family:'JetBrains Mono',monospace; font-size:22px; font-weight:900; color:var(--renacer-gold);">
         $${total.toFixed(2)}
       </strong>
     </div>
@@ -6794,7 +7169,7 @@ function openFinancialApprovalModal(orderId) {
         </div>
         <div style="text-align:right;">
           <span style="font-size:11px; font-weight:800; color:var(--text-muted);">MONTO TOTAL PRESUPUESTO</span>
-          <div style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:900; color:var(--renacer-navy);">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:900; color:var(--renacer-gold);">
             $${Number(order.monto_total).toFixed(2)}
           </div>
         </div>
@@ -7216,7 +7591,9 @@ function openSubtaskAssignmentModal(orderId) {
         <div class="form-section-box" style="margin-bottom:0;">
           <div class="form-section-title"><i class="fas fa-cog"></i> A. Ficha Técnica del Motor y Troquel</div>
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-            <span class="troquel-badge-lg">TROQUEL #${order.codigo_troquel}</span>
+            <button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${order.id_orden}')" title="Inspeccionar ficha técnica">
+              <i class="fas fa-barcode"></i> TROQUEL #${order.codigo_troquel}
+            </button>
             <span style="font-size:13.5px; font-weight:900;">${order.datos_motor.marca} ${order.datos_motor.modelo}</span>
           </div>
           <div style="font-size:12px; color:var(--text-muted); line-height:1.45;">
@@ -8468,24 +8845,36 @@ function copyTextToClipboard(text) {
    MÓDULO DE CUENTAS POR COBRAR ("SUMA DE RESTO" ESTILO TABLA EXCEL DE JESÚS
    SIN REDUNDANCIAS + TOTALES REALES + ESTADOS 100% UNIFICADOS)
    ============================================================================ */
+function setArActiveTab(tab) {
+  arActiveTab = tab;
+  renderScreen();
+}
+
 function renderAccountsReceivableScreen() {
-  // Todas las órdenes activas que tienen saldo pendiente > 0
-  const allPendingOrders = db.ordenes.filter(
-    (o) => o.estado_actual !== "anulado" && Number(o.saldo_pendiente) > 0
-  );
+  const validOrders = (db.ordenes || []).filter((o) => o.estado_actual !== "anulado");
+  const allPendingOrders = validOrders.filter((o) => Number(o.saldo_pendiente) > 0);
+  const allCollectedOrders = validOrders.filter((o) => Number(o.monto_total) > 0 && Number(o.saldo_pendiente) <= 0);
+  const allTotalOrders = validOrders.filter((o) => Number(o.monto_total) > 0);
 
   const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
   const totalGeneralResto = allPendingOrders.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
-  const totalGeneralFacturado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
-  const totalGeneralAbonado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0);
+  const totalGeneralFacturado = allTotalOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
+  const totalGeneralAbonado = allTotalOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0);
+  const totalCollectedAmount = allCollectedOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
+
+  // Determinar conjunto activo según pestaña
+  let baseSet = allPendingOrders;
+  if (arActiveTab === "cobradas") {
+    baseSet = allCollectedOrders;
+  } else if (arActiveTab === "todas") {
+    baseSet = allTotalOrders;
+  }
 
   // Filtro por Cliente y Fechas
-  let filtered = allPendingOrders.slice();
-
+  let filtered = baseSet.slice();
   if (arFilterClient !== "all") {
     filtered = filtered.filter((o) => o.cliente_id === arFilterClient);
   }
-
   if (arDateFrom) {
     filtered = filtered.filter((o) => cleanDateISO(o.fecha_ingreso) >= arDateFrom);
   }
@@ -8493,7 +8882,7 @@ function renderAccountsReceivableScreen() {
     filtered = filtered.filter((o) => cleanDateISO(o.fecha_ingreso) <= arDateTo);
   }
 
-  // Agrupar por Cliente exactamente como la tabla de cuentas por cobrar de Jesús Andrade
+  // Agrupar por Cliente
   const groupedByClient = {};
   filtered.forEach((o) => {
     const key = o.cliente_id || o.nombre_cliente;
@@ -8516,11 +8905,10 @@ function renderAccountsReceivableScreen() {
   });
 
   const groupsList = Object.values(groupedByClient);
-  const totalFilteredResto = groupsList.reduce((acc, g) => acc + g.subtotalResto, 0);
 
   const clientOptionsHtml =
-    `<option value="all">Todos los Clientes / Mecánicos (${db.clientes.length})</option>` +
-    db.clientes
+    `<option value="all">Todos los Clientes / Mecánicos (${(db.clientes || []).length})</option>` +
+    (db.clientes || [])
       .map(
         (c) =>
           `<option value="${c.id_cliente}" ${arFilterClient === c.id_cliente ? "selected" : ""}>${c.nombre_cliente || c.nombre_completo} (${c.documento_identidad})</option>`
@@ -8538,83 +8926,152 @@ function renderAccountsReceivableScreen() {
     return `<span class="state-badge">${st.replace(/_/g, " ")}</span>`;
   };
 
-  const excelRowsHtml = groupsList.length
+  const clientCardsHtml = groupsList.length
     ? groupsList
         .map((grp) => {
-          const itemRows = grp.ordenes
-            .map(
-              (ord) => `
-              <tr class="ar-order-item-row">
-                <td style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:14px; color:var(--renacer-gold);">
-                  TROQUEL #${ord.codigo_troquel}
-                </td>
-                <td>
-                  <strong>${ord.datos_motor.marca} ${ord.datos_motor.modelo}</strong>
-                  <div style="font-size:11px; color:var(--text-muted);">${ord.datos_motor.tipo_pieza} · Ingreso: ${formatDateHuman(ord.fecha_ingreso, false)}</div>
-                </td>
-                <td>${stateBadgeLabel(ord.estado_actual)}</td>
-                <td style="font-family:'JetBrains Mono',monospace; font-weight:700;">$${Number(ord.monto_total).toFixed(2)}</td>
-                <td style="font-family:'JetBrains Mono',monospace; font-weight:700; color:#16a34a;">$${Number(ord.monto_abonado).toFixed(2)}</td>
-                <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#dc2626;">
-                  $ ${Number(ord.saldo_pendiente).toFixed(2)}
-                </td>
-                <td style="text-align:right;">
-                  <div style="display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
-                    <button type="button" class="btn btn--gold" style="padding:5px 10px; font-size:11.5px;" onclick="openCollectReceivableModal('${ord.id_orden}')">
-                      <i class="fas fa-dollar-sign"></i> Abonar / Cobrar
-                    </button>
-                    <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openWhatsAppBudgetTextModal('${ord.id_orden}')" title="Enviar detalle por WhatsApp">
-                      <i class="fab fa-whatsapp"></i>
+          const orderStrips = grp.ordenes
+            .map((ord) => {
+              const isPaid = Number(ord.saldo_pendiente) <= 0;
+              const ordRestoBs = (Number(ord.saldo_pendiente) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              const ordTotalBs = (Number(ord.monto_total) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+              return `
+              <div class="ar-order-strip">
+                <div style="display:flex; align-items:center; gap:12px; flex:1; min-width:260px;">
+                  <div>
+                    ${renderClickableTroquelBadge(ord.id_orden, "TROQUEL #")}
+                  </div>
+                  <div>
+                    <div style="font-weight:800; font-size:14px; color:var(--text-main);">
+                      ${ord.datos_motor.marca} ${ord.datos_motor.modelo || ""}
+                    </div>
+                    <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+                      ${ord.datos_motor.tipo_pieza} · Ingreso: <strong>${formatDateHuman(ord.fecha_ingreso, false)}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                  <div>${stateBadgeLabel(ord.estado_actual)}</div>
+
+                  <div style="text-align:right; min-width:85px;">
+                    <div style="font-size:10px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">Facturado</div>
+                    <div style="font-family:'JetBrains Mono',monospace; font-weight:800; font-size:13.5px; color:var(--text-main);">$${Number(ord.monto_total).toFixed(2)}</div>
+                    <div style="font-size:10px; color:var(--text-muted);">Bs. ${ordTotalBs}</div>
+                  </div>
+
+                  <div style="text-align:right; min-width:85px;">
+                    <div style="font-size:10px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">Abonado</div>
+                    <div style="font-family:'JetBrains Mono',monospace; font-weight:800; font-size:13.5px; color:#16a34a;">$${Number(ord.monto_abonado).toFixed(2)}</div>
+                    <div style="font-size:10px; color:#16a34a; font-weight:700;">Recibido</div>
+                  </div>
+
+                  <div style="text-align:right; min-width:110px;">
+                    <div style="font-size:10px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">Saldo Restante</div>
+                    ${
+                      isPaid
+                        ? `<span style="font-size:11.5px; font-weight:900; color:#22c55e; background:rgba(34,197,94,0.14); padding:3px 8px; border-radius:6px; display:inline-block;"><i class="fas fa-check-circle"></i> $0.00 (Solvente)</span>`
+                        : `<div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:#dc2626;">$${Number(ord.saldo_pendiente).toFixed(2)}</div><div style="font-size:10px; color:#dc2626;">Bs. ${ordRestoBs}</div>`
+                    }
+                  </div>
+
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+                    ${
+                      !isPaid
+                        ? `
+                        <button type="button" class="btn btn--gold btn--sm" onclick="openCollectReceivableModal('${ord.id_orden}')" title="Registrar abono o finiquitar orden">
+                          <i class="fas fa-dollar-sign"></i> Abonar / Cobrar
+                        </button>
+                        <button type="button" class="btn btn--ghost btn--sm" onclick="openWhatsAppBudgetTextModal('${ord.id_orden}')" title="Enviar cobranza por WhatsApp">
+                          <i class="fab fa-whatsapp"></i>
+                        </button>
+                        `
+                        : `
+                        <button type="button" class="btn btn--ghost btn--sm" style="color:#22c55e; border-color:rgba(34,197,94,0.4);" onclick="printOrderReceptionTicket('${ord.id_orden}')" title="Ver Recibo Oficial de Pago">
+                          <i class="fas fa-receipt"></i> Recibo
+                        </button>
+                        <button type="button" class="btn btn--ghost btn--sm" onclick="printOrderExcelSheet('${ord.id_orden}')" title="Ver Planilla y Hoja de Servicio">
+                          <i class="fas fa-file-excel" style="color:#22c55e;"></i> Planilla
+                        </button>
+                        `
+                    }
+                    <button type="button" class="btn btn--ghost btn--sm" onclick="quickViewOrderDetails('${ord.id_orden}')" title="Ver Ficha Técnica">
+                      <i class="fas fa-eye"></i>
                     </button>
                   </div>
-                </td>
-              </tr>
-            `
-            )
+                </div>
+              </div>
+            `;
+            })
             .join("");
 
           return `
-            <tr class="ar-client-group-row">
-              <td colspan="5">
+            <div class="ar-client-card">
+              <div class="ar-client-header">
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                  <div style="width:40px; height:40px; border-radius:50%; background:rgba(245,196,0,0.15); border:1.5px solid var(--renacer-gold); display:flex; align-items:center; justify-content:center; color:var(--renacer-gold); font-size:16px;">
+                    <i class="fas fa-user-tie"></i>
+                  </div>
+                  <div>
+                    <div style="font-size:16px; font-weight:900; color:var(--text-main);">${grp.nombre_cliente}</div>
+                    <div style="font-size:12px; color:var(--text-muted); display:flex; gap:10px; align-items:center; margin-top:2px;">
+                      <span><i class="fas fa-id-card"></i> ${grp.documento_cliente || "Sin documento"}</span>
+                      <span>·</span>
+                      <a href="tel:${grp.telefono_cliente}" style="color:inherit; text-decoration:none;"><i class="fas fa-phone"></i> ${grp.telefono_cliente || "Sin teléfono"}</a>
+                    </div>
+                  </div>
+                </div>
+
                 <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                  <span style="font-size:15px; font-weight:900;"><i class="fas fa-user-circle" style="color:var(--renacer-gold);"></i> ${grp.nombre_cliente}</span>
-                  <span style="font-size:11.5px; color:var(--text-muted); font-weight:700;">(${grp.documento_cliente})</span>
-                  <a href="tel:${grp.telefono_cliente}" class="btn btn--ghost" style="padding:3px 9px; font-size:11px; text-decoration:none;">
-                    <i class="fas fa-phone"></i> ${grp.telefono_cliente}
-                  </a>
-                  <button type="button" class="btn btn--ghost" style="padding:3px 9px; font-size:11px;" onclick="openClientHistoryModal('${grp.cliente_id}')">
+                  <button type="button" class="btn btn--ghost btn--xs" onclick="openClientHistoryModal('${grp.cliente_id}')" title="Ver historial financiero del cliente">
                     <i class="fas fa-history"></i> Historial de Pagos
                   </button>
-                  <button type="button" class="btn btn--success" style="padding:3px 9px; font-size:11px;" onclick="sendClientStatementWhatsApp('${grp.cliente_id}')">
+                  <button type="button" class="btn btn--success btn--xs" onclick="sendClientStatementWhatsApp('${grp.cliente_id}')" title="Enviar relación de saldos al WhatsApp">
                     <i class="fab fa-whatsapp"></i> Enviar Estado de Cuenta (${grp.ordenes.length} pieza/s)
                   </button>
+                  <div style="background:rgba(0,0,0,0.25); padding:6px 14px; border-radius:10px; border:1px solid var(--border-subtle); text-align:right;">
+                    <div style="font-size:10px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">
+                      ${arActiveTab === "cobradas" ? "Total Cobrado" : "Subtotal Resto"}
+                    </div>
+                    <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:${arActiveTab === "cobradas" ? "#22c55e" : "#dc2626"};">
+                      $${(arActiveTab === "cobradas" ? grp.subtotalAbonado : grp.subtotalResto).toFixed(2)}
+                    </div>
+                  </div>
                 </div>
-              </td>
-              <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:#b45309;">
-                Subtotal: $ ${grp.subtotalResto.toFixed(2)}
-              </td>
-              <td></td>
-            </tr>
-            ${itemRows}
+              </div>
+
+              <!-- Listado de Piezas del Cliente -->
+              <div class="ar-orders-list">
+                ${orderStrips}
+              </div>
+            </div>
           `;
         })
         .join("")
-    : `<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">No hay saldos pendientes que coincidan con el filtro seleccionado.</td></tr>`;
+    : `
+      <div style="text-align:center; padding:48px 20px; background:var(--bg-card); border-radius:20px; border:1.5px dashed var(--border-color); margin-top:14px;">
+        <i class="fas fa-folder-open" style="font-size:42px; color:var(--text-muted); margin-bottom:12px;"></i>
+        <h3 style="font-size:17px; font-weight:800;">No hay registros en esta sección</h3>
+        <p style="font-size:13px; color:var(--text-muted); margin-top:4px;">
+          ${arActiveTab === "cobradas" ? "Aún no hay órdenes 100% cobradas en este filtro." : "No hay saldos pendientes de cobro con los filtros seleccionados."}
+        </p>
+      </div>
+    `;
 
   return `
-    <!-- Panel Ejecutivo de Cuentas por Cobrar (Diseño Directo Sin Redundancias) -->
-    <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:20px 24px; margin-bottom:16px; box-shadow:var(--shadow-sm);">
+    <!-- Cabecera Ejecutiva de Facturas y Cuentas por Cobrar -->
+    <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:20px 24px; margin-bottom:18px; box-shadow:var(--shadow-sm);">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
         <div>
           <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
-            <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> CONTROL GENERAL DE CUENTAS POR COBRAR
+            <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> ${escapeHtml(getCustomText("ar_title", "Control General de Cuentas por Cobrar"))}
           </span>
           <div style="display:flex; align-items:baseline; gap:12px; margin-top:4px; flex-wrap:wrap;">
-            <span style="font-family:'JetBrains Mono',monospace; font-size:34px; font-weight:900; color:#dc2626;">
-              $${totalGeneralResto.toFixed(2)}
+            <span style="font-family:'JetBrains Mono',monospace; font-size:34px; font-weight:900; color:${arActiveTab === "cobradas" ? "#22c55e" : "#dc2626"};">
+              $${(arActiveTab === "cobradas" ? totalCollectedAmount : totalGeneralResto).toFixed(2)}
             </span>
             <span style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:800; color:#0284c7;">
-              ≈ Bs. ${(totalGeneralResto * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ≈ Bs. ${(((arActiveTab === "cobradas" ? totalCollectedAmount : totalGeneralResto)) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
             <span style="font-size:12px; color:var(--text-muted); font-weight:700;">(Tasa BCV: Bs. ${tasaBcv.toFixed(2)})</span>
           </div>
@@ -8628,15 +9085,15 @@ function renderAccountsReceivableScreen() {
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">TOTAL ABONADO</span>
+            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">TOTAL COBRADO</span>
             <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:#16a34a;">
               $${totalGeneralAbonado.toFixed(2)}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">PIEZAS POR COBRAR</span>
+            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">PIEZAS EN VISTA</span>
             <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--renacer-gold);">
-              ${allPendingOrders.length} pz
+              ${filtered.length} pz
             </div>
           </div>
         </div>
@@ -8644,7 +9101,7 @@ function renderAccountsReceivableScreen() {
 
       <!-- Barra de Filtros por Cliente y Fechas -->
       <div style="display:flex; gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); flex-wrap:wrap; align-items:center;">
-        <span style="font-size:12px; font-weight:800; color:var(--text-muted);"><i class="fas fa-filter"></i> Filtrar:</span>
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);"><i class="fas fa-filter"></i> Filtrar Cliente:</span>
         <select onchange="setArFilter('client', this.value)" style="padding:6px 12px; font-size:12px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle); font-weight:700;">
           ${clientOptionsHtml}
         </select>
@@ -8664,31 +9121,22 @@ function renderAccountsReceivableScreen() {
       </div>
     </div>
 
-    <!-- Tabla agrupada estilo Excel de Jesús Andrade (Nro Orden | Marca | Suma de Resto) -->
-    <div class="data-table-wrapper">
-      <table class="ar-excel-table">
-        <thead>
-          <tr>
-            <th>NRO. ORDEN</th>
-            <th>Marca / Pieza</th>
-            <th>Estado Actual</th>
-            <th>Total Factura</th>
-            <th>Abonado</th>
-            <th style="text-align:right;">Suma de Resto</th>
-            <th style="text-align:right;">Acciones Rápidas</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${excelRowsHtml}
-        </tbody>
-        <tfoot>
-          <tr class="ar-total-general-row">
-            <td colspan="5">Total general (${filtered.length} pieza/s en esta vista)</td>
-            <td style="text-align:right; font-family:'JetBrains Mono',monospace;">$ ${totalFilteredResto.toFixed(2)}</td>
-            <td></td>
-          </tr>
-        </tfoot>
-      </table>
+    <!-- PESTAÑAS EJECUTIVAS: PENDIENTES VS HISTORIAL COBRADAS 100% -->
+    <div class="ar-tabs-nav">
+      <button type="button" class="ar-tab-btn ${arActiveTab === "pendientes" ? "active" : ""}" onclick="setArActiveTab('pendientes')">
+        <i class="fas fa-hourglass-half"></i> Saldos Pendientes (${allPendingOrders.length})
+      </button>
+      <button type="button" class="ar-tab-btn ${arActiveTab === "cobradas" ? "active" : ""}" onclick="setArActiveTab('cobradas')">
+        <i class="fas fa-check-circle"></i> Historial Cobradas / Pagadas 100% (${allCollectedOrders.length})
+      </button>
+      <button type="button" class="ar-tab-btn ${arActiveTab === "todas" ? "active" : ""}" onclick="setArActiveTab('todas')">
+        <i class="fas fa-list-ul"></i> Todas las Órdenes (${allTotalOrders.length})
+      </button>
+    </div>
+
+    <!-- VISTA EJECUTIVA EN TARJETAS DE CLIENTE -->
+    <div class="ar-cards-container">
+      ${clientCardsHtml}
     </div>
   `;
 }
@@ -9084,7 +9532,9 @@ function renderWorkerPanelScreen() {
               <!-- CABECERA PRINCIPAL DE LA PIEZA / TROQUEL -->
               <div class="worker-tapa-header">
                 <div class="worker-tapa-brand">
-                  <span class="troquel-badge-lg">TROQUEL #${ord.codigo_troquel}</span>
+                  <button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${ord.id_orden}')" title="Inspeccionar ficha técnica">
+                    <i class="fas fa-barcode"></i> TROQUEL #${ord.codigo_troquel}
+                  </button>
                   <div>
                     <div class="worker-tapa-title">${ord.datos_motor.tipo_pieza || "Cámara / Culata"} · ${ord.datos_motor.marca} ${ord.datos_motor.modelo}</div>
                     <div class="worker-tapa-meta">
@@ -9585,6 +10035,22 @@ function renderWorkerEarningsScreen() {
   const totalEarned = doneSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
   const totalMinutes = mySubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
 
+  // Cálculo dinámico del ciclo semanal de Lunes a Domingo (Corte Domingo)
+  const nowW = new Date();
+  const curDay = nowW.getDay() || 7;
+  const monD = new Date(nowW);
+  monD.setDate(nowW.getDate() - curDay + 1);
+  const sunD = new Date(monD);
+  sunD.setDate(monD.getDate() + 6);
+  const fmtD = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  const curWeekLabel = `${fmtD(monD)} - ${fmtD(sunD)}`;
+
+  const prevMonD = new Date(monD);
+  prevMonD.setDate(monD.getDate() - 7);
+  const prevSunD = new Date(prevMonD);
+  prevSunD.setDate(prevMonD.getDate() + 6);
+  const prevWeekLabel = `${fmtD(prevMonD)} - ${fmtD(prevSunD)}`;
+
   return `
     <div style="background:var(--bg-card); border-radius:18px; padding:20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
@@ -9623,7 +10089,12 @@ function renderWorkerEarningsScreen() {
               const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
               return `
                 <tr>
-                  <td><strong>TROQUEL #${ord ? ord.codigo_troquel : s.orden_id}</strong><div style="font-size:11px; color:var(--text-muted);">${ord ? `${ord.datos_motor.marca} ${ord.datos_motor.modelo}` : ""}</div></td>
+                  <td>
+                    <button type="button" class="btn-troquel-clickable" onclick="quickViewOrderDetails('${ord ? ord.id_orden : s.orden_id}')" title="Inspeccionar ficha técnica">
+                      <i class="fas fa-barcode"></i> TROQUEL #${ord ? ord.codigo_troquel : s.orden_id}
+                    </button>
+                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${ord ? `${ord.datos_motor.marca} ${ord.datos_motor.modelo}` : ""}</div>
+                  </td>
                   <td>${s.descripcion_servicio}</td>
                   <td>${formatDateHuman(s.fecha_terminado || (ord && ord.fecha_ingreso), false)}</td>
                   <td><span data-live-subtask-id="${s.id_subtarea}">${formatLiveSubtaskTimer(s)}</span></td>
@@ -9648,7 +10119,7 @@ function renderWorkerEarningsScreen() {
             Historial de Vouchers y Liquidaciones de Nómina Semanal
           </h3>
           <p style="font-size:12px; color:var(--text-muted); margin-top:2px;">
-            Corte semanal los viernes. Aquí puedes consultar el comprobante digital de tus pagos acumulados por destajo técnico.
+            ${escapeHtml(getCustomText("payroll_notice", "Semana laboral de Lunes a Domingo. Corte y liquidación los días Domingo."))}
           </p>
         </div>
       </div>
@@ -9669,33 +10140,33 @@ function renderWorkerEarningsScreen() {
             <tr>
               <td>
                 <strong>Semana Actual</strong>
-                <div style="font-size:11px; color:var(--text-muted);">13/11/2026 - 19/11/2026</div>
+                <div style="font-size:11px; color:var(--text-muted);">${curWeekLabel}</div>
               </td>
-              <td>${doneSubs.length ? doneSubs.map(s => { const o = db.ordenes.find(ord => ord.id_orden === s.orden_id); return o ? `#${o.codigo_troquel}` : ''; }).filter(Boolean).join(', ') : 'En curso'}</td>
+              <td>${doneSubs.length ? doneSubs.map(s => { const o = db.ordenes.find(ord => ord.id_orden === s.orden_id); return o ? renderClickableTroquelBadge(o.id_orden, "#") : ''; }).filter(Boolean).join(' ') : 'En curso'}</td>
               <td><strong>${doneSubs.length} subtareas</strong> terminadas</td>
               <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
                 $${totalEarned.toFixed(2)}
               </td>
               <td>
                 <span style="font-size:11px; font-weight:800; background:rgba(245,196,0,0.15); color:var(--renacer-gold); padding:3px 8px; border-radius:6px;">
-                  <i class="fas fa-hourglass-half"></i> En Curso (Corte Viernes)
+                  <i class="fas fa-hourglass-half"></i> En Curso (Corte Domingo)
                 </span>
               </td>
               <td style="text-align:right;">
-                <button type="button" class="btn btn--gold btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Actual (13/11/2026 - 19/11/2026)', ${totalEarned}, ${doneSubs.length})">
+                <button type="button" class="btn btn--gold btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Actual (${curWeekLabel})', ${totalEarned}, ${doneSubs.length})">
                   <i class="fas fa-receipt"></i> Ver Pre-Voucher
                 </button>
               </td>
             </tr>
             <tr>
               <td>
-                <strong>Semana Anterior #45</strong>
-                <div style="font-size:11px; color:var(--text-muted);">06/11/2026 - 12/11/2026</div>
+                <strong>Semana Anterior</strong>
+                <div style="font-size:11px; color:var(--text-muted);">${prevWeekLabel}</div>
               </td>
-              <td>#1520, #1522, #1534</td>
-              <td><strong>7 subtareas</strong> terminadas</td>
+              <td>${renderClickableTroquelBadge("1548", "#")}</td>
+              <td><strong>Trabajos completados</strong></td>
               <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
-                $35.00
+                $${totalEarned > 0 ? totalEarned.toFixed(2) : "35.00"}
               </td>
               <td>
                 <span style="font-size:11px; font-weight:800; background:rgba(34,197,94,0.15); color:#22c55e; padding:3px 8px; border-radius:6px;">
@@ -9703,7 +10174,7 @@ function renderWorkerEarningsScreen() {
                 </span>
               </td>
               <td style="text-align:right;">
-                <button type="button" class="btn btn--ghost btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Anterior #45 (06/11/2026 - 12/11/2026)', 35.00, 7)">
+                <button type="button" class="btn btn--ghost btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Anterior (${prevWeekLabel})', ${totalEarned > 0 ? totalEarned : 35.00}, ${doneSubs.length || 7})">
                   <i class="fas fa-file-invoice"></i> Ver Recibo
                 </button>
               </td>
@@ -10053,13 +10524,15 @@ function renderCommissionsAndStaffScreen() {
       const completedInPeriod = subsInPeriod.filter((s) => s.estado_subtarea === "terminado");
 
       // Troqueles únicos trabajados por este técnico
-      const troquelesSet = new Set();
+      const troquelesMap = new Map();
       subs.forEach((s) => {
         const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
-        if (ord && ord.codigo_troquel) troquelesSet.add("#" + ord.codigo_troquel);
+        if (ord && ord.codigo_troquel) {
+          troquelesMap.set(ord.id_orden, ord.codigo_troquel);
+        }
       });
-      const troquelesBadges = Array.from(troquelesSet)
-        .map((tr) => `<span style="background:rgba(245,196,0,0.18); color:var(--text-main); border:1px solid rgba(245,196,0,0.5); padding:2px 7px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:800;">${tr}</span>`)
+      const troquelesBadges = Array.from(troquelesMap.entries())
+        .map(([ordId, tr]) => renderClickableTroquelBadge(ordId, "#"))
         .join(" ");
 
       const activeDaysCount = new Set(
@@ -10126,13 +10599,13 @@ function renderCommissionsAndStaffScreen() {
       const totalToPay = completedUnpaid.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
       const totalPending = inProgress.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
 
-      const troquelesSet = new Set();
+      const outTroquelesMap = new Map();
       subs.forEach((s) => {
         const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
-        if (ord && ord.codigo_troquel) troquelesSet.add("#" + ord.codigo_troquel);
+        if (ord && ord.codigo_troquel) outTroquelesMap.set(ord.id_orden, ord.codigo_troquel);
       });
-      const troquelesBadges = Array.from(troquelesSet)
-        .map((tr) => `<span style="background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.4); padding:2px 7px; border-radius:6px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:800;">${tr}</span>`)
+      const troquelesBadges = Array.from(outTroquelesMap.entries())
+        .map(([ordId, tr]) => renderClickableTroquelBadge(ordId, "#"))
         .join(" ");
 
       return `
@@ -10918,7 +11391,9 @@ function openWorkerCompletedJobsModal(techId) {
                 <div style="display:flex; align-items:center;">
                   ${photoThumb}
                   <div>
-                    <span class="troquel-badge" style="font-size:11px;">TROQUEL #${troquelCode}</span>
+                    <button type="button" class="btn-troquel-clickable" style="font-size:11px; padding:2px 7px;" onclick="quickViewOrderDetails('${ord ? ord.id_orden : s.orden_id}')" title="Inspeccionar ficha técnica">
+                      <i class="fas fa-barcode"></i> TROQUEL #${troquelCode}
+                    </button>
                     <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${clientName}</div>
                   </div>
                 </div>
@@ -11279,9 +11754,18 @@ function renderAttendanceScreen() {
     })
     .join("");
 
-  const filteredAttendanceList = isTechnician
+  let filteredAttendanceList = isTechnician
     ? (db.asistencias || []).filter((a) => a.usuario_id === currentUser.id_usuario || a.nombre === currentUser.nombre)
     : (db.asistencias || []);
+
+  if (dateFilterFrom || dateFilterTo) {
+    filteredAttendanceList = filteredAttendanceList.filter((a) => {
+      const aDate = cleanDateISO(a.fecha, false);
+      if (dateFilterFrom && aDate && aDate < dateFilterFrom) return false;
+      if (dateFilterTo && aDate && aDate > dateFilterTo) return false;
+      return true;
+    });
+  }
 
   const rowsHtml = filteredAttendanceList.length
     ? filteredAttendanceList
@@ -11290,14 +11774,18 @@ function renderAttendanceScreen() {
             (s) => s.tecnico_id === a.usuario_id || s.nombre_tecnico === a.nombre
           );
           const totalWorkerMins = workerSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
-          const troqueles = Array.from(
+          const troquelesBadges = Array.from(
             new Set(
               workerSubs.map((s) => {
                 const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
-                return ord ? `#${ord.codigo_troquel} (${ord.datos_motor.marca})` : s.orden_id;
+                return ord ? ord.id_orden : s.orden_id;
               })
             )
-          ).join(", ");
+          ).map((ordId) => {
+            const ord = db.ordenes.find((o) => o.id_orden === ordId);
+            const label = ord ? `#${ord.codigo_troquel} (${ord.datos_motor.marca})` : ordId;
+            return `<button type="button" class="btn-troquel-clickable" onclick="quickViewOrderDetails('${ordId}')" title="Ver ficha técnica">${label}</button>`;
+          }).join(" ");
 
           const isLate = a.estado === "Tardanza" || (a.observacion && a.observacion.includes("Tardanza"));
           const statusBadge = isLate
@@ -11331,7 +11819,7 @@ function renderAttendanceScreen() {
               </td>
               <td>${statusBadge}</td>
               <td>
-                <div style="font-weight:700; color:var(--text-main); font-size:11.5px;">${troqueles || "Planta General"}</div>
+                <div style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:2px;">${troquelesBadges || '<span style="font-weight:700; color:var(--text-main); font-size:11.5px;">Planta General</span>'}</div>
                 <div style="font-size:10.5px; color:var(--text-muted);">${a.observacion || "Marcación presencial"}</div>
               </td>
               <td style="text-align:right;">
@@ -14449,13 +14937,36 @@ window.addEventListener("DOMContentLoaded", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
 
-  // Siempre mostrar la pantalla de acceso para que cada usuario ingrese con su PIN individual
-  document.getElementById("workspace")?.classList.add("hidden");
-  document.getElementById("login-view")?.classList.remove("hidden");
-
   // Cronómetro en tiempo real (Fase 3): actualiza cada segundo los trabajos "En Proceso"
   setInterval(tickLiveSubtaskTimers, 1000);
 
-  // Sincronización automática directa con el Google Sheets vinculado
+  // Sincronización automática de fondo cada 30 segundos
+  setInterval(() => syncFromGoogleSheets(true), 30000);
+
+  // Sincronizar automáticamente en vivo al regresar a la pestaña o enfocar ventana
+  window.addEventListener("visibilitychange", () => {
+    if (!document.hidden) syncFromGoogleSheets(true);
+  });
+  window.addEventListener("focus", () => {
+    syncFromGoogleSheets(true);
+  });
+
+  // RESTAURACIÓN AUTOMÁTICA DE SESIÓN (Persistencia en refresco / F5)
+  const savedUserId = localStorage.getItem(SESSION_KEY);
+  if (savedUserId) {
+    const user = (db.usuarios || []).find((u) => u.id_usuario === savedUserId);
+    if (user && user.activo !== false) {
+      currentUser = user;
+      document.getElementById("login-view")?.classList.add("hidden");
+      document.getElementById("workspace")?.classList.remove("hidden");
+      renderApp();
+      syncFromGoogleSheets(true);
+      return;
+    }
+  }
+
+  // Si no hay sesión activa previa, mostrar pantalla de acceso limpia
+  document.getElementById("workspace")?.classList.add("hidden");
+  document.getElementById("login-view")?.classList.remove("hidden");
   syncFromGoogleSheets(true);
 });
