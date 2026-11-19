@@ -24,12 +24,11 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.18.v28";
+const CURRENT_APP_VERSION = "2026.11.19.v29";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
   { id: "mercantil", nombre: "Banco Mercantil", moneda: "VES", icono: "fa-building-columns", color: "#0284c7", badgeCls: "bank-badge--mercantil" },
-  { id: "bnc", nombre: "Banco Nacional de Crédito (BNC)", moneda: "VES", icono: "fa-landmark", color: "#38bdf8", badgeCls: "bank-badge--bnc" },
   { id: "banesco", nombre: "Banesco", moneda: "VES", icono: "fa-university", color: "#eab308", badgeCls: "bank-badge--banesco" },
   { id: "zelle_otro", nombre: "Zelle / Otros", moneda: "USD", icono: "fa-globe", color: "#a855f7", badgeCls: "bank-badge--zelle" }
 ];
@@ -38,7 +37,6 @@ function getBalancesPorCuenta() {
   const balances = {
     efectivo: 0,
     mercantil: 0,
-    bnc: 0,
     banesco: 0,
     zelle_otro: 0
   };
@@ -522,18 +520,6 @@ function getInitialDatabase() {
         minutos_acumulados: 45
       },
       {
-        id_subtarea: "SUB-1548-2",
-        orden_id: "ORD-1548",
-        codigo_troquel: "1548",
-        descripcion_servicio: "Adicional",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 0.0,
-        comision_base_tecnico: 0.0,
-        estado_subtarea: "terminado",
-        minutos_acumulados: 0
-      },
-      {
         id_subtarea: "SUB-1548-3",
         orden_id: "ORD-1548",
         codigo_troquel: "1548",
@@ -890,16 +876,32 @@ function normalizeDatabaseSchema(d) {
       exigir_pin_cambio_perfil: d.config && d.config.exigirPin !== undefined ? Boolean(d.config.exigirPin) : false
     };
   }
-  if (!Array.isArray(d.catalogo_servicios)) {
-    d.catalogo_servicios = (d.catalogo || [])
-      .filter((c) => String(c.descripcion_servicio || c.nombre || "").trim() !== "")
-      .map((c) => ({
-        id_cat: c.id_servicio || c.id_cat || "CAT-" + Math.random().toString(36).slice(2, 6),
-        categoria_pieza: c.categoria_pieza || "Cámara / Motor",
-        nombre: c.descripcion_servicio || c.nombre,
-        precio_sugerido: Number(c.precio_sugerido_usd ?? c.precio_sugerido ?? 25),
-        comision_sugerida: Number(c.comision_tecnico_usd ?? c.comision_sugerida ?? 8)
-      }));
+  const DEFAULT_CATALOGO_SERVICIOS = [
+    { id_cat: "CAT-CAM-4C", categoria: "Cámara / Culata", nombre: "Servicio de cámara 4 C", precio_sugerido: 40.0, comision_sugerida: 12.50, activo: true },
+    { id_cat: "CAT-CAM-68", categoria: "Cámara / Culata", nombre: "Servicio de cámara 6 C / 8 C", precio_sugerido: 60.0, comision_sugerida: 18.00, activo: true },
+    { id_cat: "CAT-APLAN", categoria: "Cámara / Culata", nombre: "Aplanado / Cepillada de Cámara", precio_sugerido: 20.0, comision_sugerida: 5.00, activo: true },
+    { id_cat: "CAT-LAVQUIM", categoria: "Cámara / Culata", nombre: "Lavado Químico y Descarbonizado", precio_sugerido: 15.0, comision_sugerida: 3.50, activo: true },
+    { id_cat: "CAT-GUIAS", categoria: "Cámara / Culata", nombre: "Cambio e Instalación de Guías de Válvulas", precio_sugerido: 25.0, comision_sugerida: 8.00, activo: true },
+    { id_cat: "CAT-ASIENT", categoria: "Cámara / Culata", nombre: "Rectificación y Asentamiento de Válvulas", precio_sugerido: 30.0, comision_sugerida: 10.00, activo: true },
+    { id_cat: "CAT-SOLDAD", categoria: "Cámara / Culata", nombre: "Soldadura en Aluminio y Relleno de Pases de Agua", precio_sugerido: 35.0, comision_sugerida: 12.00, activo: true },
+    { id_cat: "CAT-ARMADO", categoria: "Cámara / Culata", nombre: "Armado de Cámara, Gomitas y Calibración", precio_sugerido: 25.0, comision_sugerida: 8.00, activo: true },
+    { id_cat: "CAT-PRUEBA", categoria: "Cámara / Culata", nombre: "Prueba de Presión Hidráulica / Vacío de Sellado", precio_sugerido: 20.0, comision_sugerida: 6.00, activo: true },
+    { id_cat: "CAT-CIGUENAL", categoria: "Bloque / Cigüeñal", nombre: "Rectificación y Pulitura de Cigüeñal", precio_sugerido: 55.0, comision_sugerida: 18.00, activo: true },
+    { id_cat: "CAT-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado y Bruñido de Cilindros en Bloque", precio_sugerido: 85.0, comision_sugerida: 28.00, activo: true }
+  ];
+
+  if (!Array.isArray(d.catalogo_servicios) || d.catalogo_servicios.length <= 2) {
+    const existing = Array.isArray(d.catalogo_servicios) ? d.catalogo_servicios : [];
+    const merged = [...existing];
+    DEFAULT_CATALOGO_SERVICIOS.forEach((def) => {
+      const found = merged.find(
+        (m) => (m.nombre || "").toLowerCase().trim() === def.nombre.toLowerCase().trim() || m.id_cat === def.id_cat
+      );
+      if (!found) {
+        merged.push(def);
+      }
+    });
+    d.catalogo_servicios = merged;
   }
   if (!d.finanzas_categorias) {
     d.finanzas_categorias = {
@@ -1015,6 +1017,14 @@ function normalizeDatabaseSchema(d) {
       const initSubs = initialDbData.subtareas.filter((s) => s.orden_id === realId);
       initSubs.forEach((s) => d.subtareas.push(JSON.parse(JSON.stringify(s))));
     }
+  });
+
+  // Purgar subtareas vacías $0 de pruebas (como el "Adicional" de la orden #1548)
+  d.subtareas = (d.subtareas || []).filter((s) => {
+    if (!s) return false;
+    if (s.id_subtarea === "SUB-1548-2") return false;
+    if (s.descripcion_servicio === "Adicional" && Number(s.monto_servicio) === 0 && Number(s.comision_base_tecnico) === 0) return false;
+    return true;
   });
 
   d.subtareas.forEach((s) => {
@@ -2212,6 +2222,13 @@ function loginSuccess(user) {
       currentTab = "pipeline";
     }
 
+    // Limpieza de búsqueda para evitar que el autocompletado de navegador filtre órdenes
+    const searchInp = document.getElementById("global-search-input");
+    if (searchInp) searchInp.value = "";
+    searchQuery = "";
+    const clearBtn = document.getElementById("clear-search-btn");
+    if (clearBtn) clearBtn.classList.add("hidden");
+
     // Transición visual garantizada
     const loginView = document.getElementById("login-view");
     const workspace = document.getElementById("workspace");
@@ -2365,10 +2382,9 @@ function getTabsForRole(role) {
 
   if (role === "recepcion") {
     return [
-      { id: "dashboard", label: "Recepción", shortLabel: "Inicio", icon: "fa-home" },
+      { id: "dashboard", label: "Recepción", shortLabel: "Inicio", icon: "fa-concierge-bell" },
       { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length },
-      { id: "clients_dir", label: "Clientes", shortLabel: "Clientes", icon: "fa-users" },
-      { id: "catalog_mgr", label: "Catálogo de Precios", shortLabel: "Precios", icon: "fa-cogs" }
+      { id: "attendance", label: "Control de Asistencia", shortLabel: "Asistencia", icon: "fa-calendar-check" }
     ];
   }
 
@@ -2435,9 +2451,10 @@ function toggleSidebarMenu() {
 
 function navigateTab(tabId) {
   if (currentUser && currentUser.rol === "recepcion") {
-    if (tabId === "accounts_receivable" || tabId === "finances_ledger" || tabId === "commissions_hr") {
-      showToast("Acceso protegido: La información financiera, caja y cuentas por cobrar es exclusiva de Dirección y Jefes de Taller.", "error");
-      tabId = "pipeline";
+    const forbiddenForRecep = ["accounts_receivable", "finances_ledger", "commissions_hr", "catalog_mgr", "inventario", "clients_dir", "clients_catalog"];
+    if (forbiddenForRecep.includes(tabId)) {
+      showToast("Acceso restringido: Catálogo, finanzas y márgenes operativos son exclusivos de Dirección y Jefes de Taller.", "warning");
+      tabId = "dashboard";
     }
   }
   if (tabId === "default") {
@@ -3180,7 +3197,7 @@ function renderDashboardScreen() {
 
   // 2. Cuentas por Cobrar Independientes (Órdenes en Taller con saldo + Facturas entregadas a crédito)
   const ordenesPorCobrar = db.ordenes.filter(
-    (o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado" && o.estado_actual !== "diagnostico_presupuesto"
+    (o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado"
   );
   const totalCuentasPorCobrar = ordenesPorCobrar.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
   const countCuentasPorCobrar = ordenesPorCobrar.length;
@@ -3383,10 +3400,6 @@ function renderDashboardScreen() {
             <div class="kpi-breakdown-row">
               <span><i class="fas fa-building-columns" style="color:#38bdf8;"></i> Banco Mercantil:</span>
               <strong style="color:#38bdf8;">$${balances.mercantil.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.mercantil * tasaBcv).toFixed(0)} Bs)</span></strong>
-            </div>
-            <div class="kpi-breakdown-row">
-              <span><i class="fas fa-landmark" style="color:#7dd3fc;"></i> Banco BNC:</span>
-              <strong style="color:#7dd3fc;">$${balances.bnc.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.bnc * tasaBcv).toFixed(0)} Bs)</span></strong>
             </div>
             <div class="kpi-breakdown-row">
               <span><i class="fas fa-university" style="color:#fde047;"></i> Banesco:</span>
@@ -3695,6 +3708,17 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
             <label><i class="fas fa-comment-alt"></i> Concepto o Motivo del Retiro *</label>
             <input type="text" id="adv-partner-concept" placeholder="Ej: Adelanto personal / Compras urgentes" value="Adelanto personal semanal" required />
           </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-camera"></i> Foto del Comprobante / Recibo / Captura (OBLIGATORIO) *</label>
+            <input type="file" id="adv-partner-photo" accept="image/*" capture="environment" style="display:none;" onchange="handlePartnerAdvancePhotoUpload(this)" />
+            <div style="display:flex; gap:10px; align-items:center; margin-top:4px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('adv-partner-photo').click()">
+                <i class="fas fa-camera"></i> Subir Foto del Recibo / Comprobante
+              </button>
+              <span id="adv-partner-photo-name" style="font-size:12px; color:var(--text-muted); font-style:italic;">Ningún comprobante seleccionado</span>
+            </div>
+            <div id="adv-partner-photo-preview" style="margin-top:8px;"></div>
+          </div>
         </div>
 
         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
@@ -3706,6 +3730,25 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
       </div>
     `
   });
+  tempPartnerAdvancePhoto = "";
+}
+
+let tempPartnerAdvancePhoto = "";
+
+function handlePartnerAdvancePhotoUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    tempPartnerAdvancePhoto = e.target.result;
+    const nameEl = document.getElementById("adv-partner-photo-name");
+    const prevEl = document.getElementById("adv-partner-photo-preview");
+    if (nameEl) nameEl.textContent = `✅ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+    if (prevEl) {
+      prevEl.innerHTML = `<img src="${tempPartnerAdvancePhoto}" style="max-height:100px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 function previewPartnerBsConversion(val) {
@@ -3728,6 +3771,16 @@ function savePartnerAdvance() {
     return;
   }
 
+  if (!tempPartnerAdvancePhoto) {
+    Swal.fire({
+      icon: "warning",
+      title: "Soporte Obligatorio",
+      text: "Es obligatorio adjuntar la fotografía del comprobante físico, recibo o captura bancaria para respaldar el adelanto o retiro de caja.",
+      confirmButtonColor: "#f5c400"
+    });
+    return;
+  }
+
   const user = db.usuarios.find((u) => u.id_usuario === userId);
   if (!user) return;
 
@@ -3741,6 +3794,7 @@ function savePartnerAdvance() {
     monto: amount,
     metodo: method,
     cuenta: cuenta,
+    comprobante_foto: tempPartnerAdvancePhoto,
     orden_id: "ADELANTO",
     codigo_troquel: "-",
     usuario_id: user.id_usuario,
@@ -4514,6 +4568,8 @@ function renderOrdersCompactTable(orders) {
     `;
   }
 
+  const canManage = currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
+
   const rowsHtml = orders
     .map((o) => {
       const isEntregado = o.estado_actual === "entregado";
@@ -4551,29 +4607,54 @@ function renderOrdersCompactTable(orders) {
           </td>
           <td>${statusBadge}</td>
           <td>
-            <div style="font-family:'JetBrains Mono',monospace; font-weight:800;">$${Number(o.monto_total).toFixed(2)}</div>
             ${
-              o.saldo_pendiente > 0
-                ? `<div style="font-size:11.5px; color:#ef4444; font-weight:800;">Resta: $${Number(o.saldo_pendiente).toFixed(2)}</div>`
-                : `<div style="font-size:11px; color:#22c55e;">Saldada</div>`
+              currentUser && currentUser.rol === "recepcion"
+                ? `<span class="state-badge" style="${o.saldo_pendiente > 0 ? 'background:rgba(234,179,8,0.2); color:#eab308; border-color:#eab308;' : 'background:rgba(34,197,94,0.2); color:#22c55e; border-color:#22c55e;'} font-weight:800;">
+                    ${o.saldo_pendiente > 0 ? "Pendiente" : "Saldada"}
+                  </span>`
+                : `
+                  <div style="font-family:'JetBrains Mono',monospace; font-weight:800;">$${Number(o.monto_total).toFixed(2)}</div>
+                  ${
+                    o.saldo_pendiente > 0
+                      ? `<div style="font-size:11.5px; color:#ef4444; font-weight:800;">Resta: $${Number(o.saldo_pendiente).toFixed(2)}</div>`
+                      : `<div style="font-size:11px; color:#22c55e;">Saldada</div>`
+                  }
+                `
             }
           </td>
           <td>
-            <div style="display:flex; gap:5px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--ghost btn--xs" onclick="openDualGalleryInspector('${o.id_orden}')" title="Fotos">
+            <div style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;">
+              ${
+                canManage && !isEntregado && !isAnulado
+                  ? `<button type="button" class="btn btn--ghost btn--xs" style="color:var(--renacer-gold);" onclick="openEditCompleteOrderModal('${o.id_orden}')" title="Modificar Orden Completa">
+                      <i class="fas fa-edit"></i>
+                    </button>`
+                  : ""
+              }
+              ${
+                canManage && !isAnulado && o.saldo_pendiente > 0
+                  ? `<button type="button" class="btn btn--ghost btn--xs" style="color:#f59e0b;" onclick="openFinancialApprovalModal('${o.id_orden}')" title="Registrar Abono o Pago">
+                      <i class="fas fa-dollar-sign"></i>
+                    </button>`
+                  : ""
+              }
+              <button type="button" class="btn btn--ghost btn--xs" style="color:#22c55e;" onclick="printOrderExcelSheet('${o.id_orden}')" title="Hoja / Planilla de Servicio (Formato Excel)">
+                <i class="fas fa-file-excel"></i>
+              </button>
+              <button type="button" class="btn btn--ghost btn--xs" onclick="openDualGalleryInspector('${o.id_orden}')" title="Fotos de pieza y repuestos">
                 <i class="fas fa-camera"></i>
               </button>
-              <button type="button" class="btn btn--ghost btn--xs" onclick="openOrderCrmModal('${o.id_orden}')" title="Chat / CRM">
+              <button type="button" class="btn btn--ghost btn--xs" onclick="openOrderCrmModal('${o.id_orden}')" title="Chat y Bitácora">
                 <i class="fas fa-comments"></i>
               </button>
-              <button type="button" class="btn btn--ghost btn--xs" style="color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${o.id_orden}')" title="WhatsApp">
+              <button type="button" class="btn btn--ghost btn--xs" style="color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${o.id_orden}')" title="Enviar presupuesto por WhatsApp">
                 <i class="fab fa-whatsapp"></i>
               </button>
-              <button type="button" class="btn btn--ghost btn--xs" style="color:#38bdf8;" onclick="printOrderReceptionTicket('${o.id_orden}')" title="Imprimir Ticket">
+              <button type="button" class="btn btn--ghost btn--xs" style="color:#38bdf8;" onclick="printOrderReceptionTicket('${o.id_orden}')" title="Ticket de Recepción 80mm">
                 <i class="fas fa-print"></i>
               </button>
               ${
-                !isEntregado && !isAnulado && (currentUser?.rol === "admin" || currentUser?.rol === "jefe_taller")
+                !isEntregado && !isAnulado && canManage
                   ? `<button type="button" class="btn btn--ghost btn--xs" style="color:#f87171;" onclick="cancelOrderWithReason('${o.id_orden}')" title="Anular orden"><i class="fas fa-ban"></i></button>`
                   : ""
               }
@@ -4594,7 +4675,7 @@ function renderOrdersCompactTable(orders) {
             <th>Motor / Pieza</th>
             <th>Técnicos</th>
             <th>Estado / Garantía</th>
-            <th>Monto / Saldo</th>
+            <th>${currentUser && currentUser.rol === "recepcion" ? "Estado de Pago" : "Monto / Saldo"}</th>
             <th>Acciones</th>
           </tr>
         </thead>
@@ -4738,11 +4819,11 @@ function renderOrderCardTelegramStyle(order) {
                 </div>
               </div>
               <div class="service-right">
-                ${currentUser && currentUser.rol === "tecnico" ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
+                ${currentUser && (currentUser.rol === "tecnico" || currentUser.rol === "recepcion") ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
                 ${
                   currentUser && currentUser.rol === "tecnico"
                     ? (s.tecnico_id === currentUser.id_usuario ? `<div class="comm-val" style="color:var(--renacer-gold); font-weight:800;">Mi Comisión: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>` : "")
-                    : `<div class="comm-val">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>`
+                    : (currentUser && currentUser.rol === "recepcion" ? "" : `<div class="comm-val">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>`)
                 }
               </div>
             </div>
@@ -4992,9 +5073,9 @@ function renderOrderCardTelegramStyle(order) {
           ${subtasksListHtml}
         </div>
 
-        <!-- Strip Financiero Total / Abonado / Resto (Oculto para Técnicos por Privacidad) -->
+        <!-- Strip Financiero Total / Abonado / Resto (Oculto para Técnicos y Recepción por Privacidad) -->
         ${
-          currentUser && currentUser.rol === "tecnico"
+          currentUser && (currentUser.rol === "tecnico" || currentUser.rol === "recepcion")
             ? ""
             : `
             <div class="order-clean-finance-strip">
@@ -5016,19 +5097,25 @@ function renderOrderCardTelegramStyle(order) {
       </div>
 
       <!-- 4. BLOQUE 2: ASIGNACIONES / COMISIONES POR TÉCNICO (DISEÑO IMAGEN 6) -->
-      <div class="order-clean-block">
-        <div class="order-clean-block-title">
-          <span>Asignaciones/Comisiones:</span>
-          ${
-            canManage
-              ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Abrir matriz de asignación"><i class="fas fa-sliders-h"></i> Matriz</button>`
-              : ""
-          }
-        </div>
-        <div class="order-clean-assignees-list">
-          ${assignmentsHtml}
-        </div>
-      </div>
+      ${
+        currentUser && (currentUser.rol === "tecnico" || currentUser.rol === "recepcion")
+          ? ""
+          : `
+          <div class="order-clean-block">
+            <div class="order-clean-block-title">
+              <span>Asignaciones/Comisiones:</span>
+              ${
+                canManage
+                  ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Abrir matriz de asignación"><i class="fas fa-sliders-h"></i> Matriz</button>`
+                  : ""
+              }
+            </div>
+            <div class="order-clean-assignees-list">
+              ${assignmentsHtml}
+            </div>
+          </div>
+          `
+      }
 
       <!-- 5. PIE DE ACCIONES: PILL COMPACTO DE CONTADORES + BOTONES DE ESTADO (DISEÑO IMAGEN 6) -->
       <div class="order-clean-footer">
@@ -5906,7 +5993,10 @@ function openNewOrderModal() {
     .map((r) => `<option value="${r.id_repuesto}">${r.nombre} — $${Number(r.precio_venta).toFixed(2)} (Stock: ${r.stock_actual} ${r.unidad || "pz"})</option>`)
     .join("");
 
-  const randomTroquel = Math.floor(1515 + Math.random() * 80);
+  const numericTroquels = (db.ordenes || [])
+    .map((o) => parseInt(String(o.codigo_troquel).replace(/\D/g, ""), 10))
+    .filter((n) => !isNaN(n) && n > 0);
+  const nextTroquel = numericTroquels.length > 0 ? Math.max(...numericTroquels) + 1 : 1577;
 
   openModal({
     title: "Estado 1: Recepción e Ingreso de Orden (Diagnóstico / Presupuesto)",
@@ -5999,7 +6089,7 @@ function openNewOrderModal() {
               <input
                 type="text"
                 id="new-ord-troquel"
-                value="${randomTroquel}"
+                value="${nextTroquel}"
                 required
                 style="font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:900; border:2px solid var(--renacer-gold); background:#fffbeb; color:#0f1638;"
               />
@@ -7181,7 +7271,7 @@ function openSubtaskAssignmentModal(orderId) {
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--gold btn--lg" onclick="confirmSubtaskAssignments('${order.id_orden}')">
-        <i class="fas fa-play-circle"></i> Confirmar Matriz y Pasar a 4. Servicio
+        <i class="fas ${["servicio", "calidad", "control_calidad", "entrega", "entregado", "archivado"].includes(order.estado_actual) ? 'fa-save' : 'fa-play-circle'}"></i> ${["servicio", "calidad", "control_calidad", "entrega", "entregado", "archivado"].includes(order.estado_actual) ? 'Guardar Cambios de Asignación' : 'Confirmar Matriz y Pasar a 4. Servicio'}
       </button>
     `
   });
@@ -7337,7 +7427,14 @@ function confirmSubtaskAssignments(orderId) {
 
   order.monto_total = nuevoMontoTotal;
   order.saldo_pendiente = Math.max(0, nuevoMontoTotal - (Number(order.monto_abonado) || 0));
-  order.estado_actual = "servicio";
+
+  // PRESERVAR ESTADO: Si la orden ya avanzó a calidad o entrega (ej. #1548), no retroceder a servicio
+  const lateStages = ["calidad", "control_calidad", "entrega", "entregado", "archivado"];
+  const isAlreadyAdvanced = lateStages.includes(order.estado_actual);
+  if (!isAlreadyAdvanced && order.estado_actual !== "servicio" && order.estado_actual !== "asignacion_ejecucion" && order.estado_actual !== "terminado") {
+    order.estado_actual = "servicio";
+  }
+
   const nowStr = cleanDateISO(new Date().toISOString(), true);
 
   db.bitacora.push({
@@ -7348,7 +7445,9 @@ function confirmSubtaskAssignments(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "asignacion",
-    mensaje: `Matriz de asignación confirmada por ${currentUser.nombre}. Orden en etapa 4. Servicio.`,
+    mensaje: isAlreadyAdvanced
+      ? `Matriz de subtareas actualizada por ${currentUser.nombre} (conservando etapa ${formatStageName(order.estado_actual)}).`
+      : `Matriz de asignación confirmada por ${currentUser.nombre}. Orden en etapa 4. Servicio.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -11262,6 +11361,29 @@ function renderAttendanceScreen() {
       </button>
     `;
 
+  const now = new Date();
+  const isPast9AM = now.getHours() >= 9;
+  let lateAlertBannerHtml = "";
+  if (isPast9AM && !isTechnician) {
+    const unCheckedTechnicians = (db.usuarios || [])
+      .filter((u) => u.activo && u.rol === "tecnico")
+      .filter((t) => !(db.asistencias || []).some((a) => a.fecha === todayIso && a.usuario_id === t.id_usuario));
+    if (unCheckedTechnicians.length > 0) {
+      const names = unCheckedTechnicians.map((t) => t.nombre).join(", ");
+      lateAlertBannerHtml = `
+        <div style="background:rgba(245, 158, 11, 0.15); border:1.5px solid #f59e0b; border-radius:14px; padding:12px 18px; margin-bottom:16px; display:flex; align-items:center; gap:14px;">
+          <i class="fas fa-bell" style="font-size:22px; color:#f59e0b;"></i>
+          <div>
+            <div style="color:#f59e0b; font-size:13px; font-weight:900;">ALERTA DE ASISTENCIA 9:00 AM (LÍMITE PUNTUALIDAD: 8:15 AM)</div>
+            <div style="font-size:12px; color:var(--text-main); margin-top:2px;">
+              Los siguientes técnicos aún no han registrado su entrada el día de hoy: <strong>${names}</strong>.
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
   return `
     <!-- ENCABEZADO Y ACCIONES PRINCIPALES DE ASISTENCIA -->
     <div style="background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
@@ -11278,6 +11400,8 @@ function renderAttendanceScreen() {
         ${actionButtonsHtml}
       </div>
     </div>
+
+    ${lateAlertBannerHtml}
 
     <!-- TABLERO EN VIVO DE PRESENCIA FÍSICA HOY -->
     <div style="margin-bottom:18px;">
@@ -11748,7 +11872,26 @@ function saveNewFinanceCategory() {
   showToast(`Categoría "${name}" agregada.`);
 }
 
+let tempMovementPhoto = "";
+
+function handleMovementPhotoUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    tempMovementPhoto = e.target.result;
+    const nameEl = document.getElementById("mov-photo-name");
+    const prevEl = document.getElementById("mov-photo-preview");
+    if (nameEl) nameEl.textContent = `✅ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+    if (prevEl) {
+      prevEl.innerHTML = `<img src="${tempMovementPhoto}" style="max-height:100px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
 function openNewFinanceMovementModal(tipo) {
+  tempMovementPhoto = "";
   const cats = tipo === "ingreso" ? (db.finanzas_categorias?.ingresos || []) : (db.finanzas_categorias?.egresos || []);
   const catOptions = cats.map((c) => `<option value="${c}">${c}</option>`).join("");
   const bankOptions = BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre} (${b.moneda})</option>`).join("");
@@ -11790,6 +11933,18 @@ function openNewFinanceMovementModal(tipo) {
         <label>Concepto / Descripción Detallada *</label>
         <input type="text" id="mov-concept" placeholder="Ej: Compra de líquido desengrasante para tanque químico" required />
       </div>
+
+      <div class="form-field" style="margin-top:10px;">
+        <label><i class="fas fa-camera"></i> Foto del Comprobante / Factura / Recibo ${tipo === 'egreso' ? '(OBLIGATORIO para egresos) *' : '(Opcional)'}</label>
+        <input type="file" id="mov-photo-file" accept="image/*" capture="environment" style="display:none;" onchange="handleMovementPhotoUpload(this)" />
+        <div style="display:flex; gap:10px; align-items:center; margin-top:4px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('mov-photo-file').click()">
+            <i class="fas fa-camera"></i> Adjuntar Soporte / Foto
+          </button>
+          <span id="mov-photo-name" style="font-size:12px; color:var(--text-muted); font-style:italic;">Ningún archivo seleccionado</span>
+        </div>
+        <div id="mov-photo-preview" style="margin-top:8px;"></div>
+      </div>
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
@@ -11810,6 +11965,16 @@ function saveNewFinanceMovement(tipo) {
     return;
   }
 
+  if (tipo === "egreso" && !tempMovementPhoto) {
+    Swal.fire({
+      icon: "warning",
+      title: "Comprobante Obligatorio",
+      text: "Para registrar un egreso o gasto del taller, es obligatorio adjuntar la foto de la factura, recibo o soporte físico.",
+      confirmButtonColor: "#f5c400"
+    });
+    return;
+  }
+
   const now = new Date();
   db.finanzas_movimientos.unshift({
     id_mov: "MOV-" + Date.now(),
@@ -11821,6 +11986,7 @@ function saveNewFinanceMovement(tipo) {
     monto: amount,
     metodo: method,
     cuenta: cuenta,
+    comprobante_foto: tempMovementPhoto,
     orden_id: "-"
   });
 
@@ -13835,95 +14001,144 @@ function handleAttendanceActionForUser(user, method) {
 
   let existing = (db.asistencias || []).find((a) => a.fecha === todayIso && a.usuario_id === user.id_usuario);
 
-  // SI NO TIENE ENTRADA HOY: REGISTRO DE ENTRADA
-  if (!existing) {
+  const entradaText = existing?.hora_entrada ? `✅ Entrada: ${existing.hora_entrada} (${existing.estado})` : "⏳ Sin marcar entrada";
+  const almuerzoSalText = existing?.hora_salida_almuerzo ? `✅ Salió a almuerzo: ${existing.hora_salida_almuerzo}` : "⏳ Sin salida a almuerzo";
+  const almuerzoRegText = existing?.hora_regreso_almuerzo ? `✅ Regresó de almuerzo: ${existing.hora_regreso_almuerzo}` : "⏳ Sin regreso de almuerzo";
+  const salidaText = existing?.hora_salida ? `✅ Salida final: ${existing.hora_salida}` : "⏳ Sin salida de jornada";
+
+  Swal.fire({
+    title: `Control de Horario: ${user.nombre}`,
+    html: `
+      <div style="text-align:left; font-size:13px;">
+        <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; margin-bottom:14px; border:1px solid var(--border-subtle); line-height:1.6;">
+          <div style="font-weight:800; color:var(--renacer-gold); margin-bottom:4px;">
+            <i class="fas fa-calendar-day"></i> Registro de Hoy (${formatDateHuman(todayIso, false)}) · Hora Actual: <strong>${timeStr}</strong>
+          </div>
+          <div style="font-size:12px; color:var(--text-muted);">${entradaText}</div>
+          <div style="font-size:12px; color:var(--text-muted);">${almuerzoSalText} · ${almuerzoRegText}</div>
+          <div style="font-size:12px; color:var(--text-muted);">${salidaText}</div>
+        </div>
+
+        <p style="font-weight:800; margin-bottom:10px; color:var(--text-main);">Selecciona la acción a certificar en este momento:</p>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <button type="button" id="swal-att-btn-entrada" class="btn btn--gold" style="padding:10px; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px;">
+            <i class="fas fa-sun"></i> 1. Entrada
+          </button>
+          <button type="button" id="swal-att-btn-almuerzo-sal" class="btn btn--warning" style="padding:10px; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px;">
+            <i class="fas fa-utensils"></i> 2. Salida Almuerzo
+          </button>
+          <button type="button" id="swal-att-btn-almuerzo-reg" class="btn btn--primary" style="padding:10px; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px;">
+            <i class="fas fa-undo"></i> 3. Regreso Almuerzo
+          </button>
+          <button type="button" id="swal-att-btn-salida" class="btn btn--ghost" style="padding:10px; font-weight:800; font-size:12px; border-color:#0284c7; color:#38bdf8; display:flex; align-items:center; justify-content:center; gap:6px;">
+            <i class="fas fa-door-open"></i> 4. Salida Jornada
+          </button>
+        </div>
+      </div>
+    `,
+    showConfirmButton: false,
+    showCancelButton: true,
+    cancelButtonText: "Cerrar",
+    didOpen: () => {
+      document.getElementById("swal-att-btn-entrada")?.addEventListener("click", () => {
+        executeAttendanceAction(user, "entrada", method);
+      });
+      document.getElementById("swal-att-btn-almuerzo-sal")?.addEventListener("click", () => {
+        executeAttendanceAction(user, "salida_almuerzo", method);
+      });
+      document.getElementById("swal-att-btn-almuerzo-reg")?.addEventListener("click", () => {
+        executeAttendanceAction(user, "regreso_almuerzo", method);
+      });
+      document.getElementById("swal-att-btn-salida")?.addEventListener("click", () => {
+        executeAttendanceAction(user, "salida_jornada", method);
+      });
+    }
+  });
+}
+
+function executeAttendanceAction(user, action, method) {
+  const now = new Date();
+  const todayIso = now.toISOString().slice(0, 10);
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  let existing = (db.asistencias || []).find((a) => a.fecha === todayIso && a.usuario_id === user.id_usuario);
+
+  if (action === "entrada") {
     const isLate = now.getHours() > 8 || (now.getHours() === 8 && now.getMinutes() > 15);
-    const newRecord = {
+    if (!existing) {
+      existing = {
+        id_asist: "ASI-" + Date.now(),
+        fecha: todayIso,
+        usuario_id: user.id_usuario,
+        nombre: user.nombre,
+        hora_registro: timeStr,
+        hora_entrada: timeStr,
+        hora_salida_almuerzo: "",
+        hora_regreso_almuerzo: "",
+        hora_salida: "",
+        estado_hoy: "En Taller",
+        estado: isLate ? "Tardanza" : "Puntual",
+        metodo: method,
+        observacion: isLate
+          ? "Llegada después de las 8:15 AM (Tardanza registrada - Deducción aplicable)"
+          : "Asistencia presencial verificada puntual en taller",
+        dispositivo: navigator.userAgent.slice(0, 50)
+      };
+      if (!Array.isArray(db.asistencias)) db.asistencias = [];
+      db.asistencias.unshift(existing);
+    } else {
+      existing.hora_entrada = timeStr;
+      existing.estado = isLate ? "Tardanza" : "Puntual";
+      existing.estado_hoy = "En Taller";
+    }
+    saveDatabase();
+    Swal.close();
+    closeModal();
+    renderApp();
+    showToast(`Entrada registrada para ${user.nombre} (${timeStr} - ${isLate ? "Tardanza" : "Puntual"}).`, isLate ? "warning" : "info");
+    return;
+  }
+
+  if (!existing) {
+    existing = {
       id_asist: "ASI-" + Date.now(),
       fecha: todayIso,
       usuario_id: user.id_usuario,
       nombre: user.nombre,
       hora_registro: timeStr,
-      hora_entrada: timeStr,
+      hora_entrada: "08:00 AM",
       hora_salida_almuerzo: "",
       hora_regreso_almuerzo: "",
       hora_salida: "",
       estado_hoy: "En Taller",
-      estado: isLate ? "Tardanza" : "Puntual",
+      estado: "Puntual",
       metodo: method,
-      observacion: isLate
-        ? "Llegada después de las 8:15 AM (Tardanza registrada - Deducción aplicable)"
-        : "Asistencia presencial verificada puntual en taller",
+      observacion: "Asistencia presencial en taller",
       dispositivo: navigator.userAgent.slice(0, 50)
     };
-
-    db.asistencias.unshift(newRecord);
-    saveDatabase();
-    closeModal();
-
-    Swal.fire({
-      icon: isLate ? "warning" : "success",
-      title: isLate ? "¡Entrada con Tardanza Registrada!" : "¡Entrada Puntual Registrada!",
-      html: `
-        <div style="font-size:14px; line-height:1.6;">
-          <p><strong>${user.nombre}</strong></p>
-          <p>Hora de Entrada: <strong>${timeStr}</strong></p>
-          <p>Estatus: <strong style="color:${isLate ? '#f59e0b' : '#22c55e'};">${isLate ? 'Tardanza (deducción en nómina)' : 'Puntual (antes de 8:15 AM)'}</strong></p>
-        </div>
-      `,
-      confirmButtonColor: "#f5c400"
-    });
-
-    renderApp();
-    return;
+    if (!Array.isArray(db.asistencias)) db.asistencias = [];
+    db.asistencias.unshift(existing);
   }
 
-  // SI YA TIENE ENTRADA: OFRECER ACCIONES (ALMUERZO / SALIDA FINAL)
-  let statusText = `Entrada registrada a las ${existing.hora_entrada}`;
-  if (existing.hora_salida_almuerzo && !existing.hora_regreso_almuerzo) {
-    statusText += ` · Salió a almorzar a las ${existing.hora_salida_almuerzo}`;
-  } else if (existing.hora_regreso_almuerzo) {
-    statusText += ` · Regresó de almorzar a las ${existing.hora_regreso_almuerzo}`;
-  }
-  if (existing.hora_salida) {
-    statusText += ` · Salida final a las ${existing.hora_salida}`;
+  if (action === "salida_almuerzo") {
+    existing.hora_salida_almuerzo = timeStr;
+    existing.estado_hoy = "En Almuerzo";
+    showToast(`Salida a almorzar registrada para ${user.nombre} (${timeStr}).`);
+  } else if (action === "regreso_almuerzo") {
+    existing.hora_regreso_almuerzo = timeStr;
+    existing.estado_hoy = "En Taller";
+    showToast(`Regreso de almuerzo registrado para ${user.nombre} (${timeStr}).`);
+  } else if (action === "salida_jornada") {
+    existing.hora_salida = timeStr;
+    existing.estado_hoy = "Jornada Finalizada";
+    showToast(`Salida final de jornada registrada para ${user.nombre} (${timeStr}).`);
   }
 
-  Swal.fire({
-    title: `Control de Horario: ${user.nombre}`,
-    html: `
-      <div style="font-size:13px; text-align:left; margin-bottom:12px;">
-        <div style="padding:8px 12px; background:var(--bg-subtle); border-radius:8px; margin-bottom:12px;">
-          <i class="fas fa-info-circle"></i> <strong>Estatus hoy:</strong><br>${statusText}
-        </div>
-        <p style="font-weight:700;">Selecciona la acción a marcar en este momento (${timeStr}):</p>
-      </div>
-    `,
-    showDenyButton: true,
-    showCancelButton: true,
-    confirmButtonText: "🍔 Salida a Almorzar",
-    confirmButtonColor: "#f59e0b",
-    denyButtonText: "🏁 Salida de Jornada",
-    denyButtonColor: "#0284c7",
-    cancelButtonText: "Cerrar",
-    footer: `<button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-weight:800; font-size:12px;" onclick="markLunchReturnPrompt('${existing.id_asist}')">¿Regresando de almorzar? Toca aquí</button>`
-  }).then((res) => {
-    if (res.isConfirmed) {
-      existing.hora_salida_almuerzo = timeStr;
-      existing.estado_hoy = "En Almuerzo";
-      saveDatabase();
-      closeModal();
-      showToast(`Salida a almorzar registrada para ${user.nombre} (${timeStr}).`);
-      renderApp();
-    } else if (res.isDenied) {
-      existing.hora_salida = timeStr;
-      existing.estado_hoy = "Jornada Finalizada";
-      saveDatabase();
-      closeModal();
-      showToast(`Salida final de jornada registrada para ${user.nombre} (${timeStr}).`);
-      renderApp();
-    }
-  });
+  saveDatabase();
+  Swal.close();
+  closeModal();
+  renderApp();
 }
 
 function markLunchReturnPrompt(asistId) {
