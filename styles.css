@@ -5326,3 +5326,109 @@ body {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* ==================== PERSONALIZADOR DE TEXTOS CON PESTAÑAS Y LIVE PREVIEW (JESÚS ANDRADE) ==================== */
+.cust-tabs-nav {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1.5px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  scrollbar-width: thin;
+}
+
+.cust-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted, #94a3b8);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.cust-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main, #f8fafc);
+}
+
+.cust-tab-btn.active {
+  background: var(--renacer-gold, #f5df00);
+  color: #0f1638;
+  border-color: var(--renacer-gold, #f5df00);
+  box-shadow: 0 4px 14px rgba(245, 223, 0, 0.25);
+}
+
+.cust-preview-box {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1.5px dashed rgba(245, 223, 0, 0.45);
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 14px;
+}
+
+.cust-preview-badge {
+  font-size: 10.5px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--renacer-gold, #f5df00);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+/* WIDGET FLOTANTE / DOCK PARA INSPECCIONAR PESTAÑAS LIBREMENTE */
+.text-customizer-dock {
+  position: fixed;
+  bottom: 18px;
+  right: 20px;
+  z-index: 150000;
+  background: #0f172a;
+  border: 2px solid var(--renacer-gold, #f5df00);
+  border-radius: 14px;
+  padding: 10px 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: renacerDockSlideUp 0.25s ease-out;
+}
+
+@keyframes renacerDockSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.text-customizer-dock .dock-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.text-customizer-dock .dock-title {
+  font-size: 10.5px;
+  font-weight: 900;
+  color: var(--renacer-gold, #f5df00);
+  text-transform: uppercase;
+}
+
+.text-customizer-dock .dock-subtitle {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #fff;
+}
+
+
