@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.18.v25";
+const CURRENT_APP_VERSION = "2026.11.18.v26";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -855,9 +855,8 @@ function normalizeDatabaseSchema(d) {
         existing.rol_label = ru.rol_label;
         existing.especialidad = ru.especialidad;
         existing.activo = true;
-        if (!existing.pin || existing.pin === "000000" || existing.pin === "1234") {
-          existing.pin = ru.pin;
-        }
+        // Garantizar que la credencial oficial única asignada esté siempre activa
+        existing.pin = ru.pin;
       }
     });
   }
@@ -1240,15 +1239,19 @@ function hydrateDatabaseFromSheets(cloudData) {
     tecnico: "Técnico Rectificador"
   };
 
+  const allowedUserIds = [
+    "USR-MOISES", "USR-JESUS", "USR-ENRIQUE", "USR-RECEPCION",
+    "USR-JAVIER", "USR-HAVELL", "USR-ANGEL", "USR-JOSE"
+  ];
   const validUsers = Array.isArray(cloudData.usuarios)
-    ? cloudData.usuarios.filter((u) => String(u.id_usuario || u.nombre || "").trim() !== "")
+    ? cloudData.usuarios.filter((u) => allowedUserIds.includes(String(u.id_usuario || "")))
     : [];
   const usuarios = validUsers.length
     ? validUsers.map((u) => {
         const baseUser = base.usuarios.find(
           (bu) => bu.id_usuario === u.id_usuario || (bu.nombre && bu.nombre.toLowerCase().trim() === String(u.nombre || "").toLowerCase().trim())
         );
-        const resolvedPin = String(u.pin || (baseUser ? baseUser.pin : "")).trim() || (baseUser ? baseUser.pin : "000000");
+        const resolvedPin = baseUser ? baseUser.pin : String(u.pin || "000000").trim();
         return {
           id_usuario: String(u.id_usuario || (baseUser ? baseUser.id_usuario : "")),
           nombre: String(u.nombre || (baseUser ? baseUser.nombre : "")),
