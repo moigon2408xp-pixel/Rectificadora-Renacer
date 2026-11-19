@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.19.v32";
+const CURRENT_APP_VERSION = "2026.11.19.v33";
 
 /* ==================== V31: SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS ==================== */
 const DEFAULT_TEXT_CUSTOMIZATIONS = {
@@ -2539,6 +2539,12 @@ function navigateTab(tabId) {
   if (sb) sb.classList.remove("mobile-open");
   renderApp();
   window.scrollTo({ top: 0, behavior: "smooth" });
+
+  if (typeof isTextEditMode !== "undefined" && isTextEditMode) {
+    setTimeout(() => {
+      applyInPlaceTextEditingToCurrentScreen();
+    }, 120);
+  }
 }
 
 function handleGlobalSearch(val) {
@@ -2588,14 +2594,15 @@ function renderApp() {
 
   const sidebarBadgeEl = document.querySelector(".sidebar-brand-sub");
   if (sidebarBadgeEl) {
-    sidebarBadgeEl.innerHTML = `<i class="fas fa-book-open"></i> ${escapeHtml(getCustomText("biblical_badge", "JOB 8:7"))}`;
+    sidebarBadgeEl.innerHTML = `<i class="fas fa-book-open"></i> <span id="sidebar-biblical-badge-text" data-custom-text-key="biblical_badge">${escapeHtml(getCustomText("biblical_badge", "JOB 8:7"))}</span>`;
   }
   const loginBiblicalBadgeEl = document.querySelector(".login-biblical-badge");
   if (loginBiblicalBadgeEl) {
-    loginBiblicalBadgeEl.innerHTML = `<i class="fas fa-book-open"></i> ${escapeHtml(getCustomText("biblical_badge", "JOB 8:7"))}`;
+    loginBiblicalBadgeEl.innerHTML = `<i class="fas fa-book-open"></i> <span data-custom-text-key="biblical_badge">${escapeHtml(getCustomText("biblical_badge", "JOB 8:7"))}</span>`;
   }
   const loginCleanSubEl = document.querySelector(".login-clean-sub");
   if (loginCleanSubEl) {
+    loginCleanSubEl.setAttribute("data-custom-text-key", "app_subtitle");
     loginCleanSubEl.textContent = getCustomText("app_subtitle", "Sistema de Gestión de Taller y Producción");
   }
 
@@ -4578,10 +4585,10 @@ function renderPipelineScreen(forcedState) {
     <!-- Barra Superior Limpia del Tablero con Selector de Vista -->
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
       <div>
-        <h2 id="pipeline-screen-title" style="font-size:19px; font-weight:900; color:var(--text-main);">
+        <h2 id="pipeline-screen-title" data-custom-text-key="pipeline_title" style="font-size:19px; font-weight:900; color:var(--text-main);">
           ${escapeHtml(getCustomText("pipeline_title", "Seguimiento de Órdenes y Producción (Por Código de Troquel)"))}
         </h2>
-        <p id="pipeline-screen-subtitle" style="font-size:12.5px; color:var(--text-muted);">
+        <p id="pipeline-screen-subtitle" data-custom-text-key="pipeline_subtitle" style="font-size:12.5px; color:var(--text-muted);">
           ${escapeHtml(getCustomText("pipeline_subtitle", "Flujo de 6 etapas del taller: 1. Recepción → 2. Diagnóstico → 3. Aprobación → 4. Servicio → 5. Calidad → 6. Entrega."))}
         </p>
       </div>
@@ -5949,9 +5956,9 @@ function switchCustomizerTab(tabKey, navigateApp = true) {
   if (navigateApp) {
     if (tabKey === "pipeline") navigateTab("pipeline");
     else if (tabKey === "cuentas_cobrar") navigateTab("accounts_receivable");
-    else if (tabKey === "asistencia") navigateTab("asistencia");
-    else if (tabKey === "personal") navigateTab("personal");
-    else if (tabKey === "general") navigateTab("default");
+    else if (tabKey === "asistencia") navigateTab("attendance");
+    else if (tabKey === "personal") navigateTab("commissions_hr");
+    else if (tabKey === "general") navigateTab("dashboard");
     else if (tabKey === "recepcion") navigateTab("pipeline");
   }
 
@@ -6041,7 +6048,7 @@ function renderCustomizerTabContent(tabKey) {
         <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
           <i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> <strong>Presencia Física y Puntualidad</strong> (Pestaña: Control de Asistencia)
         </span>
-        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('asistencia'); showToast('Mostrando Asistencia en pantalla');">
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('attendance'); showToast('Mostrando Asistencia en pantalla');">
           <i class="fas fa-eye"></i> Ver esta Pestaña en el Taller
         </button>
       </div>
@@ -6068,7 +6075,7 @@ function renderCustomizerTabContent(tabKey) {
         <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
           <i class="fas fa-users-cog" style="color:var(--renacer-gold);"></i> <strong>Liquidación de Técnicos por Destajo</strong> (Pestaña: Personal y Comisiones)
         </span>
-        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('personal'); showToast('Mostrando Personal y Comisiones en pantalla');">
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('commissions_hr'); showToast('Mostrando Personal y Comisiones en pantalla');">
           <i class="fas fa-eye"></i> Ver esta Pestaña en el Taller
         </button>
       </div>
@@ -6097,7 +6104,7 @@ function renderCustomizerTabContent(tabKey) {
         <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
           <i class="fas fa-id-badge" style="color:var(--renacer-gold);"></i> <strong>Identidad Institucional del Taller</strong> (Menú Lateral y Cabecera)
         </span>
-        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('default'); showToast('Mostrando Inicio en pantalla');">
+        <button type="button" class="btn btn--primary btn--xs" onclick="navigateTab('dashboard'); showToast('Mostrando Inicio en pantalla');">
           <i class="fas fa-eye"></i> Ver Pantalla Principal
         </button>
       </div>
@@ -6202,56 +6209,211 @@ function updateCustomizerLivePreview() {
   if (!customizerDrafts) initCustomizerDrafts();
 }
 
-function minimizeTextCustomizerToDock() {
-  syncCustomizerDraftsFromInputs();
-  closeModal();
+/* ============================================================================
+   MODO DE EDICIÓN DIRECTA EN PANTALLA (IN-PLACE LIVE TEXT EDITING)
+   Permite a Jesús Andrade navegar de pestaña en pestaña y hacer clic en
+   cualquier título, subtítulo o aviso para editarlo en vivo con teclado.
+   ============================================================================ */
+let isTextEditMode = false;
 
-  let dock = document.getElementById("text-customizer-dock");
-  if (!dock) {
-    dock = document.createElement("div");
-    dock.id = "text-customizer-dock";
-    dock.className = "text-customizer-dock";
-    document.body.appendChild(dock);
+function toggleInPlaceTextEditing(enable = null) {
+  if (enable === null) {
+    isTextEditMode = !isTextEditMode;
+  } else {
+    isTextEditMode = Boolean(enable);
   }
 
-  const tabLabels = {
+  if (isTextEditMode) {
+    if (!customizerDrafts) initCustomizerDrafts();
+    closeModal();
+    showLiveEditFloatingBar();
+    applyInPlaceTextEditingToCurrentScreen();
+    showToast("⚡ Modo Edición Directa Activo: Haz clic sobre cualquier texto con recuadro amarillo para modificarlo.", "info");
+  } else {
+    removeInPlaceTextEditingFromScreen();
+    hideLiveEditFloatingBar();
+    showToast("Modo de edición directa cerrado.");
+  }
+}
+
+function showLiveEditFloatingBar() {
+  let bar = document.getElementById("renacer-live-edit-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "renacer-live-edit-bar";
+    bar.className = "renacer-live-edit-bar";
+    document.body.appendChild(bar);
+  }
+
+  const tabNames = {
     pipeline: "Seguimiento de Órdenes",
-    cuentas_cobrar: "Facturas por Cobrar",
-    asistencia: "Control de Asistencia",
-    personal: "Personal y Destajo",
-    general: "Cabecera y Marca",
-    recepcion: "Términos de Recepción"
+    accounts_receivable: "Facturas por Cobrar",
+    attendance: "Control de Asistencia",
+    commissions_hr: "Personal y Destajo",
+    dashboard: "Inicio",
+    catalog_mgr: "Catálogo de Precios",
+    inventario: "Inventario Repuestos",
+    finances_ledger: "Finanzas",
+    clients_dir: "Clientes"
   };
 
-  dock.innerHTML = `
-    <div class="dock-info">
-      <span class="dock-title"><i class="fas fa-edit"></i> Editando en Vivo:</span>
-      <span class="dock-subtitle">${tabLabels[activeCustomizerTab] || "Personalización"}</span>
+  const currentTabName = tabNames[currentTab] || "Pantalla Actual";
+
+  bar.innerHTML = `
+    <div style="display:flex; align-items:center; gap:10px;">
+      <span style="display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:var(--renacer-gold, #f5df00); color:#0f1638; font-weight:900; font-size:14px; box-shadow:0 0 10px rgba(245,223,0,0.5);">
+        <i class="fas fa-edit"></i>
+      </span>
+      <div>
+        <div style="font-size:11px; font-weight:900; color:var(--renacer-gold, #f5df00); text-transform:uppercase; letter-spacing:0.5px;">
+          Modo Edición Directa · <span style="color:#fff;">${currentTabName}</span>
+        </div>
+        <div style="font-size:12px; color:#cbd5e1; font-weight:600;">
+          Haz clic en cualquier texto con recuadro dorado para escribir libremente. Navega de pestaña en pestaña.
+        </div>
+      </div>
     </div>
-    <div style="display:flex; gap:6px; align-items:center;">
-      <button type="button" class="btn btn--gold btn--xs" onclick="expandTextCustomizerModal()" style="font-weight:900;">
-        <i class="fas fa-expand"></i> Reabrir Editor
+    <div style="display:flex; align-items:center; gap:8px; margin-left:auto; flex-wrap:wrap;">
+      <button type="button" class="btn btn--success btn--sm" onclick="saveInPlaceTexts()" style="font-weight:900; box-shadow:0 4px 14px rgba(34,197,94,0.4);">
+        <i class="fas fa-save"></i> Guardar Textos
       </button>
-      <button type="button" class="btn btn--success btn--xs" onclick="saveCustomTexts()" style="font-weight:900;">
-        <i class="fas fa-save"></i> Guardar
+      <button type="button" class="btn btn--gold btn--sm" onclick="openTextCustomizerModal()" style="font-weight:900;">
+        <i class="fas fa-sliders-h"></i> Panel Completo
       </button>
-      <button type="button" class="btn btn--ghost btn--xs" onclick="closeTextCustomizerDock()" title="Cerrar barra flotante" style="color:#ef4444;">
-        <i class="fas fa-times"></i>
+      <button type="button" class="btn btn--ghost btn--sm" onclick="toggleInPlaceTextEditing(false)" style="color:#ef4444; border-color:rgba(239,68,68,0.4);" title="Salir del modo de edición directa">
+        <i class="fas fa-times"></i> Salir
       </button>
     </div>
   `;
-  dock.style.display = "flex";
-  showToast("Editor minimizado. Puedes navegar libremente por cualquier pestaña del sistema.", "info");
+  bar.style.display = "flex";
+}
+
+function hideLiveEditFloatingBar() {
+  const bar = document.getElementById("renacer-live-edit-bar");
+  if (bar) bar.remove();
+  const dock = document.getElementById("text-customizer-dock");
+  if (dock) dock.remove();
+}
+
+function applyInPlaceTextEditingToCurrentScreen() {
+  if (!isTextEditMode) return;
+  if (!customizerDrafts) initCustomizerDrafts();
+
+  showLiveEditFloatingBar();
+
+  const targets = [
+    { selector: "#pipeline-screen-title", key: "pipeline_title", singleLine: true },
+    { selector: "#pipeline-screen-subtitle", key: "pipeline_subtitle", singleLine: false },
+    { selector: "#ar-screen-title-text", key: "ar_title", singleLine: true },
+    { selector: "#attendance-screen-notice", key: "attendance_notice", singleLine: false },
+    { selector: "#payroll-notice-display", key: "payroll_notice", singleLine: false },
+    { selector: "#sidebar-biblical-badge-text", key: "biblical_badge", singleLine: true },
+    { selector: ".login-clean-sub", key: "app_subtitle", singleLine: true }
+  ];
+
+  targets.forEach((t) => {
+    const el = document.querySelector(t.selector);
+    if (el) {
+      setupSingleEditableElement(el, t.key, t.singleLine);
+    }
+  });
+
+  document.querySelectorAll("[data-custom-text-key]").forEach((el) => {
+    const key = el.getAttribute("data-custom-text-key");
+    if (key) {
+      setupSingleEditableElement(el, key, false);
+    }
+  });
+}
+
+function setupSingleEditableElement(el, key, singleLine = false) {
+  if (!el) return;
+
+  el.contentEditable = "true";
+  el.classList.add("renacer-editable-text");
+  el.setAttribute("data-custom-text-key", key);
+  el.setAttribute("spellcheck", "false");
+  el.setAttribute("title", "Haz clic para editar este texto directamente en pantalla");
+
+  el.oninput = function() {
+    if (!customizerDrafts) initCustomizerDrafts();
+    customizerDrafts[key] = this.innerText.trim();
+  };
+
+  if (singleLine) {
+    el.onkeydown = function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        this.blur();
+      }
+    };
+  }
+
+  el.onclick = function(e) {
+    e.stopPropagation();
+  };
+}
+
+function removeInPlaceTextEditingFromScreen() {
+  document.querySelectorAll(".renacer-editable-text, [data-custom-text-key]").forEach((el) => {
+    el.contentEditable = "false";
+    el.classList.remove("renacer-editable-text");
+    el.removeAttribute("title");
+    el.oninput = null;
+    el.onkeydown = null;
+    el.onclick = null;
+  });
+}
+
+function saveInPlaceTexts() {
+  if (!customizerDrafts) initCustomizerDrafts();
+
+  document.querySelectorAll("[data-custom-text-key]").forEach((el) => {
+    const key = el.getAttribute("data-custom-text-key");
+    if (key && el.innerText) {
+      customizerDrafts[key] = el.innerText.trim();
+    }
+  });
+
+  const pTitle = document.getElementById("pipeline-screen-title");
+  if (pTitle && pTitle.innerText) customizerDrafts.pipeline_title = pTitle.innerText.trim();
+
+  const pSub = document.getElementById("pipeline-screen-subtitle");
+  if (pSub && pSub.innerText) customizerDrafts.pipeline_subtitle = pSub.innerText.trim();
+
+  const arTitle = document.getElementById("ar-screen-title-text") || document.getElementById("ar-screen-title");
+  if (arTitle && arTitle.innerText) customizerDrafts.ar_title = arTitle.innerText.trim();
+
+  const payNotice = document.getElementById("payroll-notice-display");
+  if (payNotice && payNotice.innerText) customizerDrafts.payroll_notice = payNotice.innerText.trim();
+
+  const attNotice = document.getElementById("attendance-screen-notice");
+  if (attNotice && attNotice.innerText) customizerDrafts.attendance_notice = attNotice.innerText.trim();
+
+  const bibBadge = document.getElementById("sidebar-biblical-badge-text");
+  if (bibBadge && bibBadge.innerText) customizerDrafts.biblical_badge = bibBadge.innerText.trim();
+
+  saveCustomTexts();
+  toggleInPlaceTextEditing(false);
+}
+
+function minimizeTextCustomizerToDock() {
+  syncCustomizerDraftsFromInputs();
+  closeModal();
+  toggleInPlaceTextEditing(true);
 }
 
 function expandTextCustomizerModal() {
   closeTextCustomizerDock();
+  hideLiveEditFloatingBar();
   openTextCustomizerModal(activeCustomizerTab);
 }
 
 function closeTextCustomizerDock() {
   const dock = document.getElementById("text-customizer-dock");
   if (dock) dock.remove();
+  const bar = document.getElementById("renacer-live-edit-bar");
+  if (bar) bar.remove();
 }
 
 function openTextCustomizerModal(initialTab = null) {
@@ -6268,9 +6430,14 @@ function openTextCustomizerModal(initialTab = null) {
           <i class="fas fa-info-circle" style="color:var(--renacer-gold);"></i> 
           Pasa de <strong>pestaña en pestaña</strong> para ver y modificar cada sección en vivo. Al cambiar de pestaña, el taller de fondo también navega a esa pantalla.
         </div>
-        <button type="button" class="btn btn--ghost btn--xs" onclick="minimizeTextCustomizerToDock()" style="border-color:rgba(245,223,0,0.4); color:var(--renacer-gold); font-weight:800;" title="Minimiza el editor en una barra flotante para ver y usar la pantalla completa del taller">
-          <i class="fas fa-window-minimize"></i> Minimizar para Ver Pantalla Completa
-        </button>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold btn--xs" onclick="toggleInPlaceTextEditing(true)" style="font-weight:900; box-shadow:0 2px 8px rgba(245,223,0,0.35);" title="Activa la edición directa en la pantalla del taller para escribir haciendo clic directamente en cualquier texto">
+            <i class="fas fa-magic"></i> Editar Directo en Pantalla
+          </button>
+          <button type="button" class="btn btn--ghost btn--xs" onclick="minimizeTextCustomizerToDock()" style="border-color:rgba(245,223,0,0.4); color:var(--renacer-gold); font-weight:800;" title="Minimiza el editor para escribir directamente en las pantallas del taller">
+            <i class="fas fa-window-minimize"></i> Minimizar
+          </button>
+        </div>
       </div>
 
       <!-- Barra de Navegación por Pestañas del Sistema -->
@@ -6335,6 +6502,9 @@ function saveCustomTexts() {
   saveDatabase();
   closeModal();
   closeTextCustomizerDock();
+  hideLiveEditFloatingBar();
+  isTextEditMode = false;
+  removeInPlaceTextEditingFromScreen();
   renderApp();
   syncToGoogleSheets(true);
   showToast("¡Textos y avisos personalizados guardados exitosamente!", "success");
@@ -9444,7 +9614,7 @@ function renderAccountsReceivableScreen() {
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
         <div>
           <span id="ar-screen-title" style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
-            <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> ${escapeHtml(getCustomText("ar_title", "Control General de Cuentas por Cobrar"))}
+            <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> <span id="ar-screen-title-text" data-custom-text-key="ar_title">${escapeHtml(getCustomText("ar_title", "Control General de Cuentas por Cobrar"))}</span>
           </span>
           <div style="display:flex; align-items:baseline; gap:12px; margin-top:4px; flex-wrap:wrap;">
             <span style="font-family:'JetBrains Mono',monospace; font-size:34px; font-weight:900; color:${arActiveTab === "cobradas" ? "#22c55e" : "#dc2626"};">
@@ -10498,7 +10668,7 @@ function renderWorkerEarningsScreen() {
           <h3 style="font-size:17px; font-weight:900; margin-top:2px;">
             Historial de Vouchers y Liquidaciones de Nómina Semanal
           </h3>
-          <p id="payroll-notice-display" style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+          <p id="payroll-notice-display" data-custom-text-key="payroll_notice" style="font-size:12px; color:var(--text-muted); margin-top:2px;">
             ${escapeHtml(getCustomText("payroll_notice", "Semana laboral de Lunes a Domingo. Corte y liquidación los días Domingo."))}
           </p>
         </div>
@@ -12277,7 +12447,7 @@ function renderAttendanceScreen() {
           <i class="fas fa-shield-alt"></i> CONTROL DE ASISTENCIA Y PRESENCIA FÍSICA · RECTIFICADORA RENACER
         </span>
         <h2 style="font-size:20px; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> ${isTechnician ? 'Mi Asistencia y Horario de Trabajo' : 'Monitoreo de Horarios, Entrada, Almuerzo y Salida'}</h2>
-        <p id="attendance-screen-notice" style="font-size:12.5px; color:var(--text-muted); margin:0;">
+        <p id="attendance-screen-notice" data-custom-text-key="attendance_notice" style="font-size:12.5px; color:var(--text-muted); margin:0;">
           ${escapeHtml(getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice))}
         </p>
       </div>
