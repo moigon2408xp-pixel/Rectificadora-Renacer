@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.18.v26";
+const CURRENT_APP_VERSION = "2026.11.18.v27";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -4583,11 +4583,11 @@ function renderOrderCardTelegramStyle(order) {
                 </div>
               </div>
               <div class="service-right">
-                ${currentUser && currentUser.rol === "tecnico" ? "" : <div class="price-val">{Number(s.monto_servicio).toFixed(2)}</div>}
+                ${currentUser && currentUser.rol === "tecnico" ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
                 ${
                   currentUser && currentUser.rol === "tecnico"
-                    ? (s.tecnico_id === currentUser.id_usuario ? <div class="comm-val" style="color:var(--renacer-gold); font-weight:800;">Mi Comisión: {Number(s.comision_base_tecnico || 0).toFixed(2)}</div> : "")
-                    : <div class="comm-val">Com: {Number(s.comision_base_tecnico || 0).toFixed(2)}</div>
+                    ? (s.tecnico_id === currentUser.id_usuario ? `<div class="comm-val" style="color:var(--renacer-gold); font-weight:800;">Mi Comisión: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>` : "")
+                    : `<div class="comm-val">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>`
                 }
               </div>
             </div>
@@ -4841,22 +4841,22 @@ function renderOrderCardTelegramStyle(order) {
         ${
           currentUser && currentUser.rol === "tecnico"
             ? ""
-            : 
+            : `
             <div class="order-clean-finance-strip">
               <div class="finance-cell">
                 <span class="lbl">TOTAL</span>
-                <strong class="val val--total">{Number(order.monto_total).toFixed(2)}</strong>
+                <strong class="val val--total">$${Number(order.monto_total || 0).toFixed(2)}</strong>
               </div>
               <div class="finance-cell">
                 <span class="lbl">ABONADO</span>
-                <strong class="val val--abonado">{Number(order.monto_abonado).toFixed(2)}</strong>
+                <strong class="val val--abonado">$${Number(order.monto_abonado || 0).toFixed(2)}</strong>
               </div>
               <div class="finance-cell">
                 <span class="lbl">RESTO</span>
-                <strong class="val val--resto" style="color:;">{Number(order.saldo_pendiente).toFixed(2)}</strong>
+                <strong class="val val--resto" style="color:${Number(order.saldo_pendiente || 0) > 0 ? '#ef4444' : '#22c55e'};">$${Number(order.saldo_pendiente || 0).toFixed(2)}</strong>
               </div>
             </div>
-            
+            `
         }
       </div>
 
@@ -4917,9 +4917,9 @@ function renderOrderCardTelegramStyle(order) {
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           ${
             order.estado_actual !== "anulado" && order.estado_actual !== "archivado" && Number(order.saldo_pendiente) > 0 && !(currentUser && currentUser.rol === "tecnico")
-              ? <button type="button" class="btn btn--warning" onclick="openFinancialApprovalModal('')" title="Registrar abono o liquidación total" style="padding:7px 12px; font-size:12px; font-weight:800;">
+              ? `<button type="button" class="btn btn--warning" onclick="openFinancialApprovalModal('${order.id_orden}')" title="Registrar abono o liquidación total" style="padding:7px 12px; font-size:12px; font-weight:800;">
                    <i class="fas fa-hand-holding-usd"></i> Abono / Pago
-                 </button>
+                 </button>`
               : ""
           }
           ${primaryActionBtn}
