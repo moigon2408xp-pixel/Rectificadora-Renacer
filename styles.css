@@ -5190,3 +5190,8 @@ body {
     grid-template-columns: 1fr !important;
   }
 }
+
+/* SweetAlert2 por encima de cualquier modal o backdrop */
+.swal2-container {
+  z-index: 200000 !important;
+}
