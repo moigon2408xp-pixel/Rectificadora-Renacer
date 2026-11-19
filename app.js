@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.19.v29";
+const CURRENT_APP_VERSION = "2026.11.19.v30";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -531,14 +531,14 @@ function getInitialDatabase() {
         estado_subtarea: "terminado",
         minutos_acumulados: 25
       },
-      // Subtareas Orden #1576
+      // Subtareas Orden #1576 (En Recepción / Presupuesto — Sin Asignar hasta Fase 3)
       {
         id_subtarea: "SUB-1576-1",
         orden_id: "ORD-1576",
         codigo_troquel: "1576",
         descripcion_servicio: "Cámara 4C",
-        tecnico_id: "USR-HAVELL",
-        nombre_tecnico: "Havell Bracho",
+        tecnico_id: "",
+        nombre_tecnico: "Sin asignar",
         monto_servicio: 30.0,
         comision_base_tecnico: 10.0,
         estado_subtarea: "pendiente",
@@ -549,21 +549,21 @@ function getInitialDatabase() {
         orden_id: "ORD-1576",
         codigo_troquel: "1576",
         descripcion_servicio: "Químico",
-        tecnico_id: "USR-ANGEL",
-        nombre_tecnico: "Angel",
+        tecnico_id: "",
+        nombre_tecnico: "Sin asignar",
         monto_servicio: 10.0,
         comision_base_tecnico: 2.5,
         estado_subtarea: "pendiente",
         minutos_acumulados: 0
       },
-      // Subtareas Orden #1557
+      // Subtareas Orden #1557 (En Recepción / Presupuesto — Sin Asignar hasta Fase 3)
       {
         id_subtarea: "SUB-1557-1",
         orden_id: "ORD-1557",
         codigo_troquel: "1557",
         descripcion_servicio: "Lavado Químico",
-        tecnico_id: "USR-ANGEL",
-        nombre_tecnico: "Angel",
+        tecnico_id: "",
+        nombre_tecnico: "Sin asignar",
         monto_servicio: 20.0,
         comision_base_tecnico: 5.0,
         estado_subtarea: "pendiente",
@@ -574,8 +574,8 @@ function getInitialDatabase() {
         orden_id: "ORD-1557",
         codigo_troquel: "1557",
         descripcion_servicio: "Aplanado 4C",
-        tecnico_id: "USR-HAVELL",
-        nombre_tecnico: "Havell Bracho",
+        tecnico_id: "",
+        nombre_tecnico: "Sin asignar",
         monto_servicio: 30.0,
         comision_base_tecnico: 10.0,
         estado_subtarea: "pendiente",
@@ -847,17 +847,12 @@ function normalizeDatabaseSchema(d) {
     });
   }
 
-  // Inicializar inventario central de repuestos si no existe
-  if (!Array.isArray(d.inventario_repuestos) || d.inventario_repuestos.length === 0) {
-    d.inventario_repuestos = [
-      { id_repuesto: "REP-101", codigo: "GUA-01", nombre: "Guías de Válvula (Bronce)", categoria: "Cámara / Culata", stock_actual: 48, stock_minimo: 16, precio_costo: 2.5, precio_venta: 5.0, unidad: "Pieza" },
-      { id_repuesto: "REP-102", codigo: "GUA-02", nombre: "Guías de Válvula (Hierro)", categoria: "Cámara / Culata", stock_actual: 32, stock_minimo: 12, precio_costo: 1.8, precio_venta: 4.0, unidad: "Pieza" },
-      { id_repuesto: "REP-103", codigo: "VAL-01", nombre: "Válvulas de Admisión Estándar", categoria: "Válvulas", stock_actual: 40, stock_minimo: 16, precio_costo: 3.5, precio_venta: 7.0, unidad: "Pieza" },
-      { id_repuesto: "REP-104", codigo: "VAL-02", nombre: "Válvulas de Escape Reforzadas", categoria: "Válvulas", stock_actual: 36, stock_minimo: 16, precio_costo: 4.0, precio_venta: 8.0, unidad: "Pieza" },
-      { id_repuesto: "REP-105", codigo: "SEL-01", nombre: "Sellos / Gomas de Válvula (Kit 16pz)", categoria: "Sellos", stock_actual: 15, stock_minimo: 5, precio_costo: 6.0, precio_venta: 12.0, unidad: "Juego" },
-      { id_repuesto: "REP-106", codigo: "EMP-01", nombre: "Empacadura de Cámara Amianto / Metal", categoria: "Empacaduras", stock_actual: 20, stock_minimo: 8, precio_costo: 8.0, precio_venta: 16.0, unidad: "Pieza" },
-      { id_repuesto: "REP-107", codigo: "QUI-01", nombre: "Químico Descarbonizante Concentrado", categoria: "Químicos", stock_actual: 12, stock_minimo: 4, precio_costo: 15.0, precio_venta: 25.0, unidad: "Galón" }
-    ];
+  // Inicializar inventario central de repuestos e insumos limpio para Javier Andrade (sin ítems ficticios)
+  if (!Array.isArray(d.inventario_repuestos)) {
+    d.inventario_repuestos = [];
+  } else {
+    // Purgar ítems de prueba/demo antiguos (REP-101 a REP-107) si existían
+    d.inventario_repuestos = d.inventario_repuestos.filter((r) => !/^REP-10[1-7]$/i.test(r.id_repuesto || ""));
   }
   if (!Array.isArray(d.movimientos_inventario)) {
     d.movimientos_inventario = [];
@@ -961,6 +956,13 @@ function normalizeDatabaseSchema(d) {
     });
   }
 
+  // Purgar asistencias automáticas erróneas generadas por inicio de sesión (03:17 AM o similar)
+  d.asistencias = (d.asistencias || []).filter((a) => {
+    const hora = String(a.hora_entrada || "");
+    if (hora.includes("03:17") || hora.includes("3:17") || hora.includes("03:18") || hora.includes("3:18")) return false;
+    return true;
+  });
+
   d.clientes = (d.clientes || []).filter((c) => String(c.nombre_completo || c.documento_identidad || "").trim() !== "");
   d.clientes.forEach((c) => {
     if (c.es_taller_aliado === undefined) {
@@ -1031,6 +1033,14 @@ function normalizeDatabaseSchema(d) {
     if (s.minutos_acumulados === undefined) s.minutos_acumulados = Number(s.tiempo_neto_min || 0);
     if (s.foto_terminado_url === undefined) s.foto_terminado_url = s.foto_evidencia_terminado || "";
     if (s.fecha_terminado) s.fecha_terminado = cleanDateISO(s.fecha_terminado, false);
+
+    // Órdenes en etapa 1 (Recepción / Presupuesto) no tienen técnico asignado hasta Fase 3
+    const parentOrd = d.ordenes.find((o) => o.id_orden === s.orden_id);
+    if (parentOrd && (parentOrd.estado_actual === "recepcion" || parentOrd.estado_actual === "diagnostico_presupuesto")) {
+      s.tecnico_id = "";
+      s.nombre_tecnico = "Sin asignar";
+      s.estado_subtarea = "pendiente";
+    }
   });
 
   // Bitácora: purgar mensajes huérfanos de pruebas
@@ -1642,7 +1652,7 @@ function saveCustomGasUrl() {
 
 function loadDatabase() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem("RENACER_DB_V4");
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.ordenes)) return normalizeDatabaseSchema(parsed);
@@ -1651,12 +1661,32 @@ function loadDatabase() {
     console.warn("Error leyendo almacenamiento local, cargando base inicial:", e);
   }
   const initial = normalizeDatabaseSchema(getInitialDatabase());
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+  } catch (e) {}
   return initial;
 }
 
 function saveDatabase() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  } catch (e) {
+    console.error("Error al guardar en localStorage (posible exceso de cuota):", e);
+    // Si la cuota se satura por fotos, podar base64 antiguas de bitácora manteniendo los textos
+    try {
+      const cloned = JSON.parse(JSON.stringify(db));
+      if (Array.isArray(cloned.bitacora)) {
+        cloned.bitacora.forEach((b, idx) => {
+          if (idx < cloned.bitacora.length - 8 && b.foto_adjunta_url && b.foto_adjunta_url.startsWith("data:image")) {
+            b.foto_adjunta_url = "";
+          }
+        });
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cloned));
+    } catch (err2) {
+      console.warn("No se pudo guardar ni con optimización de fotos:", err2);
+    }
+  }
   pushToGoogleSheets(true);
 }
 
@@ -2100,7 +2130,16 @@ function openInteractiveProfileModal(userId) {
           </div>
           <div class="form-field">
             <label><i class="fas fa-lock"></i> Contraseña / PIN Numérico *</label>
-            <input type="password" id="prof-pin" value="${u.pin || ""}" placeholder="6 dígitos numéricos" />
+            ${
+              currentUser?.rol === "recepcion"
+                ? `
+                <input type="password" id="prof-pin" value="••••••" disabled style="opacity:0.6; cursor:not-allowed; background:rgba(255,255,255,0.05);" />
+                <div style="font-size:11px; color:#94a3b8; margin-top:3px;"><i class="fas fa-shield-alt"></i> La contraseña de recepción es administrada por Gerencia / Admin.</div>
+                `
+                : `
+                <input type="password" id="prof-pin" value="${u.pin || ""}" placeholder="6 dígitos numéricos" />
+                `
+            }
           </div>
           ${
             isJefe
@@ -2160,21 +2199,24 @@ function saveInteractiveProfile(userId) {
     showToast("El nombre no puede estar vacío.", "error");
     return;
   }
-  if (!newPin || newPin.length < 4) {
-    showToast("El PIN debe tener al menos 4 caracteres numéricos.", "error");
-    return;
+  
+  if (currentUser?.rol !== "recepcion") {
+    if (!newPin || newPin.length < 4) {
+      showToast("El PIN debe tener al menos 4 caracteres numéricos.", "error");
+      return;
+    }
+    u.pin = newPin;
   }
 
   u.nombre = newName;
   u.telefono = newPhone;
   if (newSpec) u.especialidad = newSpec;
-  u.pin = newPin;
   if (salaryInp) u.salario_fijo_semanal = Number(salaryInp.value) || 0;
 
   saveDatabase();
   closeModal();
   renderApp();
-  showToast("Perfil y contraseña actualizados con éxito.", "success");
+  showToast("Perfil actualizado con éxito.", "success");
 }
 
 function enrollBiometrics(userId) {
@@ -2195,25 +2237,8 @@ function loginSuccess(user) {
     currentUser = user;
     localStorage.setItem(SESSION_KEY, user.id_usuario);
 
-    // Registrar día activo automáticamente si es técnico
-    if (user.rol === "tecnico") {
-      const today = cleanDateISO(new Date().toISOString(), false);
-      if (!Array.isArray(db.asistencias)) db.asistencias = [];
-      const exists = db.asistencias.find((a) => a.fecha === today && a.usuario_id === user.id_usuario);
-      if (!exists) {
-        db.asistencias.unshift({
-          id_asist: "ASI-" + Date.now().toString().slice(-4),
-          usuario_id: user.id_usuario,
-          nombre: user.nombre,
-          fecha: today,
-          hora_entrada: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          hora_salida: "Por destajo",
-          estado: "Activo en Taller",
-          observacion: "Producción por trabajo realizado"
-        });
-        saveDatabase();
-      }
-    }
+    // Asistencia presencial: El inicio de sesión NO registra asistencia automática.
+    // La asistencia se registra exclusivamente mediante escaneo de QR en el Kiosco del taller o marcado presencial.
 
     // Seleccionar pestaña inicial según el rol
     if (user.rol === "tecnico") {
@@ -3058,8 +3083,8 @@ function formatStageName(stage) {
     asignacion_ejecucion: "4. En Servicio",
     calidad: "5. Calidad",
     control_calidad: "5. Calidad",
-    entrega: "6. Entrega",
-    entregado: "6. Entregado",
+    entrega: "6. En Entrega",
+    entregado: "6. En Entrega",
     archivado: "Archivado"
   };
   return map[stage] || stage || "En Proceso";
@@ -3110,17 +3135,17 @@ function renderReceptionScreen() {
       <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1.5px solid rgba(245,196,0,0.3); border-left:5px solid var(--renacer-gold);">
         <span style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; display:block;">PIEZAS EN RECEPCIÓN</span>
         <strong style="font-family:'JetBrains Mono',monospace; font-size:28px; font-weight:900; color:var(--renacer-gold);">${countRecep}</strong>
-        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">En evaluación, diagnóstico o presupuesto inicial</span>
+        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">Diagnóstico y presupuesto inicial</span>
       </div>
       <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1.5px solid rgba(56,189,248,0.3); border-left:5px solid #38bdf8;">
         <span style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; display:block;">PIEZAS EN TALLER</span>
         <strong style="font-family:'JetBrains Mono',monospace; font-size:28px; font-weight:900; color:#38bdf8;">${countTaller}</strong>
-        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">En proceso de mecanizado en máquinas de rectificación</span>
+        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">Mecanizado activo en taller</span>
       </div>
       <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1.5px solid rgba(34,197,94,0.3); border-left:5px solid #22c55e;">
         <span style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; display:block;">LISTAS / CONTROL CALIDAD</span>
         <strong style="font-family:'JetBrains Mono',monospace; font-size:28px; font-weight:900; color:#22c55e;">${countListos}</strong>
-        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">Aprobadas para entrega y retiro por el cliente</span>
+        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">Piezas listas para retiro</span>
       </div>
     </div>
 
@@ -4770,8 +4795,8 @@ function renderOrderCardTelegramStyle(order) {
     terminado: { label: "4. Servicio (Listo)", cls: "state-badge--term", icon: "fa-flag-checkered" },
     calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
     control_calidad: { label: "5. Calidad", cls: "state-badge--qc", icon: "fa-shield-alt" },
-    entrega: { label: "6. Entrega", cls: "state-badge--done", icon: "fa-truck" },
-    entregado: { label: "6. Entrega", cls: "state-badge--done", icon: "fa-truck" },
+    entrega: { label: "6. En Entrega", cls: "state-badge--done", icon: "fa-truck" },
+    entregado: { label: "6. En Entrega", cls: "state-badge--done", icon: "fa-truck" },
     archivado: { label: "Archivado", cls: "state-badge--archive", icon: "fa-box-archive" },
     anulado: { label: "Anulada", cls: "state-badge--danger", icon: "fa-ban" }
   };
@@ -4785,46 +4810,29 @@ function renderOrderCardTelegramStyle(order) {
   };
   const finBadge = finBadgeMap[order.tipo_condicion_pago] || finBadgeMap.pendiente_definir;
 
+  // 1. Lista Limpia de Servicios al Cliente (Sin duplicar asignaciones de técnicos)
   const subtasksListHtml = subtasks.length
     ? subtasks
         .map((s) => {
           const stateText =
             s.estado_subtarea === "terminado"
-              ? '<i class="fas fa-check-circle" style="color:#22c55e;"></i> Terminado'
+              ? '<span style="color:#22c55e; font-weight:700;"><i class="fas fa-check-circle"></i> Listo</span>'
               : s.estado_subtarea === "empezado"
-              ? '<i class="fas fa-wrench" style="color:#0284c7;"></i> En Proceso'
-              : s.estado_subtarea === "pausado"
-              ? '<i class="fas fa-pause-circle" style="color:#f59e0b;"></i> Pausado'
-              : '<i class="fas fa-clock" style="color:#94a3b8;"></i> Por Hacer';
-          const timerBadge =
-            s.estado_subtarea === "empezado"
-              ? `<span style="color:#0284c7; font-family:'JetBrains Mono',monospace; font-weight:800; margin-left:6px;" data-live-subtask-id="${s.id_subtarea}"><i class="fas fa-stopwatch"></i> ${formatLiveSubtaskTimer(s)}</span>`
-              : (s.minutos_acumulados || s.tiempo_neto_min) > 0
-              ? `<span style="color:var(--text-muted); margin-left:6px;"><i class="fas fa-stopwatch"></i> ${formatMinutes(s.minutos_acumulados || s.tiempo_neto_min)}</span>`
-              : "";
+              ? '<span style="color:#0284c7; font-weight:700;"><i class="fas fa-wrench"></i> En proceso</span>'
+              : '<span style="color:var(--text-muted);"><i class="fas fa-clock"></i> Pendiente</span>';
           return `
             <div class="order-clean-service-row ${s.estado_subtarea === "terminado" ? "done" : ""}">
               <div style="flex:1;">
                 <div class="service-title">
-                  ${s.descripcion_servicio} ${s.es_item_extra ? '<span class="extra-tag">(Ítem Extra)</span>' : ""}
+                  <i class="fas fa-wrench" style="color:var(--renacer-gold); font-size:11px; margin-right:4px;"></i> ${s.descripcion_servicio} ${s.es_item_extra ? '<span class="extra-tag">(Ítem Extra)</span>' : ""}
                 </div>
                 <div class="service-meta">
-                  <span>Técnico: <strong>${s.nombre_tecnico || "Sin asignar"}</strong></span>
-                  ${canManage ? `<button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-size:10.5px; margin-left:4px; font-weight:800;" onclick="openAssignSubtaskModal('${s.id_subtarea}', '${order.id_orden}')" title="Asignar o cambiar técnico">[${s.tecnico_id ? "Cambiar" : "Asignar"}]</button>` : ""}
-                  ${canManage && s.tecnico_id ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:4px; font-weight:800;" onclick="unassignTechnicianFromOrderCard('${s.id_subtarea}', '${order.id_orden}')" title="Quitar asignación">[Quitar]</button>` : ""}
-                  ${canManage && !isEntregado ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10px; margin-left:6px; font-weight:800;" onclick="removeSubtaskFromOrder('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar ítem">[<i class="fas fa-trash-alt"></i>]</button>` : ""}
-                  <span>·</span>
                   <span>${stateText}</span>
-                  ${timerBadge}
+                  ${canManage && !isEntregado ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10.5px; margin-left:8px; font-weight:700;" onclick="removeSubtaskFromOrder('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar servicio de la orden"><i class="fas fa-trash-alt"></i> Quitar</button>` : ""}
                 </div>
               </div>
               <div class="service-right">
                 ${currentUser && (currentUser.rol === "tecnico" || currentUser.rol === "recepcion") ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
-                ${
-                  currentUser && currentUser.rol === "tecnico"
-                    ? (s.tecnico_id === currentUser.id_usuario ? `<div class="comm-val" style="color:var(--renacer-gold); font-weight:800;">Mi Comisión: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>` : "")
-                    : (currentUser && currentUser.rol === "recepcion" ? "" : `<div class="comm-val">Com: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>`)
-                }
               </div>
             </div>
           `;
@@ -4832,7 +4840,7 @@ function renderOrderCardTelegramStyle(order) {
         .join("")
     : `<div style="font-size:11.5px; color:var(--text-muted); padding:8px 0; text-align:center;">No hay servicios presupuestados aún.</div>`;
 
-  // Agrupación de destajo y tercerización para el Bloque 2 (Diseño Imagen 6)
+  // 2. Agrupación Exclusiva de Destajo y Asignación de Trabajos
   const techMap = {};
   subtasks.forEach((s) => {
     const tId = s.tecnico_id || "unassigned";
@@ -4865,22 +4873,29 @@ function renderOrderCardTelegramStyle(order) {
         return `
         <div class="order-clean-assignee-row ${t.isExternal ? "external" : ""}">
           <div style="flex:1;">
-            <div class="assignee-name">
-              ${t.isExternal ? '<span class="badge-external"><i class="fas fa-handshake"></i> EXTERNO</span> ' : ''}
-              ${t.nombre}
+            <div class="assignee-name" style="display:flex; align-items:center; justify-content:space-between;">
+              <span>
+                ${t.isExternal ? '<span class="badge-external"><i class="fas fa-handshake"></i> EXTERNO</span> ' : ''}
+                <i class="fas fa-user-circle" style="color:var(--renacer-gold); margin-right:4px;"></i> <strong>${t.nombre}</strong>
+              </span>
+              ${canManage ? `
+                <button type="button" class="btn-clean-link" style="color:var(--renacer-gold); font-size:11px; font-weight:800;" onclick="openSubtaskAssignmentModal('${order.id_orden}')" title="Reasignar en Matriz">[ Cambiar ]</button>
+              ` : ""}
             </div>
-            <div class="assignee-tasks">
-              ${t.servicios.join(", ")}
-            </div>
-          </div>
-          <div class="assignee-comm">
-            <div class="comm-label">
-              ${t.isExternal ? "Costo Tercero" : "Comision"}
-            </div>
-            <div class="comm-val">
-              ${t.totalComm}$
+            <div class="assignee-tasks" style="margin-top:3px; color:var(--text-muted); font-size:11.5px;">
+              <i class="fas fa-tasks" style="font-size:10px; margin-right:4px;"></i> ${t.servicios.join(", ")}
             </div>
           </div>
+          ${canManage ? `
+          <div class="assignee-comm" style="text-align:right; margin-left:12px;">
+            <div class="comm-label" style="font-size:10px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">
+              ${t.isExternal ? "Costo Tercero" : "Comisión"}
+            </div>
+            <div class="comm-val" style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:13px;">
+              $${t.totalComm.toFixed(2)}
+            </div>
+          </div>
+          ` : ""}
         </div>
       `;
       })
@@ -4888,9 +4903,9 @@ function renderOrderCardTelegramStyle(order) {
   }
   if (unassignedSubs.length > 0) {
     assignmentsHtml += `
-      <div style="font-size:11.5px; color:var(--text-muted); padding:6px 10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px dashed var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
-        <span><i class="fas fa-clock" style="color:#f59e0b;"></i> ${unassignedSubs.length} tarea(s) pendientes de asignar</span>
-        ${canManage ? `<button type="button" class="btn btn--gold btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')">Asignar Ahora</button>` : ""}
+      <div style="font-size:11.5px; color:var(--text-muted); padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:10px; border:1px dashed var(--border-subtle); display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+        <span><i class="fas fa-clock" style="color:#f59e0b;"></i> ${unassignedSubs.length} trabajo(s) pendientes de asignar</span>
+        ${canManage ? `<button type="button" class="btn btn--gold btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')"><i class="fas fa-user-plus"></i> Asignar Matriz</button>` : ""}
       </div>
     `;
   }
@@ -5807,7 +5822,7 @@ function readFileAsCompressedDataUrl(file) {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const maxDim = 1920; // 2K HD ultra nítido para inspección de sensores, grietas y troquel
+        const maxDim = 1200; // Resolución optimizada HD (ahorro de cuota en localStorage sin pérdida de nitidez)
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -5823,7 +5838,7 @@ function readFileAsCompressedDataUrl(file) {
         canvas.height = h;
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", 0.88));
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
       };
       img.onerror = () => resolve(ev.target.result);
       img.src = ev.target.result;
@@ -6461,8 +6476,8 @@ function filterBudgetServicesLive(query) {
           <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold); font-size:14px;">$${Number(s.precio_sugerido).toFixed(2)}</span>
         </div>
         <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-top:3px;">
-          <span>${s.es_outsourcing ? "Outsourcing / Solteca" : "Destajo Taller Renacer"}</span>
-          <span style="color:#22c55e; font-weight:700;">Comisión Técnico: $${Number(s.comision_sugerida).toFixed(2)}</span>
+          <span>${s.categoria || (s.es_outsourcing ? "Outsourcing / Solteca" : "Servicio de Taller")}</span>
+          <span style="color:var(--renacer-gold); font-weight:700;"><i class="fas fa-tag"></i> Tarifa Oficial</span>
         </div>
       </div>
     `)
@@ -6542,35 +6557,25 @@ function renderTempBudgetItems() {
   const rowsHtml = tempNewOrderState.itemsPresupuesto
     .map(
       (item, idx) => `
-      <div style="display:grid; grid-template-columns: 1fr 125px 135px 40px; gap:8px; align-items:center; margin-bottom:8px;">
+      <div style="display:grid; grid-template-columns: 1fr 140px 42px; gap:10px; align-items:center; margin-bottom:8px;">
         <input
           type="text"
           value="${item.descripcion}"
           oninput="updateTempBudgetItem(${idx}, 'descripcion', this.value)"
           placeholder="Descripción del servicio"
-          style="padding:8px 10px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;"
+          style="padding:9px 12px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;"
         />
         <div>
-          <label style="font-size:10px; display:block; color:var(--text-muted); font-weight:800;">PRECIO CLIENTE ($)</label>
+          <label style="font-size:10px; display:block; color:var(--renacer-gold); font-weight:800; margin-bottom:2px;">PRECIO CLIENTE ($)</label>
           <input
             type="number"
             step="0.5"
             value="${item.monto}"
             oninput="updateTempBudgetItem(${idx}, 'monto', this.value)"
-            style="width:100%; padding:7px 8px; border-radius:8px; border:1px solid var(--border-color); font-weight:900;"
+            style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border-color); font-weight:900; font-size:14px; text-align:right;"
           />
         </div>
-        <div>
-          <label style="font-size:10px; display:block; color:#15803d; font-weight:800;">COMISIÓN TÉCNICO ($)</label>
-          <input
-            type="number"
-            step="0.5"
-            value="${item.comision}"
-            oninput="updateTempBudgetItem(${idx}, 'comision', this.value)"
-            style="width:100%; padding:7px 8px; border-radius:8px; border:1px solid rgba(22,163,74,0.4); font-weight:900; color:#15803d;"
-          />
-        </div>
-        <button type="button" class="btn btn--danger" style="padding:8px;" onclick="removeTempBudgetItem(${idx})" title="Quitar ítem">
+        <button type="button" class="btn btn--danger" style="padding:9px; height:38px; display:flex; align-items:center; justify-content:center; margin-top:14px;" onclick="removeTempBudgetItem(${idx})" title="Quitar ítem">
           <i class="fas fa-trash"></i>
         </button>
       </div>
@@ -8474,20 +8479,8 @@ function renderAccountsReceivableScreen() {
   const totalGeneralFacturado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
   const totalGeneralAbonado = allPendingOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0);
 
-  // Clasificación operativa clara:
-  const enCalle = allPendingOrders.filter((o) => o.estado_actual === "entregado");
-  const sumEnCalle = enCalle.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
-
-  const enTaller = allPendingOrders.filter((o) => o.estado_actual !== "entregado");
-  const sumEnTaller = enTaller.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
-
-  // Filtro
+  // Filtro por Cliente y Fechas
   let filtered = allPendingOrders.slice();
-  if (arFilterState === "entregadas_por_cobrar") {
-    filtered = enCalle;
-  } else if (arFilterState === "en_taller") {
-    filtered = enTaller;
-  }
 
   if (arFilterClient !== "all") {
     filtered = filtered.filter((o) => o.cliente_id === arFilterClient);
@@ -8500,7 +8493,7 @@ function renderAccountsReceivableScreen() {
     filtered = filtered.filter((o) => cleanDateISO(o.fecha_ingreso) <= arDateTo);
   }
 
-  // Agrupar por Cliente exactamente como la tabla dinámica de Excel de Jesús Andrade
+  // Agrupar por Cliente exactamente como la tabla de cuentas por cobrar de Jesús Andrade
   const groupedByClient = {};
   filtered.forEach((o) => {
     const key = o.cliente_id || o.nombre_cliente;
@@ -8535,7 +8528,7 @@ function renderAccountsReceivableScreen() {
       .join("");
 
   const stateBadgeLabel = (st) => {
-    if (st === "entregado" || st === "entrega") return `<span class="state-badge state-badge--done"><i class="fas fa-truck"></i> 6. Entrega (En Calle)</span>`;
+    if (st === "entregado" || st === "entrega") return `<span class="state-badge state-badge--done"><i class="fas fa-truck"></i> 6. En Entrega</span>`;
     if (st === "recepcion" || st === "diagnostico_presupuesto") return `<span class="state-badge state-badge--recep"><i class="fas fa-clipboard-check"></i> 1. Recepción</span>`;
     if (st === "diagnostico") return `<span class="state-badge state-badge--diag"><i class="fas fa-microscope"></i> 2. Diagnóstico</span>`;
     if (st === "aprobacion" || st === "esperando_aprobacion_abono") return `<span class="state-badge state-badge--wait"><i class="fas fa-hourglass-half"></i> 3. Aprobación</span>`;
@@ -8610,17 +8603,17 @@ function renderAccountsReceivableScreen() {
 
   return `
     <!-- Panel Ejecutivo de Cuentas por Cobrar (Diseño Directo Sin Redundancias) -->
-    <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:18px 22px; margin-bottom:16px; box-shadow:var(--shadow-sm);">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
+    <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:20px 24px; margin-bottom:16px; box-shadow:var(--shadow-sm);">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
         <div>
           <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
             <i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> CONTROL GENERAL DE CUENTAS POR COBRAR
           </span>
           <div style="display:flex; align-items:baseline; gap:12px; margin-top:4px; flex-wrap:wrap;">
-            <span style="font-family:'JetBrains Mono',monospace; font-size:32px; font-weight:900; color:#dc2626;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:34px; font-weight:900; color:#dc2626;">
               $${totalGeneralResto.toFixed(2)}
             </span>
-            <span style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:800; color:#0284c7;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:800; color:#0284c7;">
               ≈ Bs. ${(totalGeneralResto * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
             <span style="font-size:12px; color:var(--text-muted); font-weight:700;">(Tasa BCV: Bs. ${tasaBcv.toFixed(2)})</span>
@@ -8628,46 +8621,46 @@ function renderAccountsReceivableScreen() {
         </div>
 
         <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-          <div style="background:var(--bg-input); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:11px; color:var(--text-muted); font-weight:800;"><i class="fas fa-hand-holding-dollar" style="color:#b45309;"></i> EN CALLE (CRÉDITO)</span>
-            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#b45309;">
-              $${sumEnCalle.toFixed(2)} <span style="font-size:11px; font-weight:700; color:var(--text-muted);">(${enCalle.length} pz)</span>
+          <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
+            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">TOTAL FACTURADO</span>
+            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--text-main);">
+              $${totalGeneralFacturado.toFixed(2)}
             </div>
           </div>
-          <div style="background:var(--bg-input); padding:8px 14px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:11px; color:var(--text-muted); font-weight:800;"><i class="fas fa-warehouse" style="color:#0284c7;"></i> EN TALLER (RETENIDAS)</span>
-            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:#0284c7;">
-              $${sumEnTaller.toFixed(2)} <span style="font-size:11px; font-weight:700; color:var(--text-muted);">(${enTaller.length} pz)</span>
+          <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
+            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">TOTAL ABONADO</span>
+            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:#16a34a;">
+              $${totalGeneralAbonado.toFixed(2)}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
+            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">PIEZAS POR COBRAR</span>
+            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--renacer-gold);">
+              ${allPendingOrders.length} pz
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Filtros Rápidos (Chips) -->
-      <div style="display:flex; gap:8px; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); flex-wrap:wrap; align-items:center;">
-        <span style="font-size:12px; font-weight:800; color:var(--text-muted); margin-right:4px;">Filtrar:</span>
-        <button type="button" class="btn ${arFilterState === "all" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'all')">
-          Todas (${allPendingOrders.length})
-        </button>
-        <button type="button" class="btn ${arFilterState === "entregadas_por_cobrar" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'entregadas_por_cobrar')">
-          <i class="fas fa-hand-holding-dollar"></i> En Calle / Crédito (${enCalle.length})
-        </button>
-        <button type="button" class="btn ${arFilterState === "en_taller" ? "btn--primary" : "btn--ghost"}" style="padding:4px 12px; font-size:11.5px; border-radius:99px;" onclick="setArFilter('state', 'en_taller')">
-          <i class="fas fa-warehouse"></i> En Taller (${enTaller.length})
-        </button>
-
-        <div style="margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <select onchange="setArFilter('client', this.value)" style="padding:4px 10px; font-size:11.5px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);">
-            ${clientOptionsHtml}
-          </select>
-          <input type="date" value="${arDateFrom}" onchange="setArFilter('from', this.value)" style="padding:3px 8px; font-size:11px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);" title="Desde" />
-          <input type="date" value="${arDateTo}" onchange="setArFilter('to', this.value)" style="padding:3px 8px; font-size:11px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);" title="Hasta" />
-          ${
-            (arFilterState !== "all" || arFilterClient !== "all" || arDateFrom || arDateTo)
-              ? `<button type="button" class="btn btn--ghost" style="padding:3px 8px; font-size:11px;" onclick="resetArFilters()" title="Limpiar filtros"><i class="fas fa-undo"></i></button>`
-              : ""
-          }
+      <!-- Barra de Filtros por Cliente y Fechas -->
+      <div style="display:flex; gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid var(--border-subtle); flex-wrap:wrap; align-items:center;">
+        <span style="font-size:12px; font-weight:800; color:var(--text-muted);"><i class="fas fa-filter"></i> Filtrar:</span>
+        <select onchange="setArFilter('client', this.value)" style="padding:6px 12px; font-size:12px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle); font-weight:700;">
+          ${clientOptionsHtml}
+        </select>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:11px; color:var(--text-muted);">Desde:</span>
+          <input type="date" value="${arDateFrom}" onchange="setArFilter('from', this.value)" style="padding:5px 8px; font-size:11.5px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);" title="Fecha inicial" />
         </div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span style="font-size:11px; color:var(--text-muted);">Hasta:</span>
+          <input type="date" value="${arDateTo}" onchange="setArFilter('to', this.value)" style="padding:5px 8px; font-size:11.5px; border-radius:8px; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border-subtle);" title="Fecha final" />
+        </div>
+        ${
+          (arFilterClient !== "all" || arDateFrom || arDateTo)
+            ? `<button type="button" class="btn btn--ghost btn--xs" style="padding:4px 10px; font-size:11px;" onclick="resetArFilters()" title="Limpiar filtros"><i class="fas fa-undo"></i> Restablecer</button>`
+            : ""
+        }
       </div>
     </div>
 
@@ -9580,7 +9573,14 @@ function confirmSubtaskCompletion(subtaskId) {
 }
 
 function renderWorkerEarningsScreen() {
-  const mySubs = db.subtareas.filter((s) => s.tecnico_id === currentUser.id_usuario);
+  const mySubs = db.subtareas.filter((s) => {
+    if (s.tecnico_id !== currentUser.id_usuario) return false;
+    const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+    if (!ord) return false;
+    // Solo mostrar tareas de órdenes en ejecución o finalizadas (no en recepción preliminar)
+    if (ord.estado_actual === "recepcion" || ord.estado_actual === "diagnostico_presupuesto" || ord.estado_actual === "diagnostico") return false;
+    return true;
+  });
   const doneSubs = mySubs.filter((s) => s.estado_subtarea === "terminado");
   const totalEarned = doneSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
   const totalMinutes = mySubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
@@ -9885,10 +9885,11 @@ function openOrderCrmModal(orderId) {
   const countChat = chatOnlyMessages.length;
   const countAll = allMessages.length;
 
-  const isTech = currentUser && currentUser.rol === "tecnico";
-  const baseMessages = isTech ? chatOnlyMessages : (currentCrmFilterMode === "chat" ? chatOnlyMessages : allMessages);
+  const isPrivileged = currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
+  const isTechOrRecep = !isPrivileged;
+  const baseMessages = isTechOrRecep ? chatOnlyMessages : (currentCrmFilterMode === "chat" ? chatOnlyMessages : allMessages);
   const displayMessages = baseMessages.filter((m) => {
-    if (!isTech) return true;
+    if (isPrivileged) return true;
     const txt = (m.mensaje || "").toLowerCase();
     if (m.tipo_evento === "cobro_resto" || m.tipo_evento === "abono" || m.tipo_evento === "pago") return false;
     if (txt.includes("presupuesto inicial:") || txt.includes("pago recibido") || txt.includes("saldo pendiente") || txt.includes("resto pendiente") || txt.includes("abono")) return false;
@@ -9945,7 +9946,7 @@ function openOrderCrmModal(orderId) {
       </div>
 
       <!-- Filtro Chat Técnico vs Historial Completo (Solo visible para Jefes y Admin) -->
-      ${!isTech ? `
+      ${isPrivileged ? `
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; padding:6px 10px; background:var(--bg-subtle); border-radius:10px; border:1px solid var(--border-subtle);">
         <span style="font-size:11.5px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Vista de Conversación:</span>
         <div style="display:flex; gap:6px;">
@@ -11346,15 +11347,15 @@ function renderAttendanceScreen() {
   const actionButtonsHtml = isTechnician
     ? `
       <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
-        <i class="fas fa-camera"></i> 📷 Marcar mi Asistencia (Escanear QR)
+        <i class="fas fa-camera"></i> Marcar mi Asistencia (Escanear QR)
       </button>
     `
     : `
       <button type="button" class="btn btn--gold" onclick="openAttendanceKioskModal()">
-        <i class="fas fa-qrcode"></i> 📱 Abrir Kiosco QR (Recepción)
+        <i class="fas fa-qrcode"></i> Abrir Kiosco QR (Recepción)
       </button>
       <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
-        <i class="fas fa-camera"></i> 📷 Marcar Asistencia
+        <i class="fas fa-camera"></i> Marcar Asistencia
       </button>
       <button type="button" class="btn btn--ghost" onclick="openAddActiveDayModal()">
         <i class="fas fa-calendar-plus"></i> + Registro Manual
