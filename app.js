@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.18.v27";
+const CURRENT_APP_VERSION = "2026.11.18.v28";
 
 const BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
@@ -707,7 +707,7 @@ let currentUser = null;
 let currentTab = "pipeline";
 let currentPhaseFilter = "all";
 let searchQuery = "";
-let currentViewMode = localStorage.getItem("RENACER_VIEW_MODE") || "cards"; // 'cards' | 'table'
+let currentViewMode = localStorage.getItem("RENACER_VIEW_MODE") || "table"; // 'table' (compacta) | 'cards' (detallada)
 
 function setViewMode(mode) {
   currentViewMode = mode;
@@ -2365,10 +2365,10 @@ function getTabsForRole(role) {
 
   if (role === "recepcion") {
     return [
-      { id: "dashboard", label: "Inicio", shortLabel: "Inicio", icon: "fa-home" },
+      { id: "dashboard", label: "Recepción", shortLabel: "Inicio", icon: "fa-home" },
       { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length },
       { id: "clients_dir", label: "Clientes", shortLabel: "Clientes", icon: "fa-users" },
-      { id: "catalog_mgr", label: "Servicios / Precios", shortLabel: "Precios", icon: "fa-cogs" }
+      { id: "catalog_mgr", label: "Catálogo de Precios", shortLabel: "Precios", icon: "fa-cogs" }
     ];
   }
 
@@ -2389,9 +2389,9 @@ function getTabsForRole(role) {
     { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length },
     { id: "inventario", label: "Inventario Repuestos", shortLabel: "Inventario", icon: "fa-boxes-stacked", badge: lowStockCount || undefined },
     { id: "finances_ledger", label: "Finanzas", shortLabel: "Finanzas", icon: "fa-chart-line" },
-    { id: "commissions_hr", label: "Comisiones y Personal", shortLabel: "Personal", icon: "fa-user-check" },
+    { id: "commissions_hr", label: "Personal y Comisiones", shortLabel: "Personal", icon: "fa-user-check" },
     { id: "accounts_receivable", label: "Facturas por cobrar", shortLabel: "Cobrar", icon: "fa-file-invoice-dollar", badge: countAR },
-    { id: "catalog_mgr", label: "Servicios / Comisiones", shortLabel: "Servicios", icon: "fa-cogs" }
+    { id: "catalog_mgr", label: "Catálogo de Precios", shortLabel: "Precios", icon: "fa-cogs" }
   ];
 }
 
@@ -2452,15 +2452,42 @@ function navigateTab(tabId) {
 
 function handleGlobalSearch(val) {
   searchQuery = (val || "").trim().toLowerCase();
+  const clearBtn = document.getElementById("clear-search-btn");
+  if (clearBtn) {
+    if (searchQuery.length > 0) clearBtn.classList.remove("hidden");
+    else clearBtn.classList.add("hidden");
+  }
   if (currentTab !== "pipeline" && searchQuery.length > 0 && currentUser.rol !== "tecnico") {
     currentTab = "pipeline";
   }
   renderScreen();
 }
 
+function clearGlobalSearch() {
+  searchQuery = "";
+  const globalSearchEl = document.getElementById("global-search-input");
+  if (globalSearchEl) globalSearchEl.value = "";
+  const clearBtn = document.getElementById("clear-search-btn");
+  if (clearBtn) clearBtn.classList.add("hidden");
+  renderScreen();
+}
+
 /* ---------- Renderizador Principal ---------- */
 function renderApp() {
   if (!currentUser) return;
+
+  // Garantizar que el buscador no tenga valores residuales si searchQuery está vacío
+  const globalSearchEl = document.getElementById("global-search-input");
+  const clearBtn = document.getElementById("clear-search-btn");
+  if (globalSearchEl) {
+    if (!searchQuery) {
+      globalSearchEl.value = "";
+      if (clearBtn) clearBtn.classList.add("hidden");
+    } else {
+      globalSearchEl.value = searchQuery;
+      if (clearBtn) clearBtn.classList.remove("hidden");
+    }
+  }
 
   const userLabel = document.getElementById("active-user-label");
   if (userLabel) userLabel.textContent = currentUser.nombre;
@@ -2476,13 +2503,17 @@ function renderApp() {
 
   const btnKiosk = document.getElementById("btn-topbar-attendance-kiosk");
   if (btnKiosk) {
-    if (currentUser.rol === "tecnico") btnKiosk.classList.add("hidden");
-    else btnKiosk.classList.remove("hidden");
+    // Solo visible en barra superior para Recepción y Admin
+    if (currentUser.rol === "recepcion" || currentUser.rol === "admin") {
+      btnKiosk.classList.remove("hidden");
+    } else {
+      btnKiosk.classList.add("hidden");
+    }
   }
 
   const btnScan = document.getElementById("btn-topbar-attendance-scan");
   if (btnScan) {
-    btnScan.classList.remove("hidden");
+    btnScan.classList.add("hidden");
   }
 
   const tabs = getTabsForRole(currentUser.rol);
@@ -2999,12 +3030,139 @@ function openInventoryHistoryModal() {
   });
 }
 
+function formatStageName(stage) {
+  const map = {
+    recepcion: "1. Recepción",
+    diagnostico_presupuesto: "1. Recepción",
+    diagnostico: "2. Diagnóstico",
+    aprobacion: "3. Aprobación",
+    esperando_aprobacion_abono: "3. Aprobación",
+    servicio: "4. En Servicio",
+    asignacion_ejecucion: "4. En Servicio",
+    calidad: "5. Calidad",
+    control_calidad: "5. Calidad",
+    entrega: "6. Entrega",
+    entregado: "6. Entregado",
+    archivado: "Archivado"
+  };
+  return map[stage] || stage || "En Proceso";
+}
+
+/* ============================================================================
+   MÓDULO EXCLUSIVO DE RECEPCIÓN (TALLER RENACER 2026)
+   Privacidad Total: Sin Caja, Sin Finanzas, Sin Cuentas por Cobrar
+   Enfocado 100% en: Recibir Pieza Nueva, Kiosco QR y Envío de Términos
+   ============================================================================ */
+function renderReceptionScreen() {
+  const countRecep = (db.ordenes || []).filter(
+    (o) => o.estado_actual === "recepcion" || o.estado_actual === "diagnostico_presupuesto" || o.estado_actual === "diagnostico"
+  ).length;
+  const countTaller = (db.ordenes || []).filter(
+    (o) => o.estado_actual === "servicio" || o.estado_actual === "aprobacion" || o.estado_actual === "asignacion_ejecucion"
+  ).length;
+  const countListos = (db.ordenes || []).filter(
+    (o) => o.estado_actual === "calidad" || o.estado_actual === "entrega" || o.estado_actual === "control_calidad"
+  ).length;
+
+  const recentOrders = (db.ordenes || []).slice(0, 10);
+
+  return `
+    <!-- HEADER RECEPCIÓN -->
+    <div style="background:var(--bg-card); border-radius:18px; padding:22px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+      <div>
+        <span style="background:var(--renacer-gold); color:#0f1638; font-weight:900; font-size:11px; padding:3px 10px; border-radius:99px; text-transform:uppercase;">
+          MÓDULO DE RECEPCIÓN Y ATENCIÓN · TALLER RENACER
+        </span>
+        <h2 style="font-size:22px; font-weight:900; margin-top:8px;"><i class="fas fa-concierge-bell" style="color:var(--renacer-gold);"></i> Control Operativo de Ingreso y Kiosco Presencial</h2>
+        <p style="font-size:13px; color:var(--text-muted); margin:0;">
+          Dispositivo oficial de taller para registrar nuevas piezas de clientes y operar el Kiosco QR de asistencia para los técnicos.
+        </p>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--gold btn--lg" onclick="openNewOrderModal()" style="font-weight:900; padding:12px 20px;">
+          <i class="fas fa-plus-circle"></i> + NUEVA ORDEN (RECIBIR PIEZA)
+        </button>
+        <button type="button" class="btn btn--primary btn--lg" onclick="openAttendanceKioskModal()" style="font-weight:900; padding:12px 20px;">
+          <i class="fas fa-qrcode"></i> ABRIR KIOSCO QR (ASISTENCIA)
+        </button>
+      </div>
+    </div>
+
+    <!-- TARJETAS DE RESUMEN OPERATIVO (SIN DATOS FINANCIEROS CONFIDENCIALES) -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:14px; margin-bottom:20px;">
+      <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1.5px solid rgba(245,196,0,0.3); border-left:5px solid var(--renacer-gold);">
+        <span style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; display:block;">PIEZAS EN RECEPCIÓN</span>
+        <strong style="font-family:'JetBrains Mono',monospace; font-size:28px; font-weight:900; color:var(--renacer-gold);">${countRecep}</strong>
+        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">En evaluación, diagnóstico o presupuesto inicial</span>
+      </div>
+      <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1.5px solid rgba(56,189,248,0.3); border-left:5px solid #38bdf8;">
+        <span style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; display:block;">PIEZAS EN TALLER</span>
+        <strong style="font-family:'JetBrains Mono',monospace; font-size:28px; font-weight:900; color:#38bdf8;">${countTaller}</strong>
+        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">En proceso de mecanizado en máquinas de rectificación</span>
+      </div>
+      <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1.5px solid rgba(34,197,94,0.3); border-left:5px solid #22c55e;">
+        <span style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase; display:block;">LISTAS / CONTROL CALIDAD</span>
+        <strong style="font-family:'JetBrains Mono',monospace; font-size:28px; font-weight:900; color:#22c55e;">${countListos}</strong>
+        <span style="font-size:11.5px; color:var(--text-muted); display:block; margin-top:2px;">Aprobadas para entrega y retiro por el cliente</span>
+      </div>
+    </div>
+
+    <!-- LISTA OPERATIVA DE PIEZAS EN TALLER (SIN MONTOS DE CAJA NI PRECIOS) -->
+    <div style="background:var(--bg-card); border-radius:16px; padding:18px; border:1px solid var(--border-subtle);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+        <h3 style="font-size:17px; font-weight:900; display:flex; align-items:center; gap:8px;">
+          <i class="fas fa-clipboard-list" style="color:var(--renacer-gold);"></i>
+          Órdenes y Piezas Recientes en Taller
+        </h3>
+        <button type="button" class="btn btn--ghost btn--sm" onclick="navigateTab('pipeline')">
+          Ver Seguimiento Completo <i class="fas fa-arrow-right"></i>
+        </button>
+      </div>
+
+      <div class="data-table-wrapper">
+        <table class="renacer-table">
+          <thead>
+            <tr>
+              <th>Troquel</th>
+              <th>Cliente / Taller</th>
+              <th>Vehículo / Motor</th>
+              <th>Fecha Ingreso</th>
+              <th>Estado Actual</th>
+              <th style="text-align:right;">Comprobante</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${recentOrders.map((o) => `
+              <tr>
+                <td><strong style="font-family:'JetBrains Mono',monospace; color:var(--renacer-gold); font-size:14px;">#${o.codigo_troquel}</strong></td>
+                <td><strong>${o.nombre_cliente}</strong><div style="font-size:11px; color:var(--text-muted);">${o.telefono_cliente}</div></td>
+                <td>${o.datos_motor.marca} ${o.datos_motor.modelo}</td>
+                <td>${formatDateHuman(o.fecha_ingreso, false)}</td>
+                <td><span class="state-badge state-badge--${o.estado_actual}">${formatStageName(o.estado_actual)}</span></td>
+                <td style="text-align:right;">
+                  <button type="button" class="btn btn--success btn--xs" onclick="openWhatsAppTermsOnlyModal('${o.id_orden}')" title="Enviar comprobante de recepción por WhatsApp">
+                    <i class="fab fa-whatsapp"></i> Términos WhatsApp
+                  </button>
+                </td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 /* ============================================================================
    DASHBOARD EJECUTIVO PRINCIPAL (OFICIAL WEB RENACER 2026 - DISEÑO INTEGRAL)
    Métricas Independientes: Ingresos, Egresos, Cuentas por Cobrar y Activos Totales
    Tasas Duales BCV vs Binance/Paralelo + Remuneración y Adelantos de Socios
    ============================================================================ */
 function renderDashboardScreen() {
+  if (currentUser && currentUser.rol === "recepcion") {
+    return renderReceptionScreen();
+  }
+
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
   const tasaBinance = Number(db.config?.tasaBinance) || 52.40;
   const balancesInfo = getBalancesPorCuenta();
@@ -4218,17 +4376,14 @@ function renderPipelineScreen(forcedState) {
           <span class="admin-context-desc">Control total de órdenes, precios, perfiles y auditoría.</span>
         </div>
         <div class="admin-context-actions">
-          <button type="button" class="btn btn--danger btn--xs" onclick="clearAllTestOrders()">
-            <i class="fas fa-broom"></i> Limpiar Pruebas
-          </button>
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('clients_dir')">
             <i class="fas fa-users"></i> Clientes
           </button>
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('catalog_mgr')">
-            <i class="fas fa-tools"></i> Precios / Servicios
+            <i class="fas fa-tags"></i> Catálogo de Precios
           </button>
           <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('commissions_hr')">
-            <i class="fas fa-users-cog"></i> Trabajadores
+            <i class="fas fa-user-check"></i> Personal y Comisiones
           </button>
         </div>
       </div>
@@ -5838,7 +5993,7 @@ function openNewOrderModal() {
           <div class="form-section-title">
             <i class="fas fa-hashtag"></i> 2. Código de Troquel (Obligatorio) y Datos del Motor
           </div>
-          <div class="form-grid-4">
+          <div class="form-grid-3">
             <div class="form-field">
               <label style="color:#b45309; font-weight:900;">CÓDIGO DE TROQUEL *</label>
               <input
@@ -5848,16 +6003,6 @@ function openNewOrderModal() {
                 required
                 style="font-family:'JetBrains Mono',monospace; font-size:18px; font-weight:900; border:2px solid var(--renacer-gold); background:#fffbeb; color:#0f1638;"
               />
-            </div>
-            <div class="form-field">
-              <label>Tipo de Pieza *</label>
-              <select id="new-ord-pieza">
-                <option value="Cámara / Culata">Cámara / Culata</option>
-                <option value="Cámara Doble Árbol 16V">Cámara Doble Árbol 16V</option>
-                <option value="Bloque de Motor">Bloque de Motor</option>
-                <option value="Cigüeñal y Bielas">Cigüeñal y Bielas</option>
-                <option value="Motor Completo">Motor Completo</option>
-              </select>
             </div>
             <div class="form-field">
               <label>Marca del Vehículo *</label>
@@ -5897,15 +6042,16 @@ function openNewOrderModal() {
               <input type="text" id="new-ord-modelo" placeholder="Ej: Runner, Hilux, Corsa 1.6" required />
             </div>
           </div>
-          <div class="form-grid-2" style="margin-top:10px;">
-            <div class="form-field">
-              <label>Serial de Motor / Fundición</label>
-              <input type="text" id="new-ord-serial" placeholder="Ej: 1GR-884120" />
-            </div>
-            <div class="form-field">
-              <label>Observaciones de Recepción (Fisuras, rayones, estado inicial)</label>
-              <input type="text" id="new-ord-obs" placeholder="Ej: Presenta recalentamiento entre cilindros 2 y 3..." />
-            </div>
+          <div class="form-field" style="margin-top:10px;">
+            <label>Observaciones de Recepción (Fisuras, rayones, estado inicial)</label>
+            <textarea
+              id="new-ord-obs"
+              rows="3"
+              placeholder="Ej: Presenta recalentamiento entre cilindros 2 y 3, sin levas..."
+              style="width:100%; border-radius:10px; border:1.5px solid var(--border-color); padding:9px 12px; background:var(--bg-input); color:var(--text-main); font-family:inherit; font-size:13px;"
+            ></textarea>
+            <input type="hidden" id="new-ord-pieza" value="Cámara / Culata" />
+            <input type="hidden" id="new-ord-serial" value="S/N" />
           </div>
         </div>
 
@@ -5989,23 +6135,35 @@ function openNewOrderModal() {
           </div>
         </div>
 
-        <!-- 5. Presupuesto Dinámico Inicial -->
+        <!-- 5. Presupuesto Inicial (Desglose de Servicios y Precios) -->
         <div class="form-section-box">
-          <div class="form-section-title">
-            <i class="fas fa-file-invoice-dollar"></i> 5. Presupuesto Dinámico Inicial (Desglose Editable de Servicios)
-          </div>
-          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-            <select id="select-cat-service" style="flex:1; min-width:240px; padding:9px 12px; border-radius:10px; border:1.5px solid var(--border-color); font-weight:700;">
-              <option value="">-- Seleccionar servicio frecuente del catálogo --</option>
-              ${catalogOptions}
-            </select>
-            <button type="button" class="btn btn--primary" onclick="addCatalogServiceToTempOrder()">
-              <i class="fas fa-plus"></i> Añadir del Catálogo
-            </button>
-            <button type="button" class="btn btn--ghost" onclick="addCustomServiceToTempOrder()">
-              <i class="fas fa-pen"></i> + Fila Libre Manual
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span><i class="fas fa-file-invoice-dollar"></i> 5. Presupuesto Inicial (Desglose de Servicios y Precios)</span>
+            <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToTempOrder()">
+              <i class="fas fa-plus"></i> + Servicio Adicional
             </button>
           </div>
+
+          <!-- Buscador Predictivo en Tiempo Real: escribir y hacer clic añade el servicio al instante -->
+          <div style="background:rgba(255,255,255,0.03); border:1.5px solid var(--border-subtle); border-radius:12px; padding:12px; margin-bottom:12px;">
+            <div style="font-size:12px; font-weight:800; color:var(--text-muted); margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+              <span><i class="fas fa-search" style="color:var(--renacer-gold);"></i> Buscar y Añadir Servicio del Catálogo (1 Clic):</span>
+              <span style="font-size:11px; color:var(--renacer-gold); font-weight:700;">Escribe para filtrar al instante</span>
+            </div>
+            <div style="position:relative;">
+              <input
+                type="text"
+                id="search-budget-service-input"
+                placeholder="Escribe el nombre del servicio (ej. cepillado, aplanado, armado, válvulas, cambio)..."
+                oninput="filterBudgetServicesLive(this.value)"
+                onfocus="filterBudgetServicesLive(this.value)"
+                autocomplete="off"
+                style="width:100%; padding:10px 14px; border-radius:10px; border:1.5px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-weight:700; font-size:13px;"
+              />
+              <div id="budget-services-live-dropdown" class="budget-services-dropdown-list hidden"></div>
+            </div>
+          </div>
+
           <div id="temp-budget-items-container"></div>
         </div>
 
@@ -6180,10 +6338,88 @@ function addCatalogServiceToTempOrder() {
   renderTempBudgetItems();
 }
 
+function filterBudgetServicesLive(query) {
+  const dropdown = document.getElementById("budget-services-live-dropdown");
+  if (!dropdown) return;
+  const q = (query || "").trim().toLowerCase();
+
+  const services = db.catalogo_servicios || [];
+  const filtered = q
+    ? services.filter((s) => (s.nombre || "").toLowerCase().includes(q) || (s.modalidad || "").toLowerCase().includes(q))
+    : services.slice(0, 12);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = `
+      <div style="padding:12px; text-align:center; font-size:12px; color:var(--text-muted);">
+        No se encontró ningún servicio que coincida con "<strong>${query}</strong>".
+        <div style="margin-top:8px;">
+          <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceWithName('${query.replace(/'/g, "\\'")}')">
+            + Añadir "${query}" como Servicio Adicional
+          </button>
+        </div>
+      </div>
+    `;
+    dropdown.classList.remove("hidden");
+    return;
+  }
+
+  dropdown.innerHTML = filtered
+    .map((s) => `
+      <div class="budget-service-item-pick" onclick="pickBudgetServiceFromDropdown('${s.id_cat}')">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong style="color:var(--text-main); font-size:13px;"><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:6px;"></i>${s.nombre}</strong>
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold); font-size:14px;">$${Number(s.precio_sugerido).toFixed(2)}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-top:3px;">
+          <span>${s.es_outsourcing ? "Outsourcing / Solteca" : "Destajo Taller Renacer"}</span>
+          <span style="color:#22c55e; font-weight:700;">Comisión Técnico: $${Number(s.comision_sugerida).toFixed(2)}</span>
+        </div>
+      </div>
+    `)
+    .join("");
+
+  dropdown.classList.remove("hidden");
+}
+
+function pickBudgetServiceFromDropdown(serviceId) {
+  const s = (db.catalogo_servicios || []).find((c) => c.id_cat === serviceId);
+  if (!s) return;
+
+  tempNewOrderState.itemsPresupuesto.push({
+    id_temp: "T-" + Date.now() + Math.random().toString(36).slice(2, 5),
+    descripcion: s.nombre,
+    monto: Number(s.precio_sugerido) || 0,
+    comision: Number(s.comision_sugerida) || 0
+  });
+
+  const input = document.getElementById("search-budget-service-input");
+  if (input) input.value = "";
+  const dropdown = document.getElementById("budget-services-live-dropdown");
+  if (dropdown) dropdown.classList.add("hidden");
+
+  renderTempBudgetItems();
+  showToast(`Servicio "${s.nombre}" añadido ($${Number(s.precio_sugerido).toFixed(2)}).`);
+}
+
+function addCustomServiceWithName(name) {
+  tempNewOrderState.itemsPresupuesto.push({
+    id_temp: "T-" + Date.now() + Math.random().toString(36).slice(2, 5),
+    descripcion: name || "Servicio Adicional",
+    monto: 25,
+    comision: 8
+  });
+  const input = document.getElementById("search-budget-service-input");
+  if (input) input.value = "";
+  const dropdown = document.getElementById("budget-services-live-dropdown");
+  if (dropdown) dropdown.classList.add("hidden");
+  renderTempBudgetItems();
+  showToast(`Servicio Adicional añadido.`);
+}
+
 function addCustomServiceToTempOrder() {
   tempNewOrderState.itemsPresupuesto.push({
     id_temp: "T-" + Date.now() + Math.random().toString(36).slice(2, 5),
-    descripcion: "Servicio / Mano de Obra Adicional",
+    descripcion: "Servicio Adicional",
     monto: 25,
     comision: 8
   });
@@ -8644,6 +8880,113 @@ function renderWorkerPanelScreen() {
           const otherTasks = db.subtareas.filter((s) => s.orden_id === ord.id_orden && s.tecnico_id !== activeWorkerId);
           const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
+          const pendingSubtasks = mySubtasks.filter((s) => s.estado_subtarea !== "terminado");
+          const doneSubtasks = mySubtasks.filter((s) => s.estado_subtarea === "terminado");
+
+          const renderChecklistRow = (sub, idx) => {
+            const isTerminado = sub.estado_subtarea === "terminado";
+            const isEmpezado = sub.estado_subtarea === "empezado";
+            const isPausado = sub.estado_subtarea === "pausado";
+            const isPendiente = sub.estado_subtarea === "pendiente";
+
+            return `
+              <div class="worker-checklist-row ${isTerminado ? "checklist-row--done" : isEmpezado ? "checklist-row--active" : isPausado ? "checklist-row--paused" : ""}">
+                <!-- Columna izquierda: Número, Nombre y Comisión -->
+                <div class="checklist-row-left">
+                  <span class="checklist-index-badge ${isTerminado ? "badge--done" : isEmpezado ? "badge--active" : ""}">
+                    ${isTerminado ? "✓" : `#${idx + 1}`}
+                  </span>
+                  <div class="checklist-desc-wrap">
+                    <div class="checklist-subtask-name">${sub.descripcion_servicio}</div>
+                    <div class="checklist-subtask-meta">
+                      <span class="checklist-comm-tag">+$${Number(sub.comision_base_tecnico).toFixed(2)}</span>
+                      <span class="checklist-substate-pill substate--${sub.estado_subtarea}">
+                        ${
+                          isPendiente
+                            ? '<i class="fas fa-clock"></i> En Cola'
+                            : isEmpezado
+                            ? '<i class="fas fa-wrench"></i> En Proceso'
+                            : isPausado
+                            ? '<i class="fas fa-pause-circle"></i> Pausado'
+                            : '<i class="fas fa-check-circle"></i> Listo en Mesa'
+                        }
+                      </span>
+                      <span class="checklist-stopwatch ${isEmpezado ? "stopwatch--live" : ""}" data-live-subtask-id="${sub.id_subtarea}">
+                        <i class="fas fa-stopwatch"></i> ${formatLiveSubtaskTimer(sub)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Columna derecha: Acciones directas y foto -->
+                <div class="checklist-row-actions">
+                  ${
+                    isPendiente
+                      ? `
+                      <button
+                        type="button"
+                        class="btn btn--primary btn--sm checklist-btn-action"
+                        onclick="startSubtaskWork('${sub.id_subtarea}')"
+                        title="Iniciar trabajo en máquina y activar cronómetro"
+                      >
+                        <i class="fas fa-play"></i> Iniciar
+                      </button>
+                    `
+                      : isEmpezado
+                      ? `
+                      <button
+                        type="button"
+                        class="btn btn--warning btn--sm checklist-btn-action"
+                        onclick="openPauseSubtaskModal('${sub.id_subtarea}')"
+                        title="Pausar trabajo y reportar novedad al chat"
+                      >
+                        <i class="fas fa-pause"></i> Pausar
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn--success btn--sm checklist-btn-action"
+                        onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
+                        title="Subir foto obligatoria y terminar tarea"
+                      >
+                        <i class="fas fa-camera"></i> Terminar (Foto)
+                      </button>
+                    `
+                      : isPausado
+                      ? `
+                      <button
+                        type="button"
+                        class="btn btn--primary btn--sm checklist-btn-action"
+                        onclick="startSubtaskWork('${sub.id_subtarea}')"
+                        title="Reanudar cronómetro y continuar trabajo"
+                      >
+                        <i class="fas fa-play"></i> Reanudar
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn--success btn--sm checklist-btn-action"
+                        onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
+                        title="Subir foto y finalizar"
+                      >
+                        <i class="fas fa-camera"></i> Terminar (Foto)
+                      </button>
+                    `
+                      : `
+                      <div class="checklist-finished-pill">
+                        <i class="fas fa-check-circle" style="color:#16a34a; font-size:15px;"></i>
+                        <span style="font-size:11.5px; font-weight:800; color:#15803d;">Listo</span>
+                        ${
+                          sub.foto_terminado_url
+                            ? `<img src="${sub.foto_terminado_url}" class="checklist-finish-photo" onclick="openPhotoLightbox('${sub.foto_terminado_url}', 'Troquel #${ord.codigo_troquel} - ${sub.descripcion_servicio}')" title="Click para ver foto final en HD 4K" />`
+                            : ""
+                        }
+                      </div>
+                    `
+                  }
+                </div>
+              </div>
+            `;
+          };
+
           return `
             <div class="worker-tapa-card ${isAllDone ? "worker-tapa-card--done" : ""} ${ord.devuelto_calidad ? "worker-tapa-card--rejected" : ""}">
               <!-- CABECERA PRINCIPAL DE LA PIEZA / TROQUEL -->
@@ -8663,12 +9006,12 @@ function renderWorkerPanelScreen() {
                 </div>
 
                 <div class="worker-tapa-comm-box">
-                  <span class="worker-comm-caption">TU COMISIÓN EN ESTA TAPA</span>
-                  <div class="worker-comm-total">
-                    +$${totalWorkerCommission.toFixed(2)}
+                  <span class="worker-comm-caption">ESTADO EN TU MESA</span>
+                  <div class="worker-comm-total" style="font-size:16px;">
+                    ${completedTasks} de ${totalTasks} Listas
                   </div>
                   <span class="worker-comm-status-pill ${isAllDone ? "comm-status--full" : ""}">
-                    ${isAllDone ? `<i class="fas fa-check-circle" style="color:#22c55e;"></i> $${earnedCommission.toFixed(2)} acumulada al destajo` : `<i class="fas fa-clock" style="color:#f59e0b;"></i> $${earnedCommission.toFixed(2)} de $${totalWorkerCommission.toFixed(2)} ganada`}
+                    ${isAllDone ? `<i class="fas fa-check-circle" style="color:#22c55e;"></i> Completo (+$${earnedCommission.toFixed(2)} destajo)` : `<i class="fas fa-wrench" style="color:#f59e0b;"></i> Destajo: +$${earnedCommission.toFixed(2)} de $${totalWorkerCommission.toFixed(2)}`}
                   </span>
                 </div>
               </div>
@@ -8725,111 +9068,27 @@ function renderWorkerPanelScreen() {
 
               <!-- LISTICA BASE DE SUBTAREAS ASIGNADAS A ESTE TÉCNICO EN ESTA TAPA -->
               <div class="worker-subtasks-checklist">
-                ${mySubtasks
-                  .map((sub, sIdx) => {
-                    const isTerminado = sub.estado_subtarea === "terminado";
-                    const isEmpezado = sub.estado_subtarea === "empezado";
-                    const isPausado = sub.estado_subtarea === "pausado";
-                    const isPendiente = sub.estado_subtarea === "pendiente";
+                ${
+                  pendingSubtasks.length
+                    ? `
+                    <div style="font-size:11px; font-weight:900; color:#f59e0b; text-transform:uppercase; margin:4px 0 2px; display:flex; align-items:center; gap:6px;">
+                      <i class="fas fa-wrench"></i> Tareas Pendientes / En Proceso (${pendingSubtasks.length})
+                    </div>
+                    ${pendingSubtasks.map((s, idx) => renderChecklistRow(s, idx)).join("")}
+                  `
+                    : ""
+                }
 
-                    return `
-                      <div class="worker-checklist-row ${isTerminado ? "checklist-row--done" : isEmpezado ? "checklist-row--active" : isPausado ? "checklist-row--paused" : ""}">
-                        <!-- Columna izquierda: Número, Nombre y Comisión -->
-                        <div class="checklist-row-left">
-                          <span class="checklist-index-badge ${isTerminado ? "badge--done" : isEmpezado ? "badge--active" : ""}">
-                            ${isTerminado ? "✓" : `#${sIdx + 1}`}
-                          </span>
-                          <div class="checklist-desc-wrap">
-                            <div class="checklist-subtask-name">${sub.descripcion_servicio}</div>
-                            <div class="checklist-subtask-meta">
-                              <span class="checklist-comm-tag">+$${Number(sub.comision_base_tecnico).toFixed(2)}</span>
-                              <span class="checklist-substate-pill substate--${sub.estado_subtarea}">
-                                ${
-                                  isPendiente
-                                    ? '<i class="fas fa-clock"></i> En Cola'
-                                    : isEmpezado
-                                    ? '<i class="fas fa-wrench"></i> En Proceso'
-                                    : isPausado
-                                    ? '<i class="fas fa-pause-circle"></i> Pausado'
-                                    : '<i class="fas fa-check-circle"></i> Listo en Mesa'
-                                }
-                              </span>
-                              <span class="checklist-stopwatch ${isEmpezado ? "stopwatch--live" : ""}" data-live-subtask-id="${sub.id_subtarea}">
-                                <i class="fas fa-stopwatch"></i> ${formatLiveSubtaskTimer(sub)}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <!-- Columna derecha: Acciones directas y foto -->
-                        <div class="checklist-row-actions">
-                          ${
-                            isPendiente
-                              ? `
-                              <button
-                                type="button"
-                                class="btn btn--primary btn--sm checklist-btn-action"
-                                onclick="startSubtaskWork('${sub.id_subtarea}')"
-                                title="Iniciar trabajo en máquina y activar cronómetro"
-                              >
-                                <i class="fas fa-play"></i> Iniciar
-                              </button>
-                            `
-                              : isEmpezado
-                              ? `
-                              <button
-                                type="button"
-                                class="btn btn--warning btn--sm checklist-btn-action"
-                                onclick="openPauseSubtaskModal('${sub.id_subtarea}')"
-                                title="Pausar trabajo y reportar novedad al chat"
-                              >
-                                <i class="fas fa-pause"></i> Pausar
-                              </button>
-                              <button
-                                type="button"
-                                class="btn btn--success btn--sm checklist-btn-action"
-                                onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
-                                title="Subir foto obligatoria y terminar tarea"
-                              >
-                                <i class="fas fa-camera"></i> Terminar (Foto)
-                              </button>
-                            `
-                              : isPausado
-                              ? `
-                              <button
-                                type="button"
-                                class="btn btn--primary btn--sm checklist-btn-action"
-                                onclick="startSubtaskWork('${sub.id_subtarea}')"
-                                title="Reanudar cronómetro y continuar trabajo"
-                              >
-                                <i class="fas fa-play"></i> Reanudar
-                              </button>
-                              <button
-                                type="button"
-                                class="btn btn--success btn--sm checklist-btn-action"
-                                onclick="openCompleteSubtaskModal('${sub.id_subtarea}')"
-                                title="Subir foto y finalizar"
-                              >
-                                <i class="fas fa-camera"></i> Terminar (Foto)
-                              </button>
-                            `
-                              : `
-                              <div class="checklist-finished-pill">
-                                <i class="fas fa-check-circle" style="color:#16a34a; font-size:15px;"></i>
-                                <span style="font-size:11.5px; font-weight:800; color:#15803d;">Listo</span>
-                                ${
-                                  sub.foto_terminado_url
-                                    ? `<img src="${sub.foto_terminado_url}" class="checklist-finish-photo" onclick="openPhotoLightbox('${sub.foto_terminado_url}', 'Troquel #${ord.codigo_troquel} - ${sub.descripcion_servicio}')" title="Click para ver foto final en HD 4K" />`
-                                    : ""
-                                }
-                              </div>
-                            `
-                          }
-                        </div>
-                      </div>
-                    `;
-                  })
-                  .join("")}
+                ${
+                  doneSubtasks.length
+                    ? `
+                    <div style="font-size:11px; font-weight:900; color:#16a34a; text-transform:uppercase; margin:8px 0 2px; display:flex; align-items:center; gap:6px;">
+                      <i class="fas fa-check-double"></i> Tareas Listas en Mesa (${doneSubtasks.length})
+                    </div>
+                    ${doneSubtasks.map((s, idx) => renderChecklistRow(s, idx)).join("")}
+                  `
+                    : ""
+                }
               </div>
 
               <!-- PIE DE TARJETA: TRANSPARENCIA DE OTROS COMPAÑEROS Y BOTONES DE APOYO -->
@@ -9278,7 +9537,111 @@ function renderWorkerEarningsScreen() {
         </tbody>
       </table>
     </div>
+
+    <!-- SECCIÓN DE HISTORIAL DE VOUCHERS Y LIQUIDACIONES DE NÓMINA SEMANAL -->
+    <div style="margin-top:24px; background:var(--bg-card); border-radius:18px; padding:20px; border:1px solid var(--border-subtle);">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+        <div>
+          <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
+            <i class="fas fa-file-invoice-dollar"></i> NÓMINA POR DESTAJO SEMANAL
+          </span>
+          <h3 style="font-size:17px; font-weight:900; margin-top:2px;">
+            Historial de Vouchers y Liquidaciones de Nómina Semanal
+          </h3>
+          <p style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+            Corte semanal los viernes. Aquí puedes consultar el comprobante digital de tus pagos acumulados por destajo técnico.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-table-wrapper">
+        <table class="renacer-table">
+          <thead>
+            <tr>
+              <th>Semana / Período</th>
+              <th>Piezas y Troqueles</th>
+              <th>Subtareas Realizadas</th>
+              <th>Total Ganado</th>
+              <th>Estatus de Pago</th>
+              <th style="text-align:right;">Comprobante</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <strong>Semana Actual</strong>
+                <div style="font-size:11px; color:var(--text-muted);">13/11/2026 - 19/11/2026</div>
+              </td>
+              <td>${doneSubs.length ? doneSubs.map(s => { const o = db.ordenes.find(ord => ord.id_orden === s.orden_id); return o ? `#${o.codigo_troquel}` : ''; }).filter(Boolean).join(', ') : 'En curso'}</td>
+              <td><strong>${doneSubs.length} subtareas</strong> terminadas</td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
+                $${totalEarned.toFixed(2)}
+              </td>
+              <td>
+                <span style="font-size:11px; font-weight:800; background:rgba(245,196,0,0.15); color:var(--renacer-gold); padding:3px 8px; border-radius:6px;">
+                  <i class="fas fa-hourglass-half"></i> En Curso (Corte Viernes)
+                </span>
+              </td>
+              <td style="text-align:right;">
+                <button type="button" class="btn btn--gold btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Actual (13/11/2026 - 19/11/2026)', ${totalEarned}, ${doneSubs.length})">
+                  <i class="fas fa-receipt"></i> Ver Pre-Voucher
+                </button>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>Semana Anterior #45</strong>
+                <div style="font-size:11px; color:var(--text-muted);">06/11/2026 - 12/11/2026</div>
+              </td>
+              <td>#1520, #1522, #1534</td>
+              <td><strong>7 subtareas</strong> terminadas</td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
+                $35.00
+              </td>
+              <td>
+                <span style="font-size:11px; font-weight:800; background:rgba(34,197,94,0.15); color:#22c55e; padding:3px 8px; border-radius:6px;">
+                  <i class="fas fa-check-circle"></i> Liquidado y Pagado
+                </span>
+              </td>
+              <td style="text-align:right;">
+                <button type="button" class="btn btn--ghost btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Anterior #45 (06/11/2026 - 12/11/2026)', 35.00, 7)">
+                  <i class="fas fa-file-invoice"></i> Ver Recibo
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   `;
+}
+
+function openWorkerPayrollVoucherModal(workerName, period, amount, taskCount) {
+  Swal.fire({
+    title: `<strong style="font-size:17px; color:#0f1638;">VOUCHER DIGITAL DE NÓMINA DESTAJO</strong>`,
+    html: `
+      <div style="text-align:left; font-size:13px; color:#1e293b; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:12px; padding:16px; margin-top:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #e2e8f0; padding-bottom:8px; margin-bottom:12px;">
+          <div>
+            <strong style="font-size:15px; color:#0f1638;">RECTIFICADORA RENACER</strong>
+            <div style="font-size:11px; color:#64748b;">JOB 8:7 · SISTEMA DE TALLER</div>
+          </div>
+          <span style="background:#22c55e; color:#fff; font-size:11px; font-weight:800; padding:3px 8px; border-radius:6px;">CERTIFICADO</span>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
+          <div><strong style="color:#64748b; font-size:11px;">TÉCNICO:</strong><br><strong style="font-size:13px;">${workerName}</strong></div>
+          <div><strong style="color:#64748b; font-size:11px;">PERÍODO:</strong><br><span>${period}</span></div>
+          <div><strong style="color:#64748b; font-size:11px;">TAREAS TERMINADAS:</strong><br><span>${taskCount} trabajos</span></div>
+          <div><strong style="color:#64748b; font-size:11px;">TOTAL A LIQUIDAR:</strong><br><strong style="font-size:18px; color:#16a34a; font-family:'JetBrains Mono',monospace;">$${Number(amount).toFixed(2)}</strong></div>
+        </div>
+        <div style="border-top:1px dashed #cbd5e1; padding-top:10px; font-size:11px; color:#64748b; text-align:center;">
+          Liquidación de destajo avalada por Dirección (Moisés González) y Jefatura de Taller (Jesús Andrade).
+        </div>
+      </div>
+    `,
+    confirmButtonText: "Entendido",
+    confirmButtonColor: "#f5c400"
+  });
 }
 
 /* ============================================================================
@@ -10760,11 +11123,14 @@ function deleteWorker(userId) {
 /* ---------- DÍAS ACTIVOS Y PROYECTOS TRABAJADOS (SIN HORARIO FIJO DE ENTRADA/SALIDA) ---------- */
 function renderAttendanceScreen() {
   const todayIso = new Date().toISOString().slice(0, 10);
-  const activeWorkers = (db.usuarios || []).filter(
-    (u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "admin" || u.rol === "jefe_taller")
-  );
+  const isTechnician = currentUser.rol === "tecnico";
 
-  // Tarjetas de Presencia Hoy para el Jefe de Taller (Jesús Andrade)
+  // PRIVACIDAD POR ROL: Los técnicos de taller solo ven su propio registro de presencia e historial
+  const activeWorkers = isTechnician
+    ? [currentUser]
+    : (db.usuarios || []).filter((u) => u.activo && u.rol === "tecnico");
+
+  // Tarjetas de Presencia Hoy
   const presenceCardsHtml = activeWorkers
     .map((w) => {
       const pres = getWorkerCurrentPresence(w.id_usuario);
@@ -10813,8 +11179,12 @@ function renderAttendanceScreen() {
     })
     .join("");
 
-  const rowsHtml = db.asistencias.length
-    ? db.asistencias
+  const filteredAttendanceList = isTechnician
+    ? (db.asistencias || []).filter((a) => a.usuario_id === currentUser.id_usuario || a.nombre === currentUser.nombre)
+    : (db.asistencias || []);
+
+  const rowsHtml = filteredAttendanceList.length
+    ? filteredAttendanceList
         .map((a) => {
           const workerSubs = db.subtareas.filter(
             (s) => s.tecnico_id === a.usuario_id || s.nombre_tecnico === a.nombre
@@ -10838,6 +11208,14 @@ function renderAttendanceScreen() {
             ? `${a.hora_salida_almuerzo || '--'} / ${a.hora_regreso_almuerzo || '--'}`
             : `<span style="color:var(--text-muted);">-</span>`;
 
+          const actionBtn = isTechnician
+            ? `<span style="color:var(--text-muted); font-size:11px;">Registrado</span>`
+            : `
+              <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteAttendanceRecord('${a.id_asist}')" title="Eliminar registro">
+                <i class="fas fa-trash-alt"></i>
+              </button>
+            `;
+
           return `
             <tr>
               <td><strong><i class="far fa-calendar-alt"></i> ${formatDateHuman(a.fecha, false)}</strong></td>
@@ -10857,15 +11235,32 @@ function renderAttendanceScreen() {
                 <div style="font-size:10.5px; color:var(--text-muted);">${a.observacion || "Marcación presencial"}</div>
               </td>
               <td style="text-align:right;">
-                <button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px; color:#dc2626;" onclick="deleteAttendanceRecord('${a.id_asist}')" title="Eliminar registro">
-                  <i class="fas fa-trash-alt"></i>
-                </button>
+                ${actionBtn}
               </td>
             </tr>
           `;
         })
         .join("")
-    : `<tr><td colspan="8" style="text-align:center; padding:26px; color:var(--text-muted);">No hay registros de asistencia guardados aún.</td></tr>`;
+    : `<tr><td colspan="8" style="text-align:center; padding:26px; color:var(--text-muted);">${isTechnician ? 'No tienes registros de asistencia guardados aún.' : 'No hay registros de asistencia guardados aún.'}</td></tr>`;
+
+  // Botones de acción según rol
+  const actionButtonsHtml = isTechnician
+    ? `
+      <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
+        <i class="fas fa-camera"></i> 📷 Marcar mi Asistencia (Escanear QR)
+      </button>
+    `
+    : `
+      <button type="button" class="btn btn--gold" onclick="openAttendanceKioskModal()">
+        <i class="fas fa-qrcode"></i> 📱 Abrir Kiosco QR (Recepción)
+      </button>
+      <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
+        <i class="fas fa-camera"></i> 📷 Marcar Asistencia
+      </button>
+      <button type="button" class="btn btn--ghost" onclick="openAddActiveDayModal()">
+        <i class="fas fa-calendar-plus"></i> + Registro Manual
+      </button>
+    `;
 
   return `
     <!-- ENCABEZADO Y ACCIONES PRINCIPALES DE ASISTENCIA -->
@@ -10874,28 +11269,20 @@ function renderAttendanceScreen() {
         <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase; letter-spacing:0.5px;">
           <i class="fas fa-shield-alt"></i> CONTROL DE ASISTENCIA Y PRESENCIA FÍSICA · RECTIFICADORA RENACER
         </span>
-        <h2 style="font-size:20px; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> Monitoreo de Horarios, Entrada, Almuerzo y Salida</h2>
+        <h2 style="font-size:20px; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> ${isTechnician ? 'Mi Asistencia y Horario de Trabajo' : 'Monitoreo de Horarios, Entrada, Almuerzo y Salida'}</h2>
         <p style="font-size:12.5px; color:var(--text-muted); margin:0;">
           Límite de entrada puntual: <strong>8:15 AM</strong>. Validación física mediante Kiosco con QR Dinámico (45s) o selección de perfil técnico con PIN.
         </p>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--gold" onclick="openAttendanceKioskModal()">
-          <i class="fas fa-qrcode"></i> 📱 Abrir Kiosco QR (Recepción)
-        </button>
-        <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
-          <i class="fas fa-camera"></i> 📷 Marcar Asistencia
-        </button>
-        <button type="button" class="btn btn--ghost" onclick="openAddActiveDayModal()">
-          <i class="fas fa-calendar-plus"></i> + Registro Manual
-        </button>
+        ${actionButtonsHtml}
       </div>
     </div>
 
     <!-- TABLERO EN VIVO DE PRESENCIA FÍSICA HOY -->
     <div style="margin-bottom:18px;">
       <div style="font-size:12px; font-weight:800; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; display:flex; align-items:center; gap:6px;">
-        <i class="fas fa-users-viewfinder" style="color:#38bdf8;"></i> Presencia Física en Taller Hoy (${formatDateHuman(todayIso, false)}):
+        <i class="fas fa-users-viewfinder" style="color:#38bdf8;"></i> ${isTechnician ? 'Mi Estatus de Presencia Hoy' : 'Presencia Física en Taller Hoy'} (${formatDateHuman(todayIso, false)}):
       </div>
       <div style="display:flex; gap:12px; flex-wrap:wrap;">
         ${presenceCardsHtml}
@@ -11874,9 +12261,6 @@ function renderCatalogManagerScreen() {
             <button type="button" class="btn btn--gold" style="padding:9px 16px; font-size:13px; font-weight:800;" onclick="openAddCatalogServiceModal()">
               <i class="fas fa-plus-circle"></i> + Nuevo Servicio
             </button>
-            <button type="button" class="btn btn--ghost" style="padding:9px 14px; font-size:13px;" onclick="navigateTab('commissions_hr')">
-              <i class="fas fa-users-cog"></i> Personal & Outsourcing
-            </button>
           </div>
         </div>
 
@@ -12537,27 +12921,21 @@ function openEditCompleteOrderModal(orderId) {
           <div class="form-section-title">
             <i class="fas fa-car-side"></i> 2. Datos del Vehículo / Motor
           </div>
-          <div class="form-grid-4">
+          <input type="hidden" id="edit-ord-pieza" value="${order.datos_motor.tipo_pieza || 'Cámara / Culata'}" />
+          <input type="hidden" id="edit-ord-serial" value="${order.datos_motor.serial || 'S/N'}" />
+          <div class="form-grid-2">
             <div class="form-field">
-              <label>Tipo de Pieza *</label>
-              <input type="text" id="edit-ord-pieza" value="${order.datos_motor.tipo_pieza || 'Cámara / Culata'}" required />
-            </div>
-            <div class="form-field">
-              <label>Marca *</label>
-              <input type="text" id="edit-ord-marca" value="${order.datos_motor.marca || ''}" required />
+              <label>Marca de Vehículo / Motor *</label>
+              <input type="text" id="edit-ord-marca" value="${order.datos_motor.marca || ''}" placeholder="Ej: Chevrolet, Toyota, Ford" required />
             </div>
             <div class="form-field">
               <label>Modelo / Motor *</label>
-              <input type="text" id="edit-ord-modelo" value="${order.datos_motor.modelo || ''}" required />
-            </div>
-            <div class="form-field">
-              <label>Serial de Motor / Fundición</label>
-              <input type="text" id="edit-ord-serial" value="${order.datos_motor.serial || ''}" />
+              <input type="text" id="edit-ord-modelo" value="${order.datos_motor.modelo || ''}" placeholder="Ej: Corsa 1.6, Hilux 2.7, 302" required />
             </div>
           </div>
           <div class="form-field" style="margin-top:10px;">
             <label>Observaciones Técnicas / Diagnóstico de Entrada</label>
-            <textarea id="edit-ord-obs" rows="2" style="width:100%; border-radius:10px; border:1.5px solid var(--border-color); padding:8px 10px; background:var(--bg-input); color:var(--text-main);">${order.datos_motor.observaciones || ''}</textarea>
+            <textarea id="edit-ord-obs" rows="3" style="width:100%; border-radius:10px; border:1.5px solid var(--border-color); padding:10px; background:var(--bg-input); color:var(--text-main);" placeholder="Describe el estado de llegada, fisuras, guías rotas o detalles técnicos importantes...">${order.datos_motor.observaciones || ''}</textarea>
           </div>
         </div>
 
@@ -12567,18 +12945,21 @@ function openEditCompleteOrderModal(orderId) {
             <span><i class="fas fa-tools"></i> 3. Desglose de Servicios y Comisiones de Técnicos</span>
             <div style="display:flex; gap:6px;">
               <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder()">
-                <i class="fas fa-plus"></i> Fila Libre
+                <i class="fas fa-plus"></i> + Servicio Adicional
               </button>
             </div>
           </div>
-          <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
-            <select id="edit-select-cat-service" style="flex:1; min-width:220px; padding:8px 10px; border-radius:8px; border:1.5px solid var(--border-color); font-weight:700;">
-              <option value="">-- Añadir servicio del catálogo frecuente --</option>
-              ${catalogOptions}
-            </select>
-            <button type="button" class="btn btn--primary" onclick="addServiceToEditOrder()" style="padding:8px 12px;">
-              <i class="fas fa-plus-circle"></i> Agregar
-            </button>
+          <div style="position:relative; margin-bottom:12px;">
+            <input
+              type="text"
+              id="search-edit-service-input"
+              placeholder="Buscar servicio para agregar (ej. cepillado, aplanado, armado, válvulas)..."
+              oninput="filterEditServicesLive(this.value)"
+              onfocus="filterEditServicesLive(this.value)"
+              autocomplete="off"
+              style="width:100%; padding:10px 14px; border-radius:10px; border:1.5px solid var(--border-color); background:var(--bg-input); color:var(--text-main); font-weight:700; font-size:13px;"
+            />
+            <div id="edit-services-live-dropdown" class="budget-services-dropdown-list hidden"></div>
           </div>
           <div id="edit-services-table-wrapper" style="overflow-x:auto;"></div>
         </div>
@@ -12769,10 +13150,78 @@ function addServiceToEditOrder() {
   renderEditServicesTable();
 }
 
-function addCustomServiceToEditOrder() {
+function filterEditServicesLive(query) {
+  const dropdown = document.getElementById("edit-services-live-dropdown");
+  if (!dropdown) return;
+  const q = (query || "").trim().toLowerCase();
+
+  const services = db.catalogo_servicios || [];
+  const filtered = q
+    ? services.filter((s) => (s.nombre || "").toLowerCase().includes(q) || (s.categoria || "").toLowerCase().includes(q))
+    : services.slice(0, 12);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = `
+      <div style="padding:12px; text-align:center; font-size:12px; color:var(--text-muted);">
+        No se encontró ningún servicio que coincida con "<strong>${query}</strong>".
+        <div style="margin-top:8px;">
+          <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder('${query.replace(/'/g, "\\'")}')">
+            <i class="fas fa-plus"></i> Agregar como Servicio Adicional
+          </button>
+        </div>
+      </div>
+    `;
+    dropdown.classList.remove("hidden");
+    return;
+  }
+
+  dropdown.innerHTML = filtered
+    .map(
+      (s) => `
+      <div class="budget-service-item-pick" onclick="pickEditServiceFromDropdown('${s.id_cat}')">
+        <div>
+          <strong>${s.nombre}</strong>
+          <div style="font-size:10.5px; color:var(--text-muted);">${s.categoria || "Mecanizado"} · Comisión técnico: $${Number(s.comision_sugerida).toFixed(2)}</div>
+        </div>
+        <div style="text-align:right;">
+          <strong style="color:var(--renacer-gold); font-size:13.5px;">$${Number(s.precio_sugerido).toFixed(2)}</strong>
+          <span style="font-size:10px; color:#22c55e; display:block;"><i class="fas fa-plus-circle"></i> Agregar 1-Click</span>
+        </div>
+      </div>
+    `
+    )
+    .join("");
+
+  dropdown.classList.remove("hidden");
+}
+
+function pickEditServiceFromDropdown(catId) {
+  const cat = (db.catalogo_servicios || []).find((c) => c.id_cat === catId);
+  const dropdown = document.getElementById("edit-services-live-dropdown");
+  const input = document.getElementById("search-edit-service-input");
+  if (dropdown) dropdown.classList.add("hidden");
+  if (input) input.value = "";
+  if (!cat) return;
+
   tempEditOrderState.services.push({
     id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
-    descripcion_servicio: "Servicio Adicional",
+    descripcion_servicio: cat.nombre,
+    monto_servicio: Number(cat.precio_sugerido) || 0,
+    comision_base_tecnico: Number(cat.comision_sugerida) || 0,
+    tecnico_id: "",
+    nombre_tecnico: "Sin asignar",
+    estado_subtarea: "pendiente",
+    minutos_acumulados: 0
+  });
+
+  renderEditServicesTable();
+  recalcEditTotals();
+}
+
+function addCustomServiceToEditOrder(initialName = "") {
+  tempEditOrderState.services.push({
+    id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+    descripcion_servicio: typeof initialName === "string" && initialName ? initialName : "Servicio Adicional",
     monto_servicio: 10,
     comision_base_tecnico: 3,
     tecnico_id: "",
@@ -12780,7 +13229,12 @@ function addCustomServiceToEditOrder() {
     estado_subtarea: "pendiente",
     minutos_acumulados: 0
   });
+  const dropdown = document.getElementById("edit-services-live-dropdown");
+  const input = document.getElementById("search-edit-service-input");
+  if (dropdown) dropdown.classList.add("hidden");
+  if (input) input.value = "";
   renderEditServicesTable();
+  recalcEditTotals();
 }
 
 function removeServiceFromEditOrder(idx) {
@@ -13027,13 +13481,68 @@ function getWorkerCurrentPresence(userId) {
   return { status: "en_taller", label: `En Taller (${rec.hora_entrada})`, cls: "text-success", icon: "fa-check-circle", rec };
 }
 
+function drawDynamicQrCode(container, text, size = 200) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  // 1. Intento con David Shim's QRCode constructor
+  if (typeof QRCode === "function") {
+    try {
+      new QRCode(container, {
+        text: text,
+        width: size,
+        height: size,
+        colorDark: "#0f1638",
+        colorLight: "#ffffff",
+        correctLevel: (QRCode.CorrectLevel && QRCode.CorrectLevel.M) || 0
+      });
+      return;
+    } catch (e) {
+      console.warn("new QRCode() error:", e);
+    }
+  }
+
+  // 2. Intento con Ryan Day's QRCode con toCanvas
+  if (typeof QRCode === "object" && typeof QRCode.toCanvas === "function") {
+    const canvas = document.createElement("canvas");
+    container.appendChild(canvas);
+    QRCode.toCanvas(canvas, text, { width: size, margin: 1, color: { dark: "#0f1638", light: "#ffffff" } }, (err) => {
+      if (err) console.error("QRCode.toCanvas error:", err);
+    });
+    return;
+  }
+
+  // 3. Fallback en línea e infalible
+  const encoded = encodeURIComponent(text);
+  const img = document.createElement("img");
+  img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}`;
+  img.width = size;
+  img.height = size;
+  img.alt = "QR Presencial";
+  img.style.display = "block";
+  img.style.margin = "0 auto";
+  img.style.borderRadius = "8px";
+  img.onerror = () => {
+    container.innerHTML = `
+      <div style="padding:16px; border:2px dashed var(--renacer-gold); border-radius:12px; background:rgba(245,196,0,0.08); text-align:center;">
+        <i class="fas fa-qrcode" style="font-size:32px; color:var(--renacer-gold); margin-bottom:6px;"></i>
+        <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">TOKEN PRESENCIAL ACTIVO</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:#38bdf8; word-break:break-all; margin:8px 0;">${text}</div>
+        <div style="font-size:10px; color:var(--text-muted);">Usa el botón de marcar por perfil a la derecha si no tienes cámara activa.</div>
+      </div>
+    `;
+  };
+  container.appendChild(img);
+}
+
 function openAttendanceKioskModal() {
   if (kioskTimerInterval) clearInterval(kioskTimerInterval);
 
   let secondsLeft = 45;
 
+  // En el kiosco de marcar asistencia SOLO deben figurar los técnicos de taller (Havell, Angel, Jose)
   const activeWorkers = (db.usuarios || []).filter(
-    (u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "admin" || u.rol === "jefe_taller")
+    (u) => u.activo && u.rol === "tecnico"
   );
 
   const workersProfilesHtml = activeWorkers
@@ -13125,23 +13634,10 @@ function openAttendanceKioskModal() {
   window.generateNewKioskQr = function() {
     const canvasBox = document.getElementById("kiosk-qr-canvas");
     if (!canvasBox) return;
-    canvasBox.innerHTML = "";
     secondsLeft = 45;
 
     const token = `RENACER_PRESENCIAL|${Date.now()}|${Math.floor(100000 + Math.random() * 900000)}`;
-
-    if (typeof QRCode !== "undefined") {
-      new QRCode(canvasBox, {
-        text: token,
-        width: 210,
-        height: 210,
-        colorDark: "#0f1638",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.M
-      });
-    } else {
-      canvasBox.innerHTML = `<div style="padding:30px; font-weight:800; color:#ef4444;">Error cargando QRCode</div>`;
-    }
+    drawDynamicQrCode(canvasBox, token, 200);
   };
 
   generateNewKioskQr();
