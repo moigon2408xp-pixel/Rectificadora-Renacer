@@ -2071,6 +2071,30 @@ body {
   border-bottom: none;
 }
 
+.renacer-table input,
+.renacer-table select {
+  background: var(--bg-card);
+  color: var(--text-main);
+  border: 1.5px solid var(--border-color);
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.renacer-table input:focus,
+.renacer-table select:focus {
+  border-color: var(--renacer-gold);
+  box-shadow: 0 0 0 3px var(--renacer-gold-soft);
+}
+
+.modal-box input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+.modal-box select,
+.modal-box textarea {
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
+
 /* Panel del Técnico (Tarjetas y Botones de Estado de Trabajo) */
 .worker-task-card {
   background: var(--bg-card);
