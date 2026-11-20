@@ -13,8 +13,8 @@
  * ============================================================================
  */
 
-const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V5";
-const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V5";
+const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V6";
+const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V6";
 const DEFAULT_GAS_API_URL = "https://script.google.com/macros/s/AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA/exec";
 let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || DEFAULT_GAS_API_URL;
 if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA")) {
@@ -24,7 +24,7 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
 
-const CURRENT_APP_VERSION = "2026.11.19.v33";
+const CURRENT_APP_VERSION = "2026.11.20.v34";
 
 /* ==================== V31: SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS ==================== */
 const DEFAULT_TEXT_CUSTOMIZATIONS = {
@@ -428,291 +428,13 @@ function getInitialDatabase() {
         tipo_cliente: "Taller Aliado (Crédito Autorizado)"
       }
     ],
-    ordenes: [
-      // 1. TROQUEL #1548: CHEVROLET z24 (Jesús Andrade) - Entregada y Liquidada 100% con Garantía 1 Año
-      {
-        id_orden: "ORD-1548",
-        cliente_id: "CLI-JESUS",
-        documento_cliente: "V-27421339",
-        nombre_cliente: "Jesús Andrade",
-        telefono_cliente: "0424-6999635",
-        direccion_cliente: "Casco Central, Maracaibo",
-        tipo_cliente: "particular",
-        codigo_troquel: "1548",
-        datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "CHEVROLET",
-          modelo: "z24",
-          serial: "S/N",
-          observaciones: "Servicio completo de rectificación de cámara CHEVROLET z24."
-        },
-        galeria_fotos_pieza: [],
-        galeria_fotos_repuestos: [],
-        estado_actual: "entregado",
-        subestado_ejecucion: "completado",
-        tipo_condicion_pago: "pago_total",
-        monto_total: 40.0,
-        monto_abonado: 40.0,
-        saldo_pendiente: 0.0,
-        fecha_ingreso: "2026-11-18T09:15:00.000Z",
-        fecha_entrega: "2026-11-18T11:30:00.000Z",
-        garantia_activa: true,
-        garantia_dias: 365,
-        fecha_garantia_hasta: "2027-11-18",
-        repuestos_comprados_taller: false,
-        items_repuestos: [],
-        historial_abonos: [
-          {
-            id_abono: "AB-1548-1",
-            fecha: "2026-11-18",
-            monto: 40.0,
-            metodo: "efectivo_usd",
-            referencia: "PAGO-EFECTIVO-CAJA",
-            comprobante_foto: "",
-            registrado_por: "Jesús Andrade"
-          }
-        ]
-      },
-      // 2. TROQUEL #1576: TOYOTA runner (Jose manue) - Estado 1: Recepción / Diagnóstico
-      {
-        id_orden: "ORD-1576",
-        cliente_id: "CLI-JOSEMANUE",
-        documento_cliente: "V-26559977",
-        nombre_cliente: "Jose manue",
-        telefono_cliente: "0412-0696868",
-        direccion_cliente: "su casa",
-        tipo_cliente: "particular",
-        codigo_troquel: "1576",
-        datos_motor: {
-          tipo_pieza: "Cámara / Tapa de Compresión",
-          marca: "TOYOTA",
-          modelo: "runner",
-          serial: "234234",
-          observaciones: "Revisión general y descarbonizado químico."
-        },
-        galeria_fotos_pieza: [],
-        galeria_fotos_repuestos: [],
-        estado_actual: "diagnostico_presupuesto",
-        subestado_ejecucion: "pendiente",
-        tipo_condicion_pago: "pendiente_definir",
-        monto_total: 40.0,
-        monto_abonado: 0.0,
-        saldo_pendiente: 40.0,
-        fecha_ingreso: "2026-11-18T10:45:00.000Z",
-        repuestos_comprados_taller: false,
-        items_repuestos: [],
-        historial_abonos: []
-      },
-      // 3. TROQUEL #1557: DODGE runner (Jose manue) - Estado 1: Recepción / Diagnóstico
-      {
-        id_orden: "ORD-1557",
-        cliente_id: "CLI-JOSEMANUE",
-        documento_cliente: "V-26559977",
-        nombre_cliente: "Jose manue",
-        telefono_cliente: "0412-0696868",
-        direccion_cliente: "su casa",
-        tipo_cliente: "particular",
-        codigo_troquel: "1557",
-        datos_motor: {
-          tipo_pieza: "Cámara / Culata",
-          marca: "DODGE",
-          modelo: "runner",
-          serial: "234234",
-          observaciones: "Presenta recalentamiento entre cilindros 2 y 3. Revisar plano y prueba hidráulica."
-        },
-        galeria_fotos_pieza: [],
-        galeria_fotos_repuestos: [],
-        estado_actual: "diagnostico_presupuesto",
-        subestado_ejecucion: "pendiente",
-        tipo_condicion_pago: "pendiente_definir",
-        monto_total: 50.0,
-        monto_abonado: 0.0,
-        saldo_pendiente: 50.0,
-        fecha_ingreso: "2026-11-18T11:10:00.000Z",
-        repuestos_comprados_taller: false,
-        items_repuestos: [],
-        historial_abonos: []
-      }
-    ],
-    subtareas: [
-      // Subtareas Orden #1548
-      {
-        id_subtarea: "SUB-1548-1",
-        orden_id: "ORD-1548",
-        codigo_troquel: "1548",
-        descripcion_servicio: "Cámara 4C",
-        tecnico_id: "USR-HAVELL",
-        nombre_tecnico: "Havell Bracho",
-        monto_servicio: 30.0,
-        comision_base_tecnico: 10.0,
-        estado_subtarea: "terminado",
-        minutos_acumulados: 45
-      },
-      {
-        id_subtarea: "SUB-1548-3",
-        orden_id: "ORD-1548",
-        codigo_troquel: "1548",
-        descripcion_servicio: "Químico",
-        tecnico_id: "USR-JOSE",
-        nombre_tecnico: "Jose Villasmil",
-        monto_servicio: 10.0,
-        comision_base_tecnico: 2.5,
-        estado_subtarea: "terminado",
-        minutos_acumulados: 25
-      },
-      // Subtareas Orden #1576 (En Recepción / Presupuesto — Sin Asignar hasta Fase 3)
-      {
-        id_subtarea: "SUB-1576-1",
-        orden_id: "ORD-1576",
-        codigo_troquel: "1576",
-        descripcion_servicio: "Cámara 4C",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 30.0,
-        comision_base_tecnico: 10.0,
-        estado_subtarea: "pendiente",
-        minutos_acumulados: 0
-      },
-      {
-        id_subtarea: "SUB-1576-2",
-        orden_id: "ORD-1576",
-        codigo_troquel: "1576",
-        descripcion_servicio: "Químico",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 10.0,
-        comision_base_tecnico: 2.5,
-        estado_subtarea: "pendiente",
-        minutos_acumulados: 0
-      },
-      // Subtareas Orden #1557 (En Recepción / Presupuesto — Sin Asignar hasta Fase 3)
-      {
-        id_subtarea: "SUB-1557-1",
-        orden_id: "ORD-1557",
-        codigo_troquel: "1557",
-        descripcion_servicio: "Lavado Químico",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 20.0,
-        comision_base_tecnico: 5.0,
-        estado_subtarea: "pendiente",
-        minutos_acumulados: 0
-      },
-      {
-        id_subtarea: "SUB-1557-2",
-        orden_id: "ORD-1557",
-        codigo_troquel: "1557",
-        descripcion_servicio: "Aplanado 4C",
-        tecnico_id: "",
-        nombre_tecnico: "Sin asignar",
-        monto_servicio: 30.0,
-        comision_base_tecnico: 10.0,
-        estado_subtarea: "pendiente",
-        minutos_acumulados: 0
-      }
-    ],
-    bitacora: [
-      {
-        id_mensaje: "MSG-1548-01",
-        orden_id: "ORD-1548",
-        codigo_troquel: "1548",
-        autor_id: "USR-JESUS",
-        autor_nombre: "Jesús Andrade",
-        autor_rol: "Jefe de Taller",
-        tipo_evento: "sistema",
-        mensaje: "Orden recepcionada y entregada con garantía de 1 año (Job 8:7).",
-        foto_adjunta_url: "",
-        fecha_hora: "2026-11-18 11:30"
-      },
-      {
-        id_mensaje: "MSG-1576-01",
-        orden_id: "ORD-1576",
-        codigo_troquel: "1576",
-        autor_id: "USR-JESUS",
-        autor_nombre: "Jesús Andrade",
-        autor_rol: "Jefe de Taller",
-        tipo_evento: "recepcion",
-        mensaje: "Ingresada pieza en recepción para revisión y descarbonizado químico.",
-        foto_adjunta_url: "",
-        fecha_hora: "2026-11-18 10:45"
-      },
-      {
-        id_mensaje: "MSG-1557-01",
-        orden_id: "ORD-1557",
-        codigo_troquel: "1557",
-        autor_id: "USR-JESUS",
-        autor_nombre: "Jesús Andrade",
-        autor_rol: "Jefe de Taller",
-        tipo_evento: "recepcion",
-        mensaje: "Ingresada culata DODGE runner con recalentamiento entre cilindros 2 y 3.",
-        foto_adjunta_url: "",
-        fecha_hora: "2026-11-18 11:10"
-      }
-    ],
-    finanzas: [
-      {
-        id_movimiento: "MOV-1548-01",
-        fecha_hora: "2026-11-18 11:30",
-        tipo_movimiento: "ingreso",
-        categoria_cuenta: "Liquidación Total de Orden",
-        concepto: "Liquidación 100% de Orden #1548 (CHEVROLET z24 - Jesús Andrade)",
-        orden_id: "ORD-1548",
-        codigo_troquel: "1548",
-        monto_usd: 40.0,
-        metodo_pago: "efectivo",
-        referencia: "Recibo-1548",
-        comprobante_foto: "",
-        registrado_por: "Jesús Andrade"
-      }
-    ],
-    asistencia: [
-      { id_asistencia: "ASI-01", fecha: "2026-11-18", usuario_id: "USR-HAVELL", nombre_usuario: "Havell Bracho", turno_modalidad: "Jornada Completa", hora_registro: "07:50 AM", estado_hoy: "Presente en Taller (Puntual)" },
-      { id_asistencia: "ASI-02", fecha: "2026-11-18", usuario_id: "USR-ANGEL", nombre_usuario: "Angel", turno_modalidad: "Jornada Completa", hora_registro: "08:00 AM", estado_hoy: "Presente en Taller (Puntual)" },
-      { id_asistencia: "ASI-03", fecha: "2026-11-18", usuario_id: "USR-JOSE", nombre_usuario: "Jose Villasmil", turno_modalidad: "Jornada Completa", hora_registro: "08:10 AM", estado_hoy: "Presente en Taller (Puntual)" }
-    ],    cuentas_por_pagar: [
-      {
-        id_cxp: "CXP-001",
-        acreedor: "Distribuidora Repuestos Occidente",
-        concepto: "Piedras de rectificar y carburos para torno",
-        monto_total: 350,
-        monto_abonado: 200,
-        saldo_pendiente: 150,
-        fecha_registro: "2026-11-01",
-        estado: "activa",
-        historial_abonos: [
-          {
-            id_abono: "AB-01",
-            fecha: "2026-11-05",
-            monto: 200,
-            metodo: "efectivo",
-            referencia: "Recibo #104",
-            comprobante_foto: DEMO_PHOTOS.pagoMovilCapture,
-            registrado_por: "Jesús Andrade"
-          }
-        ]
-      },
-      {
-        id_cxp: "CXP-002",
-        acreedor: "Torno y Rectificados Industrial C.A.",
-        concepto: "Cuota de financiamiento de rectificadora de válvulas",
-        monto_total: 500,
-        monto_abonado: 500,
-        saldo_pendiente: 0,
-        fecha_registro: "2026-10-15",
-        estado: "pagada",
-        historial_abonos: [
-          {
-            id_abono: "AB-02",
-            fecha: "2026-10-28",
-            monto: 500,
-            metodo: "pago_movil",
-            referencia: "PM-883921",
-            comprobante_foto: DEMO_PHOTOS.pagoMovilCapture,
-            registrado_por: "Moises Gonzalez"
-          }
-        ]
-      }
-    ]
+    ordenes: [],
+    subtareas: [],
+    bitacora: [],
+    finanzas_movimientos: [],
+    cuentas_por_pagar: [],
+    movimientos_inventario: [],
+    asistencias: []
   };
 }
 
@@ -1015,17 +737,6 @@ function normalizeDatabaseSchema(d) {
     return true;
   });
 
-  // Asegurar las 3 órdenes reales creadas por Jesús Andrade (#1548, #1576, #1557)
-  const initialDbData = getInitialDatabase();
-  ["ORD-1548", "ORD-1576", "ORD-1557"].forEach((realId) => {
-    if (!d.ordenes.some((o) => o.id_orden === realId)) {
-      const foundReal = initialDbData.ordenes.find((o) => o.id_orden === realId);
-      if (foundReal) {
-        d.ordenes.push(JSON.parse(JSON.stringify(foundReal)));
-      }
-    }
-  });
-
   d.ordenes.forEach((o) => {
     o.fecha_ingreso = cleanDateISO(o.fecha_ingreso, true);
     if (o.estado_actual === "entregado" && !o.fecha_garantia_hasta) {
@@ -1038,20 +749,11 @@ function normalizeDatabaseSchema(d) {
 
   const validOrderIds = new Set(d.ordenes.map((o) => o.id_orden));
 
-  // Subtareas: eliminar las que pertenecían a órdenes de prueba
+  // Subtareas: eliminar las que pertenecían a órdenes de prueba o inexistentes
   d.subtareas = (d.subtareas || []).filter((s) => {
     if (!s || !s.orden_id) return false;
     if (/^ORD-100[1-6]/i.test(s.orden_id)) return false;
     return validOrderIds.has(s.orden_id);
-  });
-
-  // Asegurar subtareas de las 3 órdenes de Jesús
-  ["ORD-1548", "ORD-1576", "ORD-1557"].forEach((realId) => {
-    const hasSubs = d.subtareas.some((s) => s.orden_id === realId);
-    if (!hasSubs) {
-      const initSubs = initialDbData.subtareas.filter((s) => s.orden_id === realId);
-      initSubs.forEach((s) => d.subtareas.push(JSON.parse(JSON.stringify(s))));
-    }
   });
 
   // Purgar subtareas vacías $0 de pruebas (como el "Adicional" de la orden #1548)
@@ -1086,15 +788,6 @@ function normalizeDatabaseSchema(d) {
     b.fecha_hora = cleanDateISO(b.fecha_hora, true);
   });
 
-  // Asegurar bitácora de las 3 órdenes de Jesús
-  ["ORD-1548", "ORD-1576", "ORD-1557"].forEach((realId) => {
-    const hasBit = d.bitacora.some((b) => b.orden_id === realId);
-    if (!hasBit) {
-      const initBits = initialDbData.bitacora.filter((b) => b.orden_id === realId);
-      initBits.forEach((b) => d.bitacora.push(JSON.parse(JSON.stringify(b))));
-    }
-  });
-
   // Finanzas: purgar movimientos de prueba
   if (Array.isArray(d.finanzas_movimientos)) {
     d.finanzas_movimientos = d.finanzas_movimientos.filter((f) => {
@@ -1104,15 +797,9 @@ function normalizeDatabaseSchema(d) {
     });
   }
 
-  // Asegurar clientes de Jesús
-  if (!Array.isArray(d.clientes) || d.clientes.length === 0) {
-    d.clientes = initialDbData.clientes;
-  } else {
-    initialDbData.clientes.forEach((ic) => {
-      if (!d.clientes.some((c) => c.documento_identidad === ic.documento_identidad || c.nombre_completo === ic.nombre_completo)) {
-        d.clientes.push(ic);
-      }
-    });
+  // Clientes
+  if (!Array.isArray(d.clientes)) {
+    d.clientes = [];
   }
 
   return d;
@@ -1289,7 +976,8 @@ function hydrateDatabaseFromSheets(cloudData) {
     admin: "Administrador del Sistema",
     jefe_taller: "Jefe de Taller",
     recepcion: "Recepción e Ingreso",
-    tecnico: "Técnico Rectificador"
+    tecnico: "Técnico Rectificador",
+    outsourcing: "Taller Externo (Outsourcing)"
   };
 
   const allowedUserIds = [
@@ -1297,24 +985,38 @@ function hydrateDatabaseFromSheets(cloudData) {
     "USR-JAVIER", "USR-HAVELL", "USR-ANGEL", "USR-JOSE"
   ];
   const validUsers = Array.isArray(cloudData.usuarios)
-    ? cloudData.usuarios.filter((u) => allowedUserIds.includes(String(u.id_usuario || "")))
+    ? cloudData.usuarios.filter((u) => {
+        const id = String(u.id_usuario || "");
+        return (
+          allowedUserIds.includes(id) ||
+          u.rol === "outsourcing" ||
+          u.tipo === "taller_externo" ||
+          u.es_externo ||
+          id.startsWith("EXT-") ||
+          id.startsWith("USR-")
+        );
+      })
     : [];
   const usuarios = validUsers.length
     ? validUsers.map((u) => {
+        const isExt = Boolean(u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo || String(u.id_usuario || "").startsWith("EXT-"));
         const baseUser = base.usuarios.find(
           (bu) => bu.id_usuario === u.id_usuario || (bu.nombre && bu.nombre.toLowerCase().trim() === String(u.nombre || "").toLowerCase().trim())
         );
-        const resolvedPin = baseUser ? baseUser.pin : String(u.pin || "000000").trim();
+        const resolvedPin = baseUser ? baseUser.pin : String(u.pin || (isExt ? "0000" : "000000")).trim();
         return {
           id_usuario: String(u.id_usuario || (baseUser ? baseUser.id_usuario : "")),
           nombre: String(u.nombre || (baseUser ? baseUser.nombre : "")),
-          rol: String(u.rol || (baseUser ? baseUser.rol : "tecnico")),
-          rol_label: roleLabels[u.rol] || (baseUser ? baseUser.rol_label : "Jefe de Taller"),
-          especialidad: String(u.especialidad || (baseUser ? baseUser.especialidad : "")),
+          rol: String(u.rol || (baseUser ? baseUser.rol : (isExt ? "outsourcing" : "tecnico"))),
+          rol_label: roleLabels[u.rol] || (isExt ? "Taller Externo (Outsourcing)" : (baseUser ? baseUser.rol_label : "Técnico Rectificador")),
+          tipo: isExt ? "taller_externo" : "personal_interno",
+          es_externo: isExt,
+          especialidad: String(u.especialidad || (baseUser ? baseUser.especialidad : (isExt ? "Mecanizado y Rectificación Externa" : ""))),
           pin: resolvedPin,
           telefono: String(u.telefono || (baseUser ? baseUser.telefono : "")),
+          direccion: String(u.direccion || (baseUser ? baseUser.direccion : "")),
           activo: u.activo === true || String(u.activo).toLowerCase() === "true",
-          modalidad_horario: String(u.modalidad_horario || (baseUser ? baseUser.modalidad_horario : "Producción por Destajo"))
+          modalidad_horario: String(u.modalidad_horario || (baseUser ? baseUser.modalidad_horario : (isExt ? "Tercerizado" : "Producción por Destajo")))
         };
       })
     : base.usuarios;
@@ -1628,24 +1330,33 @@ function openCloudSyncModal() {
 
 function clearAllTestOrders() {
   Swal.fire({
-    title: "¿Limpiar todas las órdenes y pagos de prueba?",
-    text: "Se eliminarán las órdenes de ejemplo, subtareas, bitácora y movimientos de prueba tanto en la aplicación como en Google Sheets, conservando los usuarios y el catálogo de precios.",
+    title: "¿Limpiar todas las órdenes y movimientos de prueba?",
+    text: "Se reseteará el sistema a CERO: se borrarán las órdenes de prueba, subtareas, bitácora y movimientos financieros tanto en la app como en Google Sheets, conservando intactos los usuarios, catálogo de precios y personalizaciones de texto.",
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
     cancelButtonText: "Cancelar",
-    confirmButtonText: "Sí, dejar en cero"
-  }).then((res) => {
+    confirmButtonText: "Sí, dejar en cero real"
+  }).then(async (res) => {
     if (res.isConfirmed) {
       db.ordenes = [];
       db.subtareas = [];
       db.bitacora = [];
       db.finanzas_movimientos = [];
       db.finanzas = [];
+      db.cuentas_por_pagar = [];
+      db.movimientos_inventario = [];
+      if (db.config) {
+        db.config.correlativoTroquelActual = 5022;
+        db.config.correlativoOrdenActual = 1008;
+      }
       saveDatabase();
+      showToast("Limpiando y sincronizando con Google Sheets...", "info");
+      await pushToGoogleSheets(false);
       closeModal();
       if (currentUser) renderApp();
-      showToast("Todas las órdenes de prueba fueron eliminadas y sincronizadas con Google Sheets.");
+      showToast("Sistema en cero real sincronizado con Google Sheets.");
     }
   });
 }
@@ -1659,18 +1370,23 @@ function deleteOrder(orderId) {
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
     cancelButtonText: "Cancelar",
     confirmButtonText: "Sí, eliminar orden"
-  }).then((res) => {
+  }).then(async (res) => {
     if (res.isConfirmed) {
       db.ordenes = db.ordenes.filter((o) => o.id_orden !== orderId);
       db.subtareas = db.subtareas.filter((s) => s.orden_id !== orderId);
       db.bitacora = db.bitacora.filter((b) => b.orden_id !== orderId);
       db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((f) => f.orden_id !== orderId);
+      if (Array.isArray(db.finanzas)) {
+        db.finanzas = db.finanzas.filter((f) => f.orden_id !== orderId);
+      }
       saveDatabase();
+      await pushToGoogleSheets(true);
       closeModal();
       renderApp();
-      showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada.`);
+      showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada y sincronizada.`);
     }
   });
 }
@@ -1685,7 +1401,7 @@ function saveCustomGasUrl() {
 
 function loadDatabase() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem("RENACER_DB_V4");
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.ordenes)) return normalizeDatabaseSchema(parsed);
@@ -4920,7 +4636,7 @@ function renderOrderCardTelegramStyle(order) {
                 </div>
               </div>
               <div class="service-right">
-                ${currentUser && (currentUser.rol === "tecnico" || currentUser.rol === "recepcion") ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
+                ${currentUser && currentUser.rol === "tecnico" ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
               </div>
             </div>
           `;
@@ -5005,9 +4721,16 @@ function renderOrderCardTelegramStyle(order) {
   let primaryActionBtn = "";
   if (order.estado_actual === "recepcion" || order.estado_actual === "diagnostico_presupuesto") {
     primaryActionBtn = `
-      <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'diagnostico')">
-        Pasar a 2. Diagnóstico <i class="fas fa-arrow-right"></i>
-      </button>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'diagnostico')">
+          Pasar a 2. Diagnóstico <i class="fas fa-arrow-right"></i>
+        </button>
+        ${canManage ? `
+          <button type="button" class="btn btn--gold" onclick="openSubtaskAssignmentModal('${order.id_orden}', true)" title="Salto directo de Jefatura: Asignar técnicos y pasar directo a 4. Servicio">
+            <i class="fas fa-bolt"></i> Asignar y Pasar a 4. Servicio
+          </button>
+        ` : ""}
+      </div>
     `;
   } else if (order.estado_actual === "diagnostico") {
     primaryActionBtn = `
@@ -5018,7 +4741,13 @@ function renderOrderCardTelegramStyle(order) {
         <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'aprobacion')">
           Enviar a 3. Aprobación <i class="fas fa-arrow-right"></i>
         </button>
+        ${canManage ? `
+          <button type="button" class="btn btn--gold" onclick="openSubtaskAssignmentModal('${order.id_orden}', true)" title="Salto directo de Jefatura: Asignar técnicos y pasar directo a 4. Servicio">
+            <i class="fas fa-bolt"></i> A 4. Servicio
+          </button>
+        ` : ""}
       </div>
+    `;
     `;
   } else if (order.estado_actual === "aprobacion" || order.estado_actual === "esperando_aprobacion_abono") {
     primaryActionBtn = `
@@ -7209,9 +6938,14 @@ function openNewOrderModal() {
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
-      <button type="button" class="btn btn--gold btn--lg" onclick="saveNewOrder()">
-        <i class="fas fa-save"></i> Guardar Orden en 1. Diagnóstico / Presupuesto
+      <button type="button" class="btn btn--gold" onclick="saveNewOrder(false)">
+        <i class="fas fa-save"></i> Guardar en 1. Recepción
       </button>
+      ${currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller") ? `
+        <button type="button" class="btn btn--primary btn--lg" onclick="saveNewOrder(true)" style="font-weight:900;">
+          <i class="fas fa-bolt"></i> Guardar y Asignar a 4. Servicio (Taller)
+        </button>
+      ` : ""}
     `
   });
 
@@ -7515,7 +7249,7 @@ function renderTempBudgetItems() {
   `;
 }
 
-function saveNewOrder() {
+function saveNewOrder(advanceToService = false) {
   const docType = document.getElementById("new-cli-doc-type")?.value || "V-";
   const docNum = (document.getElementById("new-cli-doc-num")?.value || "").trim().replace(/[^0-9A-Za-z-]/g, "");
   const doc = docNum ? (docType + docNum).toUpperCase() : (document.getElementById("new-cli-doc")?.value || "").trim().toUpperCase();
@@ -7585,8 +7319,8 @@ function saveNewOrder() {
     },
     galeria_fotos_pieza: tempNewOrderState.galeriaPieza.length ? tempNewOrderState.galeriaPieza : [DEMO_PHOTOS.camaraCorsa],
     galeria_fotos_repuestos: tempNewOrderState.galeriaRepuestos,
-    estado_actual: "diagnostico_presupuesto",
-    subestado_ejecucion: "pendiente",
+    estado_actual: advanceToService ? "servicio" : "diagnostico_presupuesto",
+    subestado_ejecucion: advanceToService ? "en_proceso" : "pendiente",
     tipo_condicion_pago: "pendiente_definir",
     monto_total: montoTotal,
     monto_abonado: 0,
@@ -7651,7 +7385,9 @@ function saveNewOrder() {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "recepcion",
-    mensaje: `Pieza recibida con Orden #${cleanTroquel}. Presupuesto inicial: $${montoTotal.toFixed(2)}.`,
+    mensaje: advanceToService
+      ? `Pieza recibida con Orden #${cleanTroquel}. Presupuesto: $${montoTotal.toFixed(2)}. Avanzada directamente a 4. Servicio.`
+      : `Pieza recibida con Orden #${cleanTroquel}. Presupuesto inicial: $${montoTotal.toFixed(2)}.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -7659,6 +7395,12 @@ function saveNewOrder() {
   saveDatabase();
   closeModal();
   renderApp();
+
+  if (advanceToService) {
+    showToast(`Orden #${cleanTroquel} enviada a 4. Servicio. Asigna los técnicos a continuación.`);
+    openSubtaskAssignmentModal(newOrderId, true);
+    return;
+  }
 
   if (clientObj && clientObj.telefono) {
     Swal.fire({
@@ -8013,7 +7755,7 @@ function renderAssignmentCenterScreen() {
   `;
 }
 
-function openSubtaskAssignmentModal(orderId) {
+function openSubtaskAssignmentModal(orderId, directAdvance = false) {
   if (currentUser.rol !== "admin" && currentUser.rol !== "jefe_taller") {
     showToast("Solo el Jefe de Taller o Administración puede asignar subtareas a los técnicos.", "error");
     return;
@@ -8022,10 +7764,13 @@ function openSubtaskAssignmentModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  if (order.tipo_condicion_pago === "pendiente_definir") {
-    showToast("Primero debes registrar Pago Total, Abono o activar Excepción / Taller Aliado.", "error");
-    openFinancialApprovalModal(orderId);
-    return;
+  if (order.tipo_condicion_pago === "pendiente_definir" && !directAdvance) {
+    const isBoss = currentUser.rol === "admin" || currentUser.rol === "jefe_taller";
+    if (!isBoss) {
+      showToast("Primero debes registrar Pago Total, Abono o activar Excepción / Taller Aliado.", "error");
+      openFinancialApprovalModal(orderId);
+      return;
+    }
   }
 
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
@@ -8534,14 +8279,17 @@ function openEditBudgetModal(orderId) {
   }
 
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  const isRecep = currentUser && currentUser.rol === "recepcion";
 
   const itemsHtml = subtasks
     .map(
       (s) => `
-      <div style="display:grid; grid-template-columns: 1fr 110px 110px 42px; gap:8px; align-items:center; margin-bottom:8px;">
+      <div style="display:grid; grid-template-columns: ${isRecep ? "1fr 140px 42px" : "1fr 110px 110px 42px"}; gap:8px; align-items:center; margin-bottom:8px;">
         <input type="text" id="edit-sub-desc-${s.id_subtarea}" value="${s.descripcion_servicio}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;" />
         <input type="number" step="0.5" id="edit-sub-price-${s.id_subtarea}" value="${s.monto_servicio}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:900;" />
-        <input type="number" step="0.5" id="edit-sub-comm-${s.id_subtarea}" value="${s.comision_base_tecnico}" style="padding:8px; border-radius:8px; border:1px solid rgba(22,163,74,0.4); font-weight:900; color:#15803d;" />
+        ${isRecep ? `<input type="hidden" id="edit-sub-comm-${s.id_subtarea}" value="${s.comision_base_tecnico}" />` : `
+          <input type="number" step="0.5" id="edit-sub-comm-${s.id_subtarea}" value="${s.comision_base_tecnico}" style="padding:8px; border-radius:8px; border:1px solid rgba(22,163,74,0.4); font-weight:900; color:#15803d;" />
+        `}
         <button type="button" class="btn btn--danger" style="padding:8px; border-radius:8px; justify-content:center;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar este ítem del presupuesto">
           <i class="fas fa-trash-alt"></i>
         </button>
@@ -8558,10 +8306,10 @@ function openEditBudgetModal(orderId) {
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
         Edita los montos de los servicios, agrega ítems extras o elimina renglones que no se realizarán. El total y resto se recalculan en tiempo real.
       </p>
-      <div style="display:grid; grid-template-columns: 1fr 110px 110px 42px; gap:8px; font-size:11px; font-weight:900; color:var(--text-muted); margin-bottom:6px;">
+      <div style="display:grid; grid-template-columns: ${isRecep ? "1fr 140px 42px" : "1fr 110px 110px 42px"}; gap:8px; font-size:11px; font-weight:900; color:var(--text-muted); margin-bottom:6px;">
         <span>SERVICIO / SUBTAREA</span>
         <span>MONTO CLIENTE ($)</span>
-        <span>COMISIÓN TÉCNICO ($)</span>
+        ${isRecep ? "" : `<span>COMISIÓN TÉCNICO ($)</span>`}
         <span></span>
       </div>
       <div id="edit-subtasks-list">${itemsHtml}</div>
@@ -9892,10 +9640,17 @@ function renderWorkerPanelScreen() {
     if (s.tecnico_id !== activeWorkerId) return false;
     const parentOrder = db.ordenes.find((o) => o.id_orden === s.orden_id);
     if (!parentOrder) return false;
-    if (parentOrder.estado_actual === "diagnostico_presupuesto" || parentOrder.estado_actual === "esperando_aprobacion_abono") {
+    if (parentOrder.estado_actual === "diagnostico_presupuesto" || parentOrder.estado_actual === "esperando_aprobacion_abono" || parentOrder.estado_actual === "recepcion" || parentOrder.estado_actual === "diagnostico") {
       return false;
     }
     return true;
+  });
+
+  const upcomingSubtasks = db.subtareas.filter((s) => {
+    if (s.tecnico_id !== activeWorkerId) return false;
+    const parentOrder = db.ordenes.find((o) => o.id_orden === s.orden_id);
+    if (!parentOrder) return false;
+    return parentOrder.estado_actual === "diagnostico_presupuesto" || parentOrder.estado_actual === "esperando_aprobacion_abono" || parentOrder.estado_actual === "recepcion" || parentOrder.estado_actual === "diagnostico";
   });
 
   const earnedCompleted = visibleSubtasks
@@ -10241,6 +9996,32 @@ function renderWorkerPanelScreen() {
         </div>
       </div>
     </div>
+
+    ${
+      upcomingSubtasks.length
+        ? `
+      <div style="background:rgba(56, 189, 248, 0.08); border:1.5px solid rgba(56, 189, 248, 0.35); border-radius:14px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <i class="fas fa-clock" style="color:#38bdf8; font-size:20px;"></i>
+          <div>
+            <strong style="color:#38bdf8; font-size:13px;">${upcomingSubtasks.length} tarea(s) pre-asignadas en Recepción / Diagnóstico</strong>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+              ${upcomingSubtasks
+                .map((s) => {
+                  const po = db.ordenes.find((o) => o.id_orden === s.orden_id);
+                  return `Troquel #${po ? po.codigo_troquel : "S/N"}: ${s.descripcion_servicio}`;
+                })
+                .join(" · ")}
+            </div>
+          </div>
+        </div>
+        <span style="font-size:11px; font-weight:800; color:var(--text-muted); background:rgba(255,255,255,0.05); padding:4px 10px; border-radius:8px;">
+          Se activarán en mesa al pasar a 4. Servicio
+        </span>
+      </div>
+    `
+        : ""
+    }
 
     ${tasksHtml}
   `;
@@ -11405,9 +11186,10 @@ function saveNewExternalWorkshop() {
 
   db.usuarios.push(newWorkshop);
   saveDatabase();
+  pushToGoogleSheets(true);
   closeModal();
   renderApp();
-  showToast("Taller externo " + name + " registrado exitosamente.");
+  showToast("Taller externo " + name + " registrado exitosamente y sincronizado con la nube.");
 }
 
 function openLiquidateExternalWorkshopModal(workshopId, totalDue) {
@@ -12882,10 +12664,18 @@ function resetLedgerFilters() {
 
 function deleteFinanceMovement(movId) {
   if (!confirm("¿Eliminar este movimiento del Libro Diario?")) return;
-  db.finanzas_movimientos = db.finanzas_movimientos.filter((m) => m.id_mov !== movId);
+  db.finanzas_movimientos = (db.finanzas_movimientos || []).filter(
+    (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
+  );
+  if (Array.isArray(db.finanzas)) {
+    db.finanzas = db.finanzas.filter(
+      (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
+    );
+  }
   saveDatabase();
+  pushToGoogleSheets(true);
   renderApp();
-  showToast("Movimiento eliminado del Libro Diario.");
+  showToast("Movimiento eliminado del Libro Diario y sincronizado.");
 }
 
 function openAddFinanceCategoryModal() {
@@ -14710,54 +14500,59 @@ function drawDynamicQrCode(container, text, size = 200) {
   if (!container) return;
   container.innerHTML = "";
 
-  // 1. Intento con David Shim's QRCode constructor
+  // 1. Intento con David Shim's QRCode constructor local
   if (typeof QRCode === "function") {
     try {
+      const qrLevel = (QRCode.CorrectLevel && typeof QRCode.CorrectLevel.L !== "undefined") ? QRCode.CorrectLevel.L : 1;
       new QRCode(container, {
         text: text,
         width: size,
         height: size,
         colorDark: "#0f1638",
         colorLight: "#ffffff",
-        correctLevel: (QRCode.CorrectLevel && QRCode.CorrectLevel.M) || 0
+        correctLevel: qrLevel
       });
-      return;
+      const generated = container.querySelector("canvas, img");
+      if (generated) {
+        generated.style.display = "block";
+        generated.style.margin = "0 auto";
+        generated.style.borderRadius = "8px";
+        return;
+      }
     } catch (e) {
       console.warn("new QRCode() error:", e);
+      container.innerHTML = "";
     }
   }
 
-  // 2. Intento con Ryan Day's QRCode con toCanvas
+  // 2. Intento con Ryan Day's QRCode con toCanvas si estuviera cargado
   if (typeof QRCode === "object" && typeof QRCode.toCanvas === "function") {
-    const canvas = document.createElement("canvas");
-    container.appendChild(canvas);
-    QRCode.toCanvas(canvas, text, { width: size, margin: 1, color: { dark: "#0f1638", light: "#ffffff" } }, (err) => {
-      if (err) console.error("QRCode.toCanvas error:", err);
-    });
-    return;
+    try {
+      const canvas = document.createElement("canvas");
+      container.appendChild(canvas);
+      QRCode.toCanvas(canvas, text, { width: size, margin: 1, color: { dark: "#0f1638", light: "#ffffff" } }, (err) => {
+        if (err) console.error("QRCode.toCanvas error:", err);
+      });
+      canvas.style.display = "block";
+      canvas.style.margin = "0 auto";
+      canvas.style.borderRadius = "8px";
+      return;
+    } catch (e) {
+      console.warn("QRCode.toCanvas error:", e);
+      container.innerHTML = "";
+    }
   }
 
-  // 3. Fallback en línea e infalible
-  const encoded = encodeURIComponent(text);
-  const img = document.createElement("img");
-  img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encoded}`;
-  img.width = size;
-  img.height = size;
-  img.alt = "QR Presencial";
-  img.style.display = "block";
-  img.style.margin = "0 auto";
-  img.style.borderRadius = "8px";
-  img.onerror = () => {
-    container.innerHTML = `
-      <div style="padding:16px; border:2px dashed var(--renacer-gold); border-radius:12px; background:rgba(245,196,0,0.08); text-align:center;">
-        <i class="fas fa-qrcode" style="font-size:32px; color:var(--renacer-gold); margin-bottom:6px;"></i>
-        <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">TOKEN PRESENCIAL ACTIVO</div>
-        <div style="font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:#38bdf8; word-break:break-all; margin:8px 0;">${text}</div>
-        <div style="font-size:10px; color:var(--text-muted);">Usa el botón de marcar por perfil a la derecha si no tienes cámara activa.</div>
-      </div>
-    `;
-  };
-  container.appendChild(img);
+  // 3. Fallback Offline Infalible (Sin dependencias externas ni conexión a internet)
+  const displayToken = text.replace(/^RENACER_PRESENCIAL\|/i, "");
+  container.innerHTML = `
+    <div style="padding:14px; border:2px dashed var(--renacer-gold); border-radius:12px; background:rgba(245,196,0,0.06); text-align:center;">
+      <i class="fas fa-qrcode" style="font-size:36px; color:var(--renacer-gold); margin-bottom:6px;"></i>
+      <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">TOKEN PRESENCIAL ACTIVO</div>
+      <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:#38bdf8; word-break:break-all; margin:8px 0; background:rgba(15,22,56,0.6); padding:6px; border-radius:8px;">${displayToken}</div>
+      <div style="font-size:10.5px; color:var(--text-muted);">Toca tu nombre a la derecha para certificar asistencia con tu PIN numérico.</div>
+    </div>
+  `;
 }
 
 function openAttendanceKioskModal() {
