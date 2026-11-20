@@ -13,7 +13,7 @@
  * ============================================================================
  */
 
-const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V6";
+const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V7";
 const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V6";
 const DEFAULT_GAS_API_URL = "https://script.google.com/macros/s/AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA/exec";
 let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || DEFAULT_GAS_API_URL;
@@ -4026,6 +4026,8 @@ function toggleSidebarCollapse() {
 
 async function forceAppRefresh() {
   try {
+    localStorage.removeItem("RECTIFICADORA_RENACER_DB_V6");
+    localStorage.removeItem(STORAGE_KEY);
     if ("caches" in window) {
       const cacheNames = await caches.keys();
       await Promise.all(cacheNames.map((name) => caches.delete(name)));
@@ -14501,6 +14503,8 @@ function drawDynamicQrCode(container, text, size = 200) {
   if (!container) return;
   container.innerHTML = "";
 
+  let rendered = false;
+
   // 1. Intento con David Shim's QRCode constructor local
   if (typeof QRCode === "function") {
     try {
@@ -14518,7 +14522,9 @@ function drawDynamicQrCode(container, text, size = 200) {
         generated.style.display = "block";
         generated.style.margin = "0 auto";
         generated.style.borderRadius = "8px";
-        return;
+        generated.style.background = "#ffffff";
+        generated.style.padding = "6px";
+        rendered = true;
       }
     } catch (e) {
       console.warn("new QRCode() error:", e);
@@ -14527,7 +14533,7 @@ function drawDynamicQrCode(container, text, size = 200) {
   }
 
   // 2. Intento con Ryan Day's QRCode con toCanvas si estuviera cargado
-  if (typeof QRCode === "object" && typeof QRCode.toCanvas === "function") {
+  if (!rendered && typeof QRCode === "object" && typeof QRCode.toCanvas === "function") {
     try {
       const canvas = document.createElement("canvas");
       container.appendChild(canvas);
@@ -14537,23 +14543,51 @@ function drawDynamicQrCode(container, text, size = 200) {
       canvas.style.display = "block";
       canvas.style.margin = "0 auto";
       canvas.style.borderRadius = "8px";
-      return;
+      canvas.style.background = "#ffffff";
+      canvas.style.padding = "6px";
+      rendered = true;
     } catch (e) {
       console.warn("QRCode.toCanvas error:", e);
       container.innerHTML = "";
     }
   }
 
-  // 3. Fallback Offline Infalible (Sin dependencias externas ni conexión a internet)
+  // 3. Si no se pudo generar con librerías locales, renderizar con API de imagen QR de alta resolución
+  if (!rendered) {
+    container.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}&margin=10`;
+    img.alt = "QR Asistencia Presencial";
+    img.style.width = `${size}px`;
+    img.style.height = `${size}px`;
+    img.style.display = "block";
+    img.style.margin = "0 auto";
+    img.style.borderRadius = "8px";
+    img.style.background = "#ffffff";
+    img.style.padding = "6px";
+    img.style.boxShadow = "0 4px 12px rgba(0,0,0,0.25)";
+
+    img.onerror = function() {
+      // 4. Fallback Offline solo si falla la imagen y no hay librería disponible
+      const displayToken = text.replace(/^RENACER_PRESENCIAL\|/i, "");
+      container.innerHTML = `
+        <div style="padding:14px; border:2px dashed var(--renacer-gold); border-radius:12px; background:rgba(245,196,0,0.06); text-align:center;">
+          <i class="fas fa-qrcode" style="font-size:36px; color:var(--renacer-gold); margin-bottom:6px;"></i>
+          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">TOKEN PRESENCIAL ACTIVO</div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:#38bdf8; word-break:break-all; margin:8px 0; background:rgba(15,22,56,0.6); padding:6px; border-radius:8px;">${displayToken}</div>
+          <div style="font-size:10.5px; color:var(--text-muted);">Toca tu nombre a la derecha para certificar asistencia con tu PIN numérico.</div>
+        </div>
+      `;
+    };
+    container.appendChild(img);
+  }
+
+  // Complemento: Mostrar siempre el token numérico legible abajo
   const displayToken = text.replace(/^RENACER_PRESENCIAL\|/i, "");
-  container.innerHTML = `
-    <div style="padding:14px; border:2px dashed var(--renacer-gold); border-radius:12px; background:rgba(245,196,0,0.06); text-align:center;">
-      <i class="fas fa-qrcode" style="font-size:36px; color:var(--renacer-gold); margin-bottom:6px;"></i>
-      <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">TOKEN PRESENCIAL ACTIVO</div>
-      <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:#38bdf8; word-break:break-all; margin:8px 0; background:rgba(15,22,56,0.6); padding:6px; border-radius:8px;">${displayToken}</div>
-      <div style="font-size:10.5px; color:var(--text-muted);">Toca tu nombre a la derecha para certificar asistencia con tu PIN numérico.</div>
-    </div>
-  `;
+  const tokenBadge = document.createElement("div");
+  tokenBadge.style.cssText = "margin-top:10px; font-size:11px; color:#cbd5e1; text-align:center; font-family:'JetBrains Mono',monospace;";
+  tokenBadge.innerHTML = `<span style="opacity:0.75;">Código token:</span> <strong style="color:var(--renacer-gold); font-size:12px;">${displayToken}</strong>`;
+  container.appendChild(tokenBadge);
 }
 
 function openAttendanceKioskModal() {
