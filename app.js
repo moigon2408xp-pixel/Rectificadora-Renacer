@@ -1572,6 +1572,7 @@ function quickLoginAs(userId) {
     return;
   }
   loginSuccess(user);
+  return false;
 }
 window.quickLoginAs = quickLoginAs;
 
@@ -1727,6 +1728,7 @@ function handleManualLogin(e) {
   }
 
   loginSuccess(user);
+  return false;
 }
 
 /* ---------- Autenticación Biométrica (Huella Dactilar / WebAuthn) ---------- */
@@ -4747,7 +4749,6 @@ function renderOrderCardTelegramStyle(order) {
           </button>
         ` : ""}
       </div>
-    `;
     `;
   } else if (order.estado_actual === "aprobacion" || order.estado_actual === "esperando_aprobacion_abono") {
     primaryActionBtn = `
