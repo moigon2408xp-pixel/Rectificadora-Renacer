@@ -13,7 +13,7 @@
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="./qrcode.min.js"></script>
   <script src="./html5-qrcode.min.js"></script>
-  <link rel="stylesheet" href="./styles.css?v=20261120_v34" />
+  <link rel="stylesheet" href="./styles.css?v=20261120_v35" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -48,7 +48,7 @@
         </div>
 
         <!-- Formulario de Acceso Limpio -->
-        <form id="login-form" class="login-clean-form" onsubmit="handleManualLogin(event)">
+        <form id="login-form" class="login-clean-form" action="javascript:void(0);" onsubmit="event.preventDefault(); handleManualLogin(event); return false;">
           <div class="field-group">
             <label for="login-username-input"><i class="fas fa-user"></i> Usuario o Nombre</label>
             <div class="login-input-wrap">
@@ -260,7 +260,7 @@
 
   </div>
 
-  <script src="./app.js?v=20261120_v34"></script>
+  <script src="./app.js?v=20261120_v35"></script>
 </body>
 </html>
 
