@@ -13,7 +13,7 @@
  * ============================================================================
  */
 
-const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V7";
+const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V8";
 const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V6";
 const DEFAULT_GAS_API_URL = "https://script.google.com/macros/s/AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA/exec";
 let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || DEFAULT_GAS_API_URL;
@@ -23,8 +23,14 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
 }
 let lastCloudSyncTime = "Conectado";
 let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
+let hasSyncedFromCloudOnce = false;
+let cloudPushInFlight = false;
+let cloudPushPending = false;
+let cloudPushDebounceTimer = null;
+let lastLocalMutationTs = 0;
+let lastCloudPushDoneTs = 0;
 
-const CURRENT_APP_VERSION = "2026.11.20.v34";
+const CURRENT_APP_VERSION = "2026.11.20.v37";
 
 /* ==================== V31: SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS ==================== */
 const DEFAULT_TEXT_CUSTOMIZATIONS = {
@@ -115,8 +121,13 @@ async function fetchLiveExchangeRates(silent = false) {
         const now = new Date();
         const timeStr = now.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit" });
         db.config.tasaFechaActualizacion = `${now.toISOString().slice(0, 10)} ${timeStr}`;
-        saveDatabase();
-        renderApp();
+        // Solo guardar tasas en caché local en actualizaciones silenciosas para JAMÁS sobreescribir la nube antes de sincronizar
+        if (!silent && hasSyncedFromCloudOnce) {
+          saveDatabase();
+        } else {
+          saveLocalOnly();
+        }
+        if (currentUser) renderApp();
         if (!silent) {
           showToast(`Tasas actualizadas en vivo: BCV Bs. ${db.config.tasaBcv.toFixed(2)} | Paralelo Bs. ${db.config.tasaBinance.toFixed(2)}`, "info");
         }
@@ -140,16 +151,28 @@ function checkAppVersionAndCache() {
 }
 
 async function triggerRemoteUpdateForAll() {
-  if (!confirm("¿Forzar actualización remota para todos los dispositivos conectados? Esta acción recargará las pantallas de todos los usuarios sin borrar sus datos.")) {
-    return;
-  }
+  const res = await Swal.fire({
+    title: "¿Forzar actualización remota?",
+    text: "Esta acción recargará las pantallas de todos los usuarios conectados para aplicar la versión más reciente sin borrar sus datos.",
+    icon: "question",
+    showCancelButton: true,
+    confirmButtonColor: "#182254",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, actualizar todos"
+  });
+  if (!res.isConfirmed) return;
+
   const newVer = "FORCED_" + Date.now();
   if (!db.config) db.config = {};
   db.config.forzar_actualizacion_version = newVer;
+  localStorage.setItem("RENACER_FORCED_VERSION", newVer);
   saveDatabase();
   showToast("Enviando orden de actualización a la nube...", "info");
-  await syncToGoogleSheets(true);
-  showToast("Comando de actualización remota transmitido a todos los dispositivos.", "info");
+  const ok = await flushCloudPush(false);
+  if (ok) {
+    showToast("Comando de actualización remota transmitido a todos los dispositivos.");
+  }
 }
 
 /* ---------- Formateadores de Fecha y Hora Legibles (Sin formato GMT/ISO T04:00:00.000Z) ---------- */
@@ -375,64 +398,26 @@ function getInitialDatabase() {
         modalidad_horario: "Jornada Completa"
       }
     ],
-    catalogo: [
-      { id_servicio: "SRV-01", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Lavado Químico y Descarbonizado Profundo", precio_sugerido_usd: 15, comision_tecnico_usd: 4, activo: true },
-      { id_servicio: "SRV-02", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Aplanado / Cepillado de Superficie de Cámara", precio_sugerido_usd: 25, comision_tecnico_usd: 8, activo: true },
-      { id_servicio: "SRV-03", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Cambio e Instalación de Guías de Válvulas", precio_sugerido_usd: 30, comision_tecnico_usd: 10, activo: true },
-      { id_servicio: "SRV-04", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Rectificación de Asientos y Asentamiento de Válvulas", precio_sugerido_usd: 35, comision_tecnico_usd: 12, activo: true },
-      { id_servicio: "SRV-05", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Soldadura Especial en Aluminio y Relleno de Pases de Agua", precio_sugerido_usd: 40, comision_tecnico_usd: 14, activo: true },
-      { id_servicio: "SRV-06", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Armado de Cámara, Cambio de Gomitas y Calibración", precio_sugerido_usd: 30, comision_tecnico_usd: 10, activo: true },
-      { id_servicio: "SRV-07", categoria_pieza: "Cámara / Tapa", descripcion_servicio: "Prueba de Presión / Vacío de Sellado (25 Bar)", precio_sugerido_usd: 20, comision_tecnico_usd: 6, activo: true },
-      { id_servicio: "SRV-08", categoria_pieza: "Bloque / Cigüeñal", descripcion_servicio: "Rectificación y Pulitura de Cigüeñal", precio_sugerido_usd: 55, comision_tecnico_usd: 18, activo: true },
-      { id_servicio: "SRV-09", categoria_pieza: "Bloque / Cigüeñal", descripcion_servicio: "Encamisado y Bruñido de Cilindros en Bloque", precio_sugerido_usd: 85, comision_tecnico_usd: 28, activo: true }
+    catalogo_servicios: [
+      { id_cat: "CAT-CAM-4C", categoria: "Cámara / Culata", nombre: "Servicio de cámara 4 C", precio_sugerido: 40.0, comision_sugerida: 12.5, activo: true },
+      { id_cat: "CAT-CAM-68", categoria: "Cámara / Culata", nombre: "Servicio de cámara 6 C / 8 C", precio_sugerido: 60.0, comision_sugerida: 18.0, activo: true },
+      { id_cat: "CAT-APLAN", categoria: "Cámara / Culata", nombre: "Aplanado / Cepillada de Cámara", precio_sugerido: 20.0, comision_sugerida: 5.0, activo: true },
+      { id_cat: "CAT-LAVQUIM", categoria: "Cámara / Culata", nombre: "Lavado Químico y Descarbonizado", precio_sugerido: 15.0, comision_sugerida: 3.5, activo: true },
+      { id_cat: "CAT-GUIAS", categoria: "Cámara / Culata", nombre: "Cambio e Instalación de Guías de Válvulas", precio_sugerido: 25.0, comision_sugerida: 8.0, activo: true },
+      { id_cat: "CAT-ASIENT", categoria: "Cámara / Culata", nombre: "Rectificación y Asentamiento de Válvulas", precio_sugerido: 30.0, comision_sugerida: 10.0, activo: true },
+      { id_cat: "CAT-SOLDAD", categoria: "Cámara / Culata", nombre: "Soldadura en Aluminio y Relleno de Pases de Agua", precio_sugerido: 35.0, comision_sugerida: 12.0, activo: true },
+      { id_cat: "CAT-ARMADO", categoria: "Cámara / Culata", nombre: "Armado de Cámara, Gomitas y Calibración", precio_sugerido: 25.0, comision_sugerida: 8.0, activo: true },
+      { id_cat: "CAT-PRUEBA", categoria: "Cámara / Culata", nombre: "Prueba de Presión Hidráulica / Vacío de Sellado", precio_sugerido: 20.0, comision_sugerida: 6.0, activo: true },
+      { id_cat: "CAT-CIGUENAL", categoria: "Bloque / Cigüeñal", nombre: "Rectificación y Pulitura de Cigüeñal", precio_sugerido: 55.0, comision_sugerida: 18.0, activo: true },
+      { id_cat: "CAT-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado De Block (Por Unidad)", precio_sugerido: 50.0, comision_sugerida: 23.25, activo: true }
     ],
-    clientes: [
-      {
-        id_cliente: "CLI-JESUS",
-        documento_identidad: "V-27421339",
-        nombre_completo: "Jesús Andrade",
-        telefono: "0424-6999635",
-        direccion: "Casco Central, Maracaibo",
-        tipo_cliente: "Particular"
-      },
-      {
-        id_cliente: "CLI-JOSEMANUE",
-        documento_identidad: "V-26559977",
-        nombre_completo: "Jose manue",
-        telefono: "0412-0696868",
-        direccion: "su casa",
-        tipo_cliente: "Particular"
-      },
-      {
-        id_cliente: "CLI-PRIMOS",
-        documento_identidad: "J-40998877",
-        nombre_completo: "Taller Mecánico Los Primos",
-        telefono: "0414-6112233",
-        direccion: "Av. Principal Los Haticos, Maracaibo",
-        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
-      },
-      {
-        id_cliente: "CLI-CATIRE",
-        documento_identidad: "J-30887766",
-        nombre_completo: "Multiservicios El Catire",
-        telefono: "0424-6554433",
-        direccion: "Av. La Limpia frente a Curva de Molina",
-        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
-      },
-      {
-        id_cliente: "CLI-GONZALEZ",
-        documento_identidad: "V-14556677",
-        nombre_completo: "Taller Hermanos González",
-        telefono: "0412-6889900",
-        direccion: "Urb. San Miguel, Calle 3",
-        tipo_cliente: "Taller Aliado (Crédito Autorizado)"
-      }
-    ],
+    clientes: [],
     ordenes: [],
     subtareas: [],
     bitacora: [],
     finanzas_movimientos: [],
     cuentas_por_pagar: [],
+    inventario_repuestos: [],
     movimientos_inventario: [],
     asistencias: []
   };
@@ -578,36 +563,49 @@ function normalizeDatabaseSchema(d) {
     }
   ];
 
-  const allowedIds = REAL_USERS.map((u) => u.id_usuario);
   if (!Array.isArray(d.usuarios) || d.usuarios.length === 0) {
-    d.usuarios = REAL_USERS;
+    d.usuarios = REAL_USERS.map((u) => ({ ...u }));
   } else {
-    // Purgar inmediatamente cualquier usuario ficticio o de prueba anterior
-    d.usuarios = d.usuarios.filter((u) => allowedIds.includes(u.id_usuario));
-
-    // Garantizar que los 8 perfiles oficiales reales existan con sus roles y credenciales
-    REAL_USERS.forEach((ru) => {
-      let existing = d.usuarios.find((u) => u.id_usuario === ru.id_usuario);
-      if (!existing) {
-        d.usuarios.push(ru);
-      } else {
-        existing.nombre = ru.nombre;
-        existing.rol = ru.rol;
-        existing.rol_label = ru.rol_label;
-        existing.especialidad = ru.especialidad;
-        existing.activo = true;
-        // Garantizar que la credencial oficial única asignada esté siempre activa
-        existing.pin = ru.pin;
-      }
-    });
+    const roleLabelsMap = {
+      admin: "Administrador del Sistema",
+      jefe_taller: "Jefe de Taller / Gerencia",
+      recepcion: "Recepción e Ingreso",
+      inventario: "Inventario y Repuestos",
+      tecnico: "Trabajador de Taller",
+      outsourcing: "Taller Externo (Outsourcing)"
+    };
+    // Respetar 100% los cambios del usuario: adiciones, ediciones, PINes, estado y eliminaciones
+    d.usuarios = d.usuarios
+      .filter((u) => u && String(u.id_usuario || u.nombre || "").trim() !== "")
+      .map((u) => {
+        const isExt = Boolean(
+          u.rol === "outsourcing" ||
+          u.tipo === "taller_externo" ||
+          u.es_externo ||
+          String(u.id_usuario || "").startsWith("EXT-")
+        );
+        const rol = u.rol || (isExt ? "outsourcing" : "tecnico");
+        return {
+          ...u,
+          id_usuario: String(u.id_usuario || ("USR-" + Math.random().toString(36).slice(2, 7))),
+          nombre: String(u.nombre || "").trim(),
+          rol,
+          rol_label: u.rol_label || roleLabelsMap[rol] || "Trabajador de Taller",
+          tipo: u.tipo || (isExt ? "taller_externo" : "personal_interno"),
+          es_externo: isExt,
+          especialidad: String(u.especialidad || ""),
+          telefono: String(u.telefono || ""),
+          direccion: String(u.direccion || ""),
+          pin: String(u.pin !== undefined && u.pin !== null && String(u.pin).trim() !== "" ? u.pin : (isExt ? "0000" : "123456")).trim(),
+          activo: u.activo !== false && String(u.activo).toLowerCase() !== "false",
+          modalidad_horario: u.modalidad_horario || (isExt ? "Tercerizado" : "Jornada Completa")
+        };
+      });
   }
 
-  // Inicializar inventario central de repuestos e insumos limpio para Javier Andrade (sin ítems ficticios)
+  // Inventario central de repuestos e insumos
   if (!Array.isArray(d.inventario_repuestos)) {
     d.inventario_repuestos = [];
-  } else {
-    // Purgar ítems de prueba/demo antiguos (REP-101 a REP-107) si existían
-    d.inventario_repuestos = d.inventario_repuestos.filter((r) => !/^REP-10[1-7]$/i.test(r.id_repuesto || ""));
   }
   if (!Array.isArray(d.movimientos_inventario)) {
     d.movimientos_inventario = [];
@@ -637,21 +635,27 @@ function normalizeDatabaseSchema(d) {
     { id_cat: "CAT-ARMADO", categoria: "Cámara / Culata", nombre: "Armado de Cámara, Gomitas y Calibración", precio_sugerido: 25.0, comision_sugerida: 8.00, activo: true },
     { id_cat: "CAT-PRUEBA", categoria: "Cámara / Culata", nombre: "Prueba de Presión Hidráulica / Vacío de Sellado", precio_sugerido: 20.0, comision_sugerida: 6.00, activo: true },
     { id_cat: "CAT-CIGUENAL", categoria: "Bloque / Cigüeñal", nombre: "Rectificación y Pulitura de Cigüeñal", precio_sugerido: 55.0, comision_sugerida: 18.00, activo: true },
-    { id_cat: "CAT-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado y Bruñido de Cilindros en Bloque", precio_sugerido: 85.0, comision_sugerida: 28.00, activo: true }
+    { id_cat: "CAT-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado De Block (Por Unidad)", precio_sugerido: 50.0, comision_sugerida: 23.25, activo: true }
   ];
 
-  if (!Array.isArray(d.catalogo_servicios) || d.catalogo_servicios.length <= 2) {
-    const existing = Array.isArray(d.catalogo_servicios) ? d.catalogo_servicios : [];
-    const merged = [...existing];
-    DEFAULT_CATALOGO_SERVICIOS.forEach((def) => {
-      const found = merged.find(
-        (m) => (m.nombre || "").toLowerCase().trim() === def.nombre.toLowerCase().trim() || m.id_cat === def.id_cat
-      );
-      if (!found) {
-        merged.push(def);
-      }
-    });
-    d.catalogo_servicios = merged;
+  // Respetar catálogo real sincronizado desde Sheets o editado localmente; solo sembrar defaults si nunca existió
+  if (!Array.isArray(d.catalogo_servicios)) {
+    if (Array.isArray(d.catalogo)) {
+      d.catalogo_servicios = d.catalogo
+        .filter((c) => c && String(c.descripcion_servicio || c.nombre || "").trim() !== "")
+        .map((c) => ({
+          id_cat: String(c.id_cat || c.id_servicio || ("CAT-" + Math.random().toString(36).slice(2, 7))),
+          categoria: String(c.categoria || c.categoria_pieza || "Rectificación General"),
+          nombre: String(c.nombre || c.descripcion_servicio || "").trim(),
+          precio_sugerido: Number(c.precio_sugerido ?? c.precio_sugerido_usd ?? 0),
+          comision_sugerida: Number(c.comision_sugerida ?? c.comision_tecnico_usd ?? 0),
+          es_outsourcing: Boolean(c.es_outsourcing),
+          taller_externo_nombre: String(c.taller_externo_nombre || ""),
+          activo: c.activo !== false && String(c.activo).toLowerCase() !== "false"
+        }));
+    } else {
+      d.catalogo_servicios = DEFAULT_CATALOGO_SERVICIOS.map((c) => ({ ...c }));
+    }
   }
   if (!d.finanzas_categorias) {
     d.finanzas_categorias = {
@@ -673,7 +677,7 @@ function normalizeDatabaseSchema(d) {
   }
   if (!Array.isArray(d.finanzas_movimientos)) {
     d.finanzas_movimientos = (d.finanzas || [])
-      .filter((f) => String(f.concepto || f.id_movimiento || f.id_mov || "").trim() !== "")
+      .filter((f) => f && String(f.concepto || f.id_movimiento || f.id_mov || "").trim() !== "")
       .map((f) => ({
         id_mov: f.id_movimiento || f.id_mov || "MOV-" + Math.random().toString(36).slice(2, 7),
         fecha: cleanDateISO(f.fecha_hora || f.fecha || new Date().toISOString(), false),
@@ -682,6 +686,8 @@ function normalizeDatabaseSchema(d) {
         concepto: f.concepto || "",
         monto: Number(f.monto_usd ?? f.monto ?? 0),
         metodo: f.metodo_pago || f.metodo || "efectivo",
+        cuenta: f.cuenta || "",
+        referencia: f.referencia || "",
         orden_id: f.orden_id || "-",
         codigo_troquel: f.codigo_troquel || "-"
       }));
@@ -693,15 +699,19 @@ function normalizeDatabaseSchema(d) {
 
   if (!Array.isArray(d.asistencias)) {
     d.asistencias = (d.asistencia || [])
-      .filter((a) => String(a.nombre_usuario || a.nombre || "").trim() !== "")
+      .filter((a) => a && String(a.nombre_usuario || a.nombre || "").trim() !== "")
       .map((a) => ({
         id_asist: a.id_asistencia || a.id_asist || "ASI-" + Math.random().toString(36).slice(2, 7),
         usuario_id: a.usuario_id || "",
         nombre: a.nombre_usuario || a.nombre || "",
         fecha: cleanDateISO(a.fecha || new Date().toISOString(), false),
         hora_entrada: cleanTimeHuman(a.hora_registro || a.hora_entrada || "Activo"),
-        hora_salida: a.hora_salida || "Por destajo",
-        estado: a.estado_hoy || a.estado || "Activo en Taller",
+        hora_salida: a.hora_salida || "",
+        hora_salida_almuerzo: a.hora_salida_almuerzo || "",
+        hora_regreso_almuerzo: a.hora_regreso_almuerzo || "",
+        es_tardanza: Boolean(a.es_tardanza),
+        metodo_registro: a.metodo_registro || "",
+        estado: a.estado_hoy || a.estado || a.observacion || "Activo en Taller",
         observacion: a.turno_modalidad || a.observacion || "Producción por trabajo realizado"
       }));
   } else {
@@ -711,31 +721,18 @@ function normalizeDatabaseSchema(d) {
     });
   }
 
-  // Purgar asistencias automáticas erróneas generadas por inicio de sesión (03:17 AM o similar)
-  d.asistencias = (d.asistencias || []).filter((a) => {
-    const hora = String(a.hora_entrada || "");
-    if (hora.includes("03:17") || hora.includes("3:17") || hora.includes("03:18") || hora.includes("3:18")) return false;
-    return true;
-  });
-
-  d.clientes = (d.clientes || []).filter((c) => String(c.nombre_completo || c.documento_identidad || "").trim() !== "");
+  d.clientes = Array.isArray(d.clientes)
+    ? d.clientes.filter((c) => c && String(c.nombre_completo || c.documento_identidad || "").trim() !== "")
+    : [];
   d.clientes.forEach((c) => {
     if (c.es_taller_aliado === undefined) {
       c.es_taller_aliado = String(c.tipo_cliente || "").toLowerCase().includes("aliado");
     }
   });
 
-  // PURGA RIGUROSA: Eliminar órdenes de prueba/demo (ORD-1001 a ORD-1006) para mantener SOLO las 3 órdenes reales de Jesús Andrade y nuevas
-  d.ordenes = (d.ordenes || []).filter((o) => {
-    if (!o) return false;
-    const id = String(o.id_orden || "").trim();
-    const troquel = String(o.codigo_troquel || "").trim();
-    if (!id && !troquel) return false;
-    // Filtrar explícitamente las de prueba
-    if (/^ORD-100[1-6]$/i.test(id) || /^ORD-100[1-6]/i.test(id)) return false;
-    if (troquel === "1513" || troquel === "1508" || troquel === "1504" || troquel === "1499" || troquel === "1492" || troquel === "1485") return false;
-    return true;
-  });
+  d.ordenes = Array.isArray(d.ordenes)
+    ? d.ordenes.filter((o) => o && (String(o.id_orden || "").trim() !== "" || String(o.codigo_troquel || "").trim() !== ""))
+    : [];
 
   d.ordenes.forEach((o) => {
     o.fecha_ingreso = cleanDateISO(o.fecha_ingreso, true);
@@ -749,58 +746,27 @@ function normalizeDatabaseSchema(d) {
 
   const validOrderIds = new Set(d.ordenes.map((o) => o.id_orden));
 
-  // Subtareas: eliminar las que pertenecían a órdenes de prueba o inexistentes
-  d.subtareas = (d.subtareas || []).filter((s) => {
-    if (!s || !s.orden_id) return false;
-    if (/^ORD-100[1-6]/i.test(s.orden_id)) return false;
-    return validOrderIds.has(s.orden_id);
-  });
-
-  // Purgar subtareas vacías $0 de pruebas (como el "Adicional" de la orden #1548)
-  d.subtareas = (d.subtareas || []).filter((s) => {
-    if (!s) return false;
-    if (s.id_subtarea === "SUB-1548-2") return false;
-    if (s.descripcion_servicio === "Adicional" && Number(s.monto_servicio) === 0 && Number(s.comision_base_tecnico) === 0) return false;
-    return true;
-  });
+  d.subtareas = Array.isArray(d.subtareas)
+    ? d.subtareas.filter((s) => s && s.orden_id && validOrderIds.has(s.orden_id))
+    : [];
 
   d.subtareas.forEach((s) => {
     if (s.minutos_acumulados === undefined) s.minutos_acumulados = Number(s.tiempo_neto_min || 0);
     if (s.foto_terminado_url === undefined) s.foto_terminado_url = s.foto_evidencia_terminado || "";
     if (s.fecha_terminado) s.fecha_terminado = cleanDateISO(s.fecha_terminado, false);
-
-    // Órdenes en etapa 1 (Recepción / Presupuesto) no tienen técnico asignado hasta Fase 3
-    const parentOrd = d.ordenes.find((o) => o.id_orden === s.orden_id);
-    if (parentOrd && (parentOrd.estado_actual === "recepcion" || parentOrd.estado_actual === "diagnostico_presupuesto")) {
-      s.tecnico_id = "";
-      s.nombre_tecnico = "Sin asignar";
-      s.estado_subtarea = "pendiente";
-    }
   });
 
-  // Bitácora: purgar mensajes huérfanos de pruebas
-  d.bitacora = (d.bitacora || []).filter((b) => {
-    if (!b) return false;
-    if (/^ORD-100[1-6]/i.test(b.orden_id)) return false;
-    return !b.orden_id || b.orden_id === "-" || validOrderIds.has(b.orden_id);
-  });
+  // Bitácora: filtrar siempre el registro oculto de metadatos del sistema y huérfanos
+  d.bitacora = Array.isArray(d.bitacora)
+    ? d.bitacora.filter((b) => {
+        if (!b) return false;
+        if (b.id_mensaje === "SYS-META-STATE" || b.orden_id === "__SYSTEM__") return false;
+        return !b.orden_id || b.orden_id === "-" || validOrderIds.has(b.orden_id);
+      })
+    : [];
   d.bitacora.forEach((b) => {
     b.fecha_hora = cleanDateISO(b.fecha_hora, true);
   });
-
-  // Finanzas: purgar movimientos de prueba
-  if (Array.isArray(d.finanzas_movimientos)) {
-    d.finanzas_movimientos = d.finanzas_movimientos.filter((f) => {
-      if (!f) return false;
-      if (/^ORD-100[1-6]/i.test(f.orden_id)) return false;
-      return true;
-    });
-  }
-
-  // Clientes
-  if (!Array.isArray(d.clientes)) {
-    d.clientes = [];
-  }
 
   return d;
 }
@@ -837,7 +803,12 @@ function prepareSheetsPayload(sourceDb) {
       factura_bloqueada: Boolean(o.factura_bloqueada),
       devuelto_calidad: Boolean(o.devuelto_calidad),
       motivo_rechazo_qc: o.motivo_rechazo_qc || "",
-      excepcion_taller_aliado: Boolean(o.excepcion_taller_aliado)
+      excepcion_taller_aliado: Boolean(o.excepcion_taller_aliado),
+      direccion_cliente: o.direccion_cliente || "",
+      fecha_garantia_hasta: o.fecha_garantia_hasta || "",
+      repuestos_comprados_taller: Boolean(o.repuestos_comprados_taller),
+      items_repuestos: Array.isArray(o.items_repuestos) ? o.items_repuestos : [],
+      monto_repuestos: Number(o.monto_repuestos) || 0
     };
     return {
       id_orden: o.id_orden || "",
@@ -896,25 +867,122 @@ function prepareSheetsPayload(sourceDb) {
     };
   });
 
-  const bitacora = (d.bitacora || []).map((b) => ({
-    id_mensaje: b.id_mensaje || "",
-    orden_id: b.orden_id || "",
-    codigo_troquel: String(b.codigo_troquel || ""),
-    autor_id: b.autor_id || "",
-    autor_nombre: b.autor_nombre || "",
-    autor_rol: b.autor_rol || "",
-    tipo_evento: b.tipo_evento || "comentario",
-    mensaje: b.mensaje || "",
-    foto_adjunta_url: b.foto_adjunta_url || "",
-    fecha_hora: b.fecha_hora || nowStr.slice(0, 16)
-  }));
+  const usuariosExtras = {};
+  (d.usuarios || []).forEach((u) => {
+    if (!u || !u.id_usuario) return;
+    usuariosExtras[u.id_usuario] = {
+      salario_fijo_semanal: u.salario_fijo_semanal,
+      direccion: u.direccion || "",
+      huella_registrada: Boolean(u.huella_registrada),
+      es_externo: Boolean(u.es_externo || u.rol === "outsourcing" || u.tipo === "taller_externo"),
+      tipo: u.tipo || (u.rol === "outsourcing" ? "taller_externo" : "personal_interno"),
+      rol_label: u.rol_label || ""
+    };
+  });
+
+  const catalogoExtras = {};
+  (d.catalogo_servicios || []).forEach((c) => {
+    const cid = c.id_cat || c.id_servicio;
+    if (!cid) return;
+    catalogoExtras[cid] = {
+      es_outsourcing: Boolean(c.es_outsourcing),
+      taller_externo_nombre: c.taller_externo_nombre || "",
+      categoria: c.categoria || c.categoria_pieza || "Rectificación General"
+    };
+  });
+
+  const finanzasExtras = {};
+  (d.finanzas_movimientos || []).forEach((m) => {
+    const mid = m.id_mov || m.id_movimiento;
+    if (!mid) return;
+    finanzasExtras[mid] = {
+      cuenta: m.cuenta || "",
+      referencia: m.referencia || ""
+    };
+  });
+
+  const asistenciaExtras = {};
+  (d.asistencias || []).forEach((a) => {
+    const aid = a.id_asist || a.id_asistencia;
+    if (!aid) return;
+    asistenciaExtras[aid] = {
+      hora_salida: a.hora_salida || "",
+      hora_salida_almuerzo: a.hora_salida_almuerzo || "",
+      hora_regreso_almuerzo: a.hora_regreso_almuerzo || "",
+      es_tardanza: Boolean(a.es_tardanza),
+      metodo_registro: a.metodo_registro || ""
+    };
+  });
+
+  const metaState = {
+    v: 1,
+    config: {
+      tasaBcv: Number(d.config?.tasaBcv) || 45.80,
+      tasaBinance: Number(d.config?.tasaBinance) || 52.40,
+      tasaFechaActualizacion: d.config?.tasaFechaActualizacion || "",
+      qcStandbyMode: Boolean(d.config?.qcStandbyMode),
+      correlativoTroquelActual: Number(d.config?.correlativoTroquelActual) || 5021,
+      correlativoOrdenActual: Number(d.config?.correlativoOrdenActual) || 1007,
+      forzar_actualizacion_version: d.config?.forzar_actualizacion_version || "",
+      cuentasFinancieras: Array.isArray(d.config?.cuentasFinancieras) ? d.config.cuentasFinancieras : undefined
+    },
+    config_taller: d.config_taller || undefined,
+    text_customizations: d.text_customizations || {},
+    finanzas_categorias: d.finanzas_categorias || undefined,
+    cuentas_por_pagar: Array.isArray(d.cuentas_por_pagar) ? d.cuentas_por_pagar : [],
+    inventario_repuestos: Array.isArray(d.inventario_repuestos)
+      ? d.inventario_repuestos.map((r) => ({ ...r, foto: (r.foto && String(r.foto).startsWith("data:")) ? "" : (r.foto || "") }))
+      : [],
+    movimientos_inventario: Array.isArray(d.movimientos_inventario) ? d.movimientos_inventario.slice(-150) : [],
+    usuarios_extras: usuariosExtras,
+    catalogo_extras: catalogoExtras,
+    finanzas_extras: finanzasExtras,
+    asistencia_extras: asistenciaExtras
+  };
+
+  let metaJson = JSON.stringify(metaState);
+  if (metaJson.length > 45000) {
+    metaState.movimientos_inventario = metaState.movimientos_inventario.slice(-30);
+    metaJson = JSON.stringify(metaState);
+  }
+
+  const visibleBitacora = (d.bitacora || []).filter(
+    (b) => b && b.id_mensaje !== "SYS-META-STATE" && b.orden_id !== "__SYSTEM__"
+  );
+
+  const bitacora = [
+    ...visibleBitacora.map((b) => ({
+      id_mensaje: b.id_mensaje || "",
+      orden_id: b.orden_id || "",
+      codigo_troquel: String(b.codigo_troquel || ""),
+      autor_id: b.autor_id || "",
+      autor_nombre: b.autor_nombre || "",
+      autor_rol: b.autor_rol || "",
+      tipo_evento: b.tipo_evento || "comentario",
+      mensaje: b.mensaje || "",
+      foto_adjunta_url: b.foto_adjunta_url || "",
+      fecha_hora: b.fecha_hora || nowStr.slice(0, 16)
+    })),
+    {
+      id_mensaje: "SYS-META-STATE",
+      orden_id: "__SYSTEM__",
+      codigo_troquel: "__SYS__",
+      autor_id: "SYSTEM",
+      autor_nombre: "Sistema Renacer",
+      autor_rol: "system",
+      tipo_evento: "system_state",
+      mensaje: metaJson,
+      foto_adjunta_url: "",
+      fecha_hora: nowStr
+    }
+  ];
 
   const usuarios = (d.usuarios || []).map((u) => ({
     id_usuario: u.id_usuario || "",
     nombre: u.nombre || "",
     rol: u.rol || "tecnico",
     especialidad: u.especialidad || "",
-    pin: String(u.pin || "123456"),
+    pin: String(u.pin !== undefined && u.pin !== null && String(u.pin).trim() !== "" ? u.pin : "123456"),
     telefono: u.telefono || "",
     activo: u.activo !== false,
     modalidad_horario: u.modalidad_horario || "Jornada Completa",
@@ -923,7 +991,7 @@ function prepareSheetsPayload(sourceDb) {
 
   const catalogo = (d.catalogo_servicios || d.catalogo || []).map((c) => ({
     id_servicio: c.id_cat || c.id_servicio || "",
-    categoria_pieza: c.categoria_pieza || "Cámara / Motor",
+    categoria_pieza: c.categoria || c.categoria_pieza || "Rectificación General",
     descripcion_servicio: c.nombre || c.descripcion_servicio || "",
     precio_sugerido_usd: Number(c.precio_sugerido ?? c.precio_sugerido_usd ?? 0),
     comision_tecnico_usd: Number(c.comision_sugerida ?? c.comision_tecnico_usd ?? 0),
@@ -967,62 +1035,77 @@ function prepareSheetsPayload(sourceDb) {
   };
 }
 
+function extractCloudMetaState(cloudData) {
+  if (!cloudData || !Array.isArray(cloudData.bitacora)) return null;
+  const metaRow = cloudData.bitacora.find(
+    (b) => b && (b.id_mensaje === "SYS-META-STATE" || b.orden_id === "__SYSTEM__")
+  );
+  if (!metaRow || !metaRow.mensaje) return null;
+  return safeJsonParse(metaRow.mensaje, null);
+}
+
 /* Convierte los registros leídos desde Google Sheets (sync_all) de vuelta al modelo rico de la PWA */
 function hydrateDatabaseFromSheets(cloudData) {
   const base = normalizeDatabaseSchema(getInitialDatabase());
   if (!cloudData || typeof cloudData !== "object") return base;
 
+  const meta = extractCloudMetaState(cloudData) || {};
+  const uExtras = meta.usuarios_extras || {};
+  const cExtras = meta.catalogo_extras || {};
+  const fExtras = meta.finanzas_extras || {};
+  const aExtras = meta.asistencia_extras || {};
+
   const roleLabels = {
     admin: "Administrador del Sistema",
-    jefe_taller: "Jefe de Taller",
+    jefe_taller: "Jefe de Taller / Gerencia",
     recepcion: "Recepción e Ingreso",
-    tecnico: "Técnico Rectificador",
+    inventario: "Inventario y Repuestos",
+    tecnico: "Trabajador de Taller",
     outsourcing: "Taller Externo (Outsourcing)"
   };
 
-  const allowedUserIds = [
-    "USR-MOISES", "USR-JESUS", "USR-ENRIQUE", "USR-RECEPCION",
-    "USR-JAVIER", "USR-HAVELL", "USR-ANGEL", "USR-JOSE"
-  ];
+  // Respetar 100% los usuarios que vienen de Google Sheets (altas, ediciones, PINes y bajas)
   const validUsers = Array.isArray(cloudData.usuarios)
-    ? cloudData.usuarios.filter((u) => {
-        const id = String(u.id_usuario || "");
-        return (
-          allowedUserIds.includes(id) ||
+    ? cloudData.usuarios.filter((u) => u && String(u.id_usuario || u.nombre || "").trim() !== "")
+    : [];
+
+  const usuarios = validUsers.length
+    ? validUsers.map((u) => {
+        const uid = String(u.id_usuario || "").trim();
+        const extra = uExtras[uid] || {};
+        const isExt = Boolean(
           u.rol === "outsourcing" ||
           u.tipo === "taller_externo" ||
           u.es_externo ||
-          id.startsWith("EXT-") ||
-          id.startsWith("USR-")
+          extra.es_externo ||
+          uid.startsWith("EXT-")
         );
-      })
-    : [];
-  const usuarios = validUsers.length
-    ? validUsers.map((u) => {
-        const isExt = Boolean(u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo || String(u.id_usuario || "").startsWith("EXT-"));
-        const baseUser = base.usuarios.find(
-          (bu) => bu.id_usuario === u.id_usuario || (bu.nombre && bu.nombre.toLowerCase().trim() === String(u.nombre || "").toLowerCase().trim())
-        );
-        const resolvedPin = baseUser ? baseUser.pin : String(u.pin || (isExt ? "0000" : "000000")).trim();
+        const rol = String(u.rol || (isExt ? "outsourcing" : "tecnico")).trim();
+        const rawPin = u.pin !== undefined && u.pin !== null && String(u.pin).trim() !== ""
+          ? String(u.pin).trim()
+          : (isExt ? "0000" : "123456");
         return {
-          id_usuario: String(u.id_usuario || (baseUser ? baseUser.id_usuario : "")),
-          nombre: String(u.nombre || (baseUser ? baseUser.nombre : "")),
-          rol: String(u.rol || (baseUser ? baseUser.rol : (isExt ? "outsourcing" : "tecnico"))),
-          rol_label: roleLabels[u.rol] || (isExt ? "Taller Externo (Outsourcing)" : (baseUser ? baseUser.rol_label : "Técnico Rectificador")),
-          tipo: isExt ? "taller_externo" : "personal_interno",
+          id_usuario: uid || ("USR-" + Math.random().toString(36).slice(2, 7)),
+          nombre: String(u.nombre || "").trim(),
+          rol,
+          rol_label: extra.rol_label || roleLabels[rol] || (isExt ? "Taller Externo (Outsourcing)" : "Trabajador de Taller"),
+          tipo: extra.tipo || (isExt ? "taller_externo" : "personal_interno"),
           es_externo: isExt,
-          especialidad: String(u.especialidad || (baseUser ? baseUser.especialidad : (isExt ? "Mecanizado y Rectificación Externa" : ""))),
-          pin: resolvedPin,
-          telefono: String(u.telefono || (baseUser ? baseUser.telefono : "")),
-          direccion: String(u.direccion || (baseUser ? baseUser.direccion : "")),
-          activo: u.activo === true || String(u.activo).toLowerCase() === "true",
-          modalidad_horario: String(u.modalidad_horario || (baseUser ? baseUser.modalidad_horario : (isExt ? "Tercerizado" : "Producción por Destajo")))
+          especialidad: String(u.especialidad || (isExt ? "Mecanizado y Rectificación Externa" : "")),
+          pin: rawPin,
+          telefono: String(u.telefono || ""),
+          direccion: String(u.direccion || extra.direccion || ""),
+          salario_fijo_semanal: extra.salario_fijo_semanal !== undefined ? Number(extra.salario_fijo_semanal) : ((rol === "admin" || rol === "jefe_taller") ? 100 : undefined),
+          huella_registrada: Boolean(extra.huella_registrada),
+          activo: u.activo !== false && String(u.activo).toLowerCase() !== "false",
+          modalidad_horario: String(u.modalidad_horario || (isExt ? "Tercerizado" : "Jornada Completa")),
+          fecha_ingreso: cleanDateISO(u.fecha_ingreso || "2026-01-01", false)
         };
       })
     : base.usuarios;
 
   const validClients = Array.isArray(cloudData.clientes)
-    ? cloudData.clientes.filter((c) => String(c.nombre_completo || c.documento_identidad || "").trim() !== "")
+    ? cloudData.clientes.filter((c) => c && String(c.nombre_completo || c.documento_identidad || "").trim() !== "")
     : [];
   const clientes = validClients.map((c) => ({
     id_cliente: String(c.id_cliente || ""),
@@ -1031,11 +1114,13 @@ function hydrateDatabaseFromSheets(cloudData) {
     telefono: String(c.telefono || ""),
     direccion: String(c.direccion || ""),
     tipo_cliente: String(c.tipo_cliente || "Particular"),
+    fecha_registro: cleanDateISO(c.fecha_registro || "", false),
+    notas: String(c.notas || ""),
     es_taller_aliado: String(c.tipo_cliente || "").toLowerCase().includes("aliado")
   }));
 
   const validOrders = Array.isArray(cloudData.ordenes)
-    ? cloudData.ordenes.filter((o) => String(o.codigo_troquel || o.id_orden || "").trim() !== "")
+    ? cloudData.ordenes.filter((o) => o && String(o.codigo_troquel || o.id_orden || "").trim() !== "")
     : [];
   const ordenes = validOrders.map((o) => {
     const motorObj = safeJsonParse(o.datos_motor_json || o.datos_motor, {
@@ -1046,7 +1131,7 @@ function hydrateDatabaseFromSheets(cloudData) {
       observaciones: ""
     });
     const qcMeta = safeJsonParse(o.qc_checklist_json, {});
-    const fotosPieza = safeJsonParse(o.galeria_fotos_pieza_json || o.galeria_fotos_pieza, [DEMO_PHOTOS.camaraCorsa]);
+    const fotosPieza = safeJsonParse(o.galeria_fotos_pieza_json || o.galeria_fotos_pieza, []);
     const fotosRep = safeJsonParse(o.galeria_fotos_repuestos_json || o.galeria_fotos_repuestos, []);
     const isEntregado = String(o.estado_actual || "") === "entregado";
     const troquelClean = String(o.codigo_troquel || o.id_orden || "").replace(/^ORD-/i, "");
@@ -1057,6 +1142,7 @@ function hydrateDatabaseFromSheets(cloudData) {
       documento_cliente: String(o.documento_cliente || ""),
       nombre_cliente: String(o.nombre_cliente || ""),
       telefono_cliente: String(o.telefono_cliente || ""),
+      direccion_cliente: String(motorObj.direccion_cliente || ""),
       codigo_troquel: troquelClean,
       datos_motor: {
         tipo_pieza: motorObj.tipo_pieza || "Cámara / Culata",
@@ -1067,6 +1153,9 @@ function hydrateDatabaseFromSheets(cloudData) {
       },
       galeria_fotos_pieza: Array.isArray(fotosPieza) && fotosPieza.length ? fotosPieza : [DEMO_PHOTOS.camaraCorsa],
       galeria_fotos_repuestos: Array.isArray(fotosRep) ? fotosRep : [],
+      repuestos_comprados_taller: Boolean(motorObj.repuestos_comprados_taller),
+      items_repuestos: Array.isArray(motorObj.items_repuestos) ? motorObj.items_repuestos : [],
+      monto_repuestos: Number(motorObj.monto_repuestos) || 0,
       estado_actual: String(o.estado_actual || "diagnostico_presupuesto"),
       subestado_ejecucion: String(o.subestado_ejecucion || "pendiente"),
       tipo_condicion_pago: String(o.tipo_condicion_pago || "pendiente_definir"),
@@ -1081,13 +1170,18 @@ function hydrateDatabaseFromSheets(cloudData) {
       devuelto_calidad: Boolean(motorObj.devuelto_calidad || qcMeta.devuelto_calidad),
       motivo_rechazo_qc: String(motorObj.motivo_rechazo_qc || qcMeta.motivo_rechazo_qc || ""),
       fecha_ingreso: cleanDateISO(o.fecha_ingreso, true),
+      fecha_inicio_produccion: cleanDateISO(o.fecha_inicio_produccion, true),
+      fecha_fin_produccion: cleanDateISO(o.fecha_fin_produccion, true),
+      fecha_entrega: cleanDateISO(o.fecha_entrega, true),
+      fecha_garantia_hasta: cleanDateISO(motorObj.fecha_garantia_hasta || "", false),
+      foto_entrega_final: String(o.foto_entrega_final || ""),
       tiempo_neto_minutos: Number(o.tiempo_neto_minutos) || 0,
       qc_aprobado: o.qc_aprobado === true || String(o.qc_aprobado).toLowerCase() === "true" || isEntregado
     };
   });
 
   const validSubtasks = Array.isArray(cloudData.subtareas)
-    ? cloudData.subtareas.filter((s) => String(s.descripcion_servicio || s.id_subtarea || "").trim() !== "")
+    ? cloudData.subtareas.filter((s) => s && String(s.descripcion_servicio || s.id_subtarea || "").trim() !== "")
     : [];
   const subtareas = validSubtasks.map((s) => ({
     id_subtarea: String(s.id_subtarea || ""),
@@ -1102,14 +1196,23 @@ function hydrateDatabaseFromSheets(cloudData) {
     minutos_acumulados: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
     tiempo_neto_min: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
     fecha_inicio: cleanDateISO(s.fecha_inicio, true),
+    fecha_fin: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
     fecha_terminado: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
     foto_terminado_url: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
     foto_evidencia_terminado: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
-    comision_pagada: s.comision_pagada === true || String(s.comision_pagada).toLowerCase() === "true"
+    checklist_salida: safeJsonParse(s.checklist_salida_json, {}),
+    comision_pagada: s.comision_pagada === true || String(s.comision_pagada).toLowerCase() === "true",
+    id_liquidacion: String(s.id_liquidacion || "")
   }));
 
   const validBitacora = Array.isArray(cloudData.bitacora)
-    ? cloudData.bitacora.filter((b) => String(b.mensaje || b.foto_adjunta_url || "").trim() !== "")
+    ? cloudData.bitacora.filter(
+        (b) =>
+          b &&
+          b.id_mensaje !== "SYS-META-STATE" &&
+          b.orden_id !== "__SYSTEM__" &&
+          String(b.mensaje || b.foto_adjunta_url || "").trim() !== ""
+      )
     : [];
   const bitacora = validBitacora.map((b) => ({
     id_mensaje: String(b.id_mensaje || ""),
@@ -1124,34 +1227,103 @@ function hydrateDatabaseFromSheets(cloudData) {
     fecha_hora: cleanDateISO(b.fecha_hora, true)
   }));
 
-  const validCatalogo = Array.isArray(cloudData.catalogo)
-    ? cloudData.catalogo.filter((c) => String(c.descripcion_servicio || c.nombre || "").trim() !== "")
-    : [];
-  const catalogo = validCatalogo.length ? validCatalogo : base.catalogo;
+  // Respetar 100% el catálogo guardado en Google Sheets (altas, ediciones y bajas)
+  const catalogo_servicios = Array.isArray(cloudData.catalogo)
+    ? cloudData.catalogo
+        .filter((c) => c && String(c.descripcion_servicio || c.nombre || "").trim() !== "")
+        .map((c) => {
+          const cid = String(c.id_servicio || c.id_cat || ("CAT-" + Math.random().toString(36).slice(2, 7)));
+          const extra = cExtras[cid] || {};
+          return {
+            id_cat: cid,
+            categoria: String(extra.categoria || c.categoria_pieza || c.categoria || "Rectificación General"),
+            nombre: String(c.descripcion_servicio || c.nombre || "").trim(),
+            precio_sugerido: Number(c.precio_sugerido_usd ?? c.precio_sugerido ?? 0),
+            comision_sugerida: Number(c.comision_tecnico_usd ?? c.comision_sugerida ?? 0),
+            es_outsourcing: Boolean(extra.es_outsourcing),
+            taller_externo_nombre: String(extra.taller_externo_nombre || ""),
+            activo: c.activo !== false && String(c.activo).toLowerCase() !== "false"
+          };
+        })
+    : base.catalogo_servicios;
 
   const validFinanzas = Array.isArray(cloudData.finanzas)
-    ? cloudData.finanzas.filter((f) => String(f.concepto || f.id_movimiento || "").trim() !== "")
+    ? cloudData.finanzas.filter((f) => f && String(f.concepto || f.id_movimiento || "").trim() !== "")
     : [];
-  const finanzas = validFinanzas;
+  const finanzas_movimientos = validFinanzas.map((f) => {
+    const mid = String(f.id_movimiento || f.id_mov || ("MOV-" + Math.random().toString(36).slice(2, 7)));
+    const extra = fExtras[mid] || {};
+    return {
+      id_mov: mid,
+      fecha: cleanDateISO(f.fecha_hora || f.fecha || new Date().toISOString(), false),
+      tipo: String(f.tipo_movimiento || f.tipo || "ingreso").toLowerCase(),
+      categoria: String(f.categoria_cuenta || f.categoria || "General"),
+      concepto: String(f.concepto || ""),
+      monto: Number(f.monto_usd ?? f.monto ?? 0),
+      metodo: String(f.metodo_pago || f.metodo || "efectivo"),
+      cuenta: String(extra.cuenta || ""),
+      referencia: String(extra.referencia || f.referencia || ""),
+      comprobante_foto: String(f.comprobante_foto || ""),
+      registrado_por: String(f.registrado_por || ""),
+      orden_id: String(f.orden_id || "-"),
+      codigo_troquel: String(f.codigo_troquel || "-")
+    };
+  });
 
   const validAsistencia = Array.isArray(cloudData.asistencia)
-    ? cloudData.asistencia.filter((a) => String(a.nombre_usuario || a.nombre || "").trim() !== "")
+    ? cloudData.asistencia.filter((a) => a && String(a.nombre_usuario || a.nombre || "").trim() !== "")
     : [];
-  const asistencia = validAsistencia;
+  const asistencias = validAsistencia.map((a) => {
+    const aid = String(a.id_asistencia || a.id_asist || ("ASI-" + Math.random().toString(36).slice(2, 7)));
+    const extra = aExtras[aid] || {};
+    return {
+      id_asist: aid,
+      usuario_id: String(a.usuario_id || ""),
+      nombre: String(a.nombre_usuario || a.nombre || ""),
+      fecha: cleanDateISO(a.fecha || new Date().toISOString(), false),
+      hora_entrada: cleanTimeHuman(a.hora_registro || a.hora_entrada || "Activo"),
+      hora_salida: String(extra.hora_salida || ""),
+      hora_salida_almuerzo: String(extra.hora_salida_almuerzo || ""),
+      hora_regreso_almuerzo: String(extra.hora_regreso_almuerzo || ""),
+      es_tardanza: Boolean(extra.es_tardanza),
+      metodo_registro: String(extra.metodo_registro || ""),
+      estado: String(a.observacion || a.estado || "Presente"),
+      observacion: String(a.turno_modalidad || "Jornada Completa")
+    };
+  });
+
+  // Conservar configuración, tasas vivas y metadatos persistidos en la nube (o en memoria actual si aún no hay meta)
+  const mergedConfig = {
+    ...base.config,
+    ...(db && db.config ? db.config : {}),
+    ...(meta.config || {})
+  };
+  // Si en memoria ya tenemos tasas en vivo del día y en meta siguen las default (45.80/52.40), mantener las vivas
+  if (db && db.config && db.config.tasaFechaActualizacion && (!meta.config || !meta.config.tasaFechaActualizacion)) {
+    mergedConfig.tasaBcv = db.config.tasaBcv;
+    mergedConfig.tasaBinance = db.config.tasaBinance;
+    mergedConfig.tasaFechaActualizacion = db.config.tasaFechaActualizacion;
+  }
 
   return normalizeDatabaseSchema({
     ...base,
+    config: mergedConfig,
+    config_taller: meta.config_taller || (db && db.config_taller) || base.config_taller,
+    text_customizations: meta.text_customizations && Object.keys(meta.text_customizations).length
+      ? meta.text_customizations
+      : ((db && db.text_customizations) || {}),
+    finanzas_categorias: meta.finanzas_categorias || (db && db.finanzas_categorias) || base.finanzas_categorias,
+    cuentas_por_pagar: Array.isArray(meta.cuentas_por_pagar) ? meta.cuentas_por_pagar : [],
+    inventario_repuestos: Array.isArray(meta.inventario_repuestos) ? meta.inventario_repuestos : [],
+    movimientos_inventario: Array.isArray(meta.movimientos_inventario) ? meta.movimientos_inventario : [],
     usuarios,
     clientes,
     ordenes,
     subtareas,
     bitacora,
-    catalogo,
-    catalogo_servicios: undefined,
-    finanzas,
-    finanzas_movimientos: undefined,
-    asistencia,
-    asistencias: undefined
+    catalogo_servicios,
+    finanzas_movimientos,
+    asistencias
   });
 }
 
@@ -1160,60 +1332,134 @@ function updateCloudSyncBadge(state, detailText) {
   if (detailText) lastCloudSyncTime = detailText;
   const badgeEl = document.getElementById("cloud-sync-badge-label");
   const iconEl = document.getElementById("cloud-sync-badge-icon");
-  const btnEl = document.getElementById("btn-header-cloud-sync");
-  if (!badgeEl || !iconEl || !btnEl) return;
+  const btnEl = document.getElementById("btn-sidebar-cloud-sync") || document.getElementById("btn-header-cloud-sync");
+  if (!badgeEl) return;
 
   if (state === "syncing") {
-    iconEl.className = "fas fa-sync fa-spin";
-    badgeEl.textContent = "Sincronizando Sheets...";
-    btnEl.style.borderColor = "rgba(245,196,0,0.6)";
+    if (iconEl) iconEl.className = "fas fa-sync fa-spin";
+    badgeEl.textContent = "Guardando en Sheets...";
+    if (btnEl) btnEl.style.borderColor = "rgba(245,196,0,0.6)";
   } else if (state === "error") {
-    iconEl.className = "fas fa-exclamation-triangle";
+    if (iconEl) iconEl.className = "fas fa-exclamation-triangle";
     badgeEl.textContent = "Modo Local (Offline)";
-    btnEl.style.borderColor = "rgba(239,68,68,0.6)";
+    if (btnEl) btnEl.style.borderColor = "rgba(239,68,68,0.6)";
   } else {
-    iconEl.className = "fas fa-cloud-check";
+    if (iconEl) iconEl.className = "fas fa-cloud";
     badgeEl.textContent = "Sheets Conectado";
-    btnEl.style.borderColor = "rgba(34,197,94,0.65)";
+    if (btnEl) btnEl.style.borderColor = "rgba(34,197,94,0.65)";
   }
 }
 
-async function pushToGoogleSheets(silent = true) {
+async function _executeSingleCloudPush(silent = true) {
   if (!GAS_API_URL) return false;
+  cloudPushInFlight = true;
+  cloudPushPending = false;
   updateCloudSyncBadge("syncing");
+  let lastOk = false;
   try {
-    const payload = prepareSheetsPayload(db);
-    const res = await fetch(GAS_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "push_state", payload })
-    });
-    const json = await res.json();
-    if (json && json.success) {
-      const stamp = (json.data && json.data.savedAt) || new Date().toLocaleTimeString();
-      updateCloudSyncBadge("online", stamp);
-      if (!silent) showToast(`Datos guardados en Google Sheets (${stamp})`);
-      return true;
-    }
-    throw new Error((json && json.error) || "Respuesta no válida de Sheets");
+    do {
+      cloudPushPending = false;
+      const payload = prepareSheetsPayload(db);
+      const res = await fetch(GAS_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "push_state", payload })
+      });
+      const json = await res.json();
+      if (json && json.success) {
+        lastOk = true;
+        lastCloudPushDoneTs = Date.now();
+        const stamp = (json.data && json.data.savedAt) || new Date().toLocaleTimeString();
+        updateCloudSyncBadge("online", stamp);
+        if (!silent && !cloudPushPending) showToast(`Datos guardados en Google Sheets (${stamp})`);
+      } else {
+        throw new Error((json && json.error) || "Respuesta no válida de Sheets");
+      }
+    } while (cloudPushPending);
+    return lastOk;
   } catch (err) {
     console.warn("Aviso al sincronizar hacia Google Sheets:", err);
     updateCloudSyncBadge("error");
     if (!silent) showToast("No se pudo conectar con Google Sheets. Guardado en memoria local.", "error");
     return false;
+  } finally {
+    cloudPushInFlight = false;
   }
+}
+
+function queueCloudPush(silent = true) {
+  if (!GAS_API_URL) return;
+  cloudPushPending = true;
+  if (cloudPushInFlight) {
+    // Ya hay una escritura en curso; al terminar enviará automáticamente la versión más reciente
+    return;
+  }
+  if (cloudPushDebounceTimer) clearTimeout(cloudPushDebounceTimer);
+  cloudPushDebounceTimer = setTimeout(() => {
+    cloudPushDebounceTimer = null;
+    _executeSingleCloudPush(silent);
+  }, 350);
+}
+
+async function flushCloudPush(silent = false) {
+  if (!GAS_API_URL) return false;
+  if (cloudPushDebounceTimer) {
+    clearTimeout(cloudPushDebounceTimer);
+    cloudPushDebounceTimer = null;
+  }
+  cloudPushPending = true;
+  if (cloudPushInFlight) {
+    // Esperar a que termine la cola activa (que consumirá cloudPushPending)
+    const maxWaitStart = Date.now();
+    while (cloudPushInFlight && Date.now() - maxWaitStart < 20000) {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return cloudSyncStatus === "online";
+  }
+  return await _executeSingleCloudPush(silent);
+}
+
+async function pushToGoogleSheets(silent = true) {
+  return await flushCloudPush(silent);
 }
 
 async function syncFromGoogleSheets(silent = false) {
   if (!GAS_API_URL) return false;
+
+  // En sincronizaciones automáticas en segundo plano, JAMÁS interferir si hay cambios locales guardándose o recién guardados
+  if (silent) {
+    if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+      return false;
+    }
+    if (lastCloudPushDoneTs && Date.now() - lastCloudPushDoneTs < 3500) {
+      return false;
+    }
+  } else if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+    // Si el usuario pulsó manualmente "Traer Datos", esperar a que termine de guardar cambios pendientes
+    await flushCloudPush(true);
+  }
+
+  const pullStartTs = Date.now();
   updateCloudSyncBadge("syncing");
   try {
     const res = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
     const json = await res.json();
     if (json && json.success && json.data) {
-      // Verificación de actualización remota obligatoria para todos los equipos
-      if (json.data.config && json.data.config.forzar_actualizacion_version) {
-        const remoteForcedVer = json.data.config.forzar_actualizacion_version;
+      // PROTECCIÓN ANTI-SOBREESCRITURA: si el usuario hizo un cambio local mientras esta lectura viajaba, descartarla
+      if (silent && (cloudPushInFlight || cloudPushPending || lastLocalMutationTs > pullStartTs)) {
+        updateCloudSyncBadge("online");
+        return false;
+      }
+
+      hasSyncedFromCloudOnce = true;
+
+      // Verificación de actualización remota obligatoria para todos los equipos (soporta config directo y SYS-META-STATE)
+      const metaFromCloud = extractCloudMetaState(json.data);
+      const remoteForcedVer =
+        (json.data.config && json.data.config.forzar_actualizacion_version) ||
+        (metaFromCloud && metaFromCloud.config && metaFromCloud.config.forzar_actualizacion_version) ||
+        "";
+      if (remoteForcedVer) {
         const localForcedVer = localStorage.getItem("RENACER_FORCED_VERSION");
         if (localForcedVer && remoteForcedVer !== localForcedVer) {
           localStorage.setItem("RENACER_FORCED_VERSION", remoteForcedVer);
@@ -1224,13 +1470,16 @@ async function syncFromGoogleSheets(silent = false) {
         localStorage.setItem("RENACER_FORCED_VERSION", remoteForcedVer);
       }
 
-      const hasInitializedCatalogOrUsers =
+      const cloudHasAnyData =
         (Array.isArray(json.data.usuarios) && json.data.usuarios.length > 0) ||
-        (Array.isArray(json.data.catalogo) && json.data.catalogo.length > 0);
+        (Array.isArray(json.data.catalogo) && json.data.catalogo.length > 0) ||
+        (Array.isArray(json.data.clientes) && json.data.clientes.length > 0) ||
+        (Array.isArray(json.data.ordenes) && json.data.ordenes.length > 0) ||
+        (Array.isArray(json.data.finanzas) && json.data.finanzas.length > 0);
 
-      if (hasInitializedCatalogOrUsers || (Array.isArray(json.data.ordenes) && json.data.ordenes.length > 0)) {
+      if (cloudHasAnyData) {
         db = hydrateDatabaseFromSheets(json.data);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+        saveLocalOnly();
         populateLoginSelect();
         if (currentUser) {
           const updatedMe = db.usuarios.find((u) => u.id_usuario === currentUser.id_usuario);
@@ -1241,7 +1490,8 @@ async function syncFromGoogleSheets(silent = false) {
         if (!silent) showToast(`Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
         return true;
       } else {
-        await pushToGoogleSheets(silent);
+        // Solo sembrar la nube si Google Sheets está 100% virgen (sin usuarios, ni catálogo, ni clientes, ni órdenes)
+        await flushCloudPush(silent);
         return true;
       }
     }
@@ -1351,9 +1601,10 @@ function clearAllTestOrders() {
         db.config.correlativoTroquelActual = 5022;
         db.config.correlativoOrdenActual = 1008;
       }
-      saveDatabase();
+      saveLocalOnly();
+      lastLocalMutationTs = Date.now();
       showToast("Limpiando y sincronizando con Google Sheets...", "info");
-      await pushToGoogleSheets(false);
+      await flushCloudPush(false);
       closeModal();
       if (currentUser) renderApp();
       showToast("Sistema en cero real sincronizado con Google Sheets.");
@@ -1382,10 +1633,11 @@ function deleteOrder(orderId) {
       if (Array.isArray(db.finanzas)) {
         db.finanzas = db.finanzas.filter((f) => f.orden_id !== orderId);
       }
-      saveDatabase();
-      await pushToGoogleSheets(true);
+      saveLocalOnly();
+      lastLocalMutationTs = Date.now();
       closeModal();
       renderApp();
+      await flushCloudPush(true);
       showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada y sincronizada.`);
     }
   });
@@ -1416,12 +1668,11 @@ function loadDatabase() {
   return initial;
 }
 
-function saveDatabase() {
+function saveLocalOnly() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   } catch (e) {
     console.error("Error al guardar en localStorage (posible exceso de cuota):", e);
-    // Si la cuota se satura por fotos, podar base64 antiguas de bitácora manteniendo los textos
     try {
       const cloned = JSON.parse(JSON.stringify(db));
       if (Array.isArray(cloned.bitacora)) {
@@ -1436,7 +1687,12 @@ function saveDatabase() {
       console.warn("No se pudo guardar ni con optimización de fotos:", err2);
     }
   }
-  pushToGoogleSheets(true);
+}
+
+function saveDatabase() {
+  saveLocalOnly();
+  lastLocalMutationTs = Date.now();
+  queueCloudPush(true);
 }
 
 function resetDemoDatabase() {
@@ -4026,8 +4282,13 @@ function toggleSidebarCollapse() {
 
 async function forceAppRefresh() {
   try {
+    // Asegurar que cualquier cambio recién hecho termine de guardarse en Google Sheets antes de recargar
+    if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+      showToast("Guardando últimos cambios en Google Sheets antes de recargar...", "info");
+      await flushCloudPush(true);
+    }
     localStorage.removeItem("RECTIFICADORA_RENACER_DB_V6");
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem("RECTIFICADORA_RENACER_DB_V7");
     if ("caches" in window) {
       const cacheNames = await caches.keys();
       await Promise.all(cacheNames.map((name) => caches.delete(name)));
@@ -6238,7 +6499,7 @@ function saveCustomTexts() {
   isTextEditMode = false;
   removeInPlaceTextEditingFromScreen();
   renderApp();
-  syncToGoogleSheets(true);
+  flushCloudPush(true);
   showToast("¡Textos y avisos personalizados guardados exitosamente!", "success");
 }
 
@@ -7283,7 +7544,7 @@ function saveNewOrder(advanceToService = false) {
   let clientObj = db.clientes.find((c) => c.documento_identidad.toUpperCase() === doc);
   if (!clientObj) {
     clientObj = {
-      id_cliente: "CLI-" + (100 + db.clientes.length + 1),
+      id_cliente: "CLI-" + Date.now().toString().slice(-6),
       documento_identidad: doc,
       nombre_completo: name,
       telefono: phone,
@@ -11189,7 +11450,6 @@ function saveNewExternalWorkshop() {
 
   db.usuarios.push(newWorkshop);
   saveDatabase();
-  pushToGoogleSheets(true);
   closeModal();
   renderApp();
   showToast("Taller externo " + name + " registrado exitosamente y sincronizado con la nube.");
@@ -11871,7 +12131,9 @@ function openAddWorkerModal() {
             <option value="tecnico">Técnico / Operador (Pago por Destajo)</option>
             <option value="jefe_taller">Jefe de Taller / Supervisor</option>
             <option value="recepcion">Recepción / Atención al Cliente</option>
+            <option value="inventario">Inventario y Repuestos</option>
             <option value="admin">Administrador del Sistema</option>
+            <option value="outsourcing">Taller Externo (Outsourcing)</option>
           </select>
         </div>
         <div class="form-field">
@@ -11906,28 +12168,34 @@ function saveNewWorker() {
   }
 
   const roleLabels = {
-    tecnico: "Técnico de Rectificación",
-    recepcion: "Recepción y Presupuesto",
-    jefe_taller: "Jefe de Taller",
-    admin: "Administrador del Sistema"
+    tecnico: "Trabajador de Taller",
+    recepcion: "Recepción e Ingreso",
+    inventario: "Inventario y Repuestos",
+    jefe_taller: "Jefe de Taller / Gerencia",
+    admin: "Administrador del Sistema",
+    outsourcing: "Taller Externo (Outsourcing)"
   };
 
+  const isExt = role === "outsourcing";
   db.usuarios.push({
-    id_usuario: "USR-" + Date.now().toString().slice(-4),
+    id_usuario: (isExt ? "EXT-" : "USR-") + Date.now().toString().slice(-6),
     nombre: name,
     rol: role,
-    rol_label: roleLabels[role] || "Técnico",
+    rol_label: roleLabels[role] || "Trabajador de Taller",
+    tipo: isExt ? "taller_externo" : "personal_interno",
+    es_externo: isExt,
     especialidad: spec,
     telefono: phone || "0414-0000000",
-    pin: pin || "1234",
-    activo: true
+    pin: pin || "123456",
+    activo: true,
+    modalidad_horario: isExt ? "Tercerizado" : "Jornada Completa"
   });
 
   saveDatabase();
   populateLoginSelect();
   closeModal();
   renderApp();
-  showToast(`Perfil ${name} agregado al equipo de Rectificadora Renacer.`);
+  showToast(`Perfil ${name} agregado y sincronizado con la nube.`);
 }
 
 function openEditWorkerModal(userId) {
@@ -11941,15 +12209,15 @@ function openEditWorkerModal(userId) {
       <div class="form-grid-2">
         <div class="form-field">
           <label>Nombre Completo *</label>
-          <input type="text" id="edit-worker-name" value="${u.nombre}" required />
+          <input type="text" id="edit-worker-name" value="${escapeHtml(u.nombre)}" required />
         </div>
         <div class="form-field">
           <label>Especialidad / Cargo *</label>
-          <input type="text" id="edit-worker-spec" value="${u.especialidad || ""}" required />
+          <input type="text" id="edit-worker-spec" value="${escapeHtml(u.especialidad || "")}" required />
         </div>
         <div class="form-field">
           <label>Teléfono / WhatsApp</label>
-          <input type="text" id="edit-worker-phone" value="${u.telefono || ""}" />
+          <input type="text" id="edit-worker-phone" value="${escapeHtml(u.telefono || "")}" />
         </div>
         <div class="form-field">
           <label>Rol en el Sistema</label>
@@ -11957,12 +12225,14 @@ function openEditWorkerModal(userId) {
             <option value="tecnico" ${u.rol === "tecnico" ? "selected" : ""}>Técnico / Operador (Destajo)</option>
             <option value="jefe_taller" ${u.rol === "jefe_taller" ? "selected" : ""}>Jefe de Taller / Supervisor</option>
             <option value="recepcion" ${u.rol === "recepcion" ? "selected" : ""}>Recepción y Presupuesto</option>
+            <option value="inventario" ${u.rol === "inventario" ? "selected" : ""}>Inventario y Repuestos</option>
             <option value="admin" ${u.rol === "admin" ? "selected" : ""}>Administrador del Sistema</option>
+            <option value="outsourcing" ${u.rol === "outsourcing" || u.es_externo ? "selected" : ""}>Taller Externo (Outsourcing)</option>
           </select>
         </div>
         <div class="form-field">
           <label>PIN de Seguridad Confidencial *</label>
-          <input type="text" id="edit-worker-pin" value="${u.pin || ""}" placeholder="PIN numérico" maxlength="8" required />
+          <input type="text" id="edit-worker-pin" value="${escapeHtml(u.pin || "")}" placeholder="PIN numérico" maxlength="8" required />
         </div>
         <div class="form-field">
           <label>Estado en el Taller</label>
@@ -12003,17 +12273,22 @@ function saveEditedWorker(userId) {
   }
 
   const roleLabels = {
-    tecnico: "Técnico de Rectificación",
-    recepcion: "Recepción y Presupuesto",
-    jefe_taller: "Jefe de Taller",
-    admin: "Administrador del Sistema"
+    tecnico: "Trabajador de Taller",
+    recepcion: "Recepción e Ingreso",
+    inventario: "Inventario y Repuestos",
+    jefe_taller: "Jefe de Taller / Gerencia",
+    admin: "Administrador del Sistema",
+    outsourcing: "Taller Externo (Outsourcing)"
   };
 
+  const isExt = role === "outsourcing";
   u.nombre = name;
   u.especialidad = spec;
   u.telefono = phone;
   u.rol = role;
   u.rol_label = roleLabels[role] || u.rol_label;
+  u.tipo = isExt ? "taller_externo" : "personal_interno";
+  u.es_externo = isExt;
   u.pin = pin;
   u.activo = active;
 
@@ -12028,22 +12303,41 @@ function saveEditedWorker(userId) {
   populateLoginSelect();
   closeModal();
   renderApp();
-  showToast(`Perfil de ${name} actualizado correctamente.`);
+  showToast(`Perfil de ${name} actualizado y sincronizado con la nube.`);
 }
 
 function deleteWorker(userId) {
   const u = db.usuarios.find((x) => x.id_usuario === userId);
   if (!u) return;
-  if (u.id_usuario === currentUser.id_usuario) {
+  if (currentUser && u.id_usuario === currentUser.id_usuario) {
     showToast("No puedes eliminar el perfil con el que tienes sesión activa.", "error");
     return;
   }
-  if (!confirm(`¿Seguro que deseas eliminar el perfil de "${u.nombre}"?`)) return;
-  db.usuarios = db.usuarios.filter((x) => x.id_usuario !== userId);
-  saveDatabase();
-  populateLoginSelect();
-  renderApp();
-  showToast(`Perfil ${u.nombre} eliminado.`);
+  if (u.rol === "admin") {
+    const otherAdmins = db.usuarios.filter((x) => x.id_usuario !== userId && x.rol === "admin" && x.activo !== false);
+    if (otherAdmins.length === 0) {
+      showToast("No puedes eliminar al único Administrador activo del sistema.", "error");
+      return;
+    }
+  }
+  Swal.fire({
+    title: `¿Eliminar a "${u.nombre}"?`,
+    text: "Este perfil se eliminará permanentemente tanto aquí como en Google Sheets para todos los dispositivos.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    db.usuarios = db.usuarios.filter((x) => x.id_usuario !== userId);
+    saveDatabase();
+    populateLoginSelect();
+    renderApp();
+    await flushCloudPush(true);
+    showToast(`Perfil ${u.nombre} eliminado permanentemente.`);
+  });
 }
 
 /* ---------- DÍAS ACTIVOS Y PROYECTOS TRABAJADOS (SIN HORARIO FIJO DE ENTRADA/SALIDA) ---------- */
@@ -12666,19 +12960,30 @@ function resetLedgerFilters() {
 }
 
 function deleteFinanceMovement(movId) {
-  if (!confirm("¿Eliminar este movimiento del Libro Diario?")) return;
-  db.finanzas_movimientos = (db.finanzas_movimientos || []).filter(
-    (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
-  );
-  if (Array.isArray(db.finanzas)) {
-    db.finanzas = db.finanzas.filter(
+  Swal.fire({
+    title: "¿Eliminar este movimiento del Libro Diario?",
+    text: "El movimiento se eliminará permanentemente aquí y en Google Sheets.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    db.finanzas_movimientos = (db.finanzas_movimientos || []).filter(
       (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
     );
-  }
-  saveDatabase();
-  pushToGoogleSheets(true);
-  renderApp();
-  showToast("Movimiento eliminado del Libro Diario y sincronizado.");
+    if (Array.isArray(db.finanzas)) {
+      db.finanzas = db.finanzas.filter(
+        (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
+      );
+    }
+    saveDatabase();
+    renderApp();
+    await flushCloudPush(true);
+    showToast("Movimiento eliminado del Libro Diario y sincronizado.");
+  });
 }
 
 function openAddFinanceCategoryModal() {
@@ -13640,11 +13945,23 @@ function saveEditedClient(clientId) {
 function deleteClient(clientId) {
   const c = db.clientes.find((x) => x.id_cliente === clientId);
   if (!c) return;
-  if (!confirm(`¿Eliminar al cliente "${c.nombre_completo}" del directorio?`)) return;
-  db.clientes = db.clientes.filter((x) => x.id_cliente !== clientId);
-  saveDatabase();
-  renderApp();
-  showToast(`Cliente ${c.nombre_completo} eliminado.`);
+  Swal.fire({
+    title: `¿Eliminar a "${c.nombre_completo}"?`,
+    text: "Este cliente se eliminará del directorio tanto en tu equipo como en Google Sheets.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar cliente"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    db.clientes = db.clientes.filter((x) => x.id_cliente !== clientId);
+    saveDatabase();
+    renderApp();
+    await flushCloudPush(true);
+    showToast(`Cliente ${c.nombre_completo} eliminado permanentemente.`);
+  });
 }
 
 /* ---------- CRUD COMPLETO DEL CATÁLOGO DE SERVICIOS Y COMISIONES ---------- */
@@ -13803,11 +14120,23 @@ function saveEditedCatalogService(catId) {
 function deleteCatalogService(catId) {
   const s = db.catalogo_servicios.find((x) => x.id_cat === catId);
   if (!s) return;
-  if (!confirm(`¿Eliminar el servicio "${s.nombre}" del catálogo?`)) return;
-  db.catalogo_servicios = db.catalogo_servicios.filter((x) => x.id_cat !== catId);
-  saveDatabase();
-  renderApp();
-  showToast(`Servicio "${s.nombre}" eliminado del catálogo.`);
+  Swal.fire({
+    title: `¿Eliminar "${s.nombre}" del catálogo?`,
+    text: "Se eliminará permanentemente del catálogo aquí y en Google Sheets.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar servicio"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    db.catalogo_servicios = db.catalogo_servicios.filter((x) => x.id_cat !== catId);
+    saveDatabase();
+    renderApp();
+    await flushCloudPush(true);
+    showToast(`Servicio "${s.nombre}" eliminado del catálogo permanentemente.`);
+  });
 }
 
 
@@ -15329,10 +15658,6 @@ window.addEventListener("DOMContentLoaded", () => {
   // Verificación proactiva de versión y limpieza de caché
   checkAppVersionAndCache();
 
-  // Consulta automática de tasas de cambio oficiales (BCV / Paralelo) en vivo
-  fetchLiveExchangeRates(true);
-  setInterval(() => fetchLiveExchangeRates(true), 30 * 60 * 1000);
-
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
@@ -15340,16 +15665,36 @@ window.addEventListener("DOMContentLoaded", () => {
   // Cronómetro en tiempo real (Fase 3): actualiza cada segundo los trabajos "En Proceso"
   setInterval(tickLiveSubtaskTimers, 1000);
 
-  // Sincronización automática de fondo cada 30 segundos
-  setInterval(() => syncFromGoogleSheets(true), 30000);
+  // Sincronización automática de fondo cada 15 segundos (protegida contra colisiones de escritura)
+  setInterval(() => syncFromGoogleSheets(true), 15000);
 
-  // Sincronizar automáticamente en vivo al regresar a la pestaña o enfocar ventana
+  // Sincronizar automáticamente en vivo al regresar a la pestaña; al salir, empujar cualquier cambio pendiente
   window.addEventListener("visibilitychange", () => {
-    if (!document.hidden) syncFromGoogleSheets(true);
+    if (document.hidden) {
+      if (cloudPushPending || cloudPushDebounceTimer) {
+        flushCloudPush(true);
+      }
+    } else {
+      syncFromGoogleSheets(true);
+    }
   });
   window.addEventListener("focus", () => {
     syncFromGoogleSheets(true);
   });
+  window.addEventListener("beforeunload", (e) => {
+    if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+      flushCloudPush(true);
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+
+  // Secuencia segura de arranque: primero leer el estado real de Google Sheets y DESPUÉS consultar tasas BCV/Paralelo
+  const startInitialSync = async () => {
+    await syncFromGoogleSheets(true);
+    fetchLiveExchangeRates(true);
+    setInterval(() => fetchLiveExchangeRates(true), 30 * 60 * 1000);
+  };
 
   // RESTAURACIÓN AUTOMÁTICA DE SESIÓN (Persistencia en refresco / F5)
   const savedUserId = localStorage.getItem(SESSION_KEY);
@@ -15360,7 +15705,7 @@ window.addEventListener("DOMContentLoaded", () => {
       document.getElementById("login-view")?.classList.add("hidden");
       document.getElementById("workspace")?.classList.remove("hidden");
       renderApp();
-      syncFromGoogleSheets(true);
+      startInitialSync();
       return;
     }
   }
@@ -15368,5 +15713,5 @@ window.addEventListener("DOMContentLoaded", () => {
   // Si no hay sesión activa previa, mostrar pantalla de acceso limpia
   document.getElementById("workspace")?.classList.add("hidden");
   document.getElementById("login-view")?.classList.remove("hidden");
-  syncFromGoogleSheets(true);
+  startInitialSync();
 });
