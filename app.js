@@ -15,6 +15,9 @@
 
 const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V8";
 const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V6";
+const DIRTY_FLAG_KEY = "RECTIFICADORA_RENACER_DIRTY_V8";
+const CLOUD_REV_KEY = "RECTIFICADORA_RENACER_CLOUD_REV_V8";
+const LOCAL_BACKUPS_KEY = "RECTIFICADORA_RENACER_LOCAL_BACKUPS_V8";
 const DEFAULT_GAS_API_URL = "https://script.google.com/macros/s/AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA/exec";
 let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || DEFAULT_GAS_API_URL;
 if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA")) {
@@ -22,15 +25,42 @@ if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcU
   localStorage.setItem("RENACER_GAS_API_URL", DEFAULT_GAS_API_URL);
 }
 let lastCloudSyncTime = "Conectado";
-let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'error'
+let cloudSyncStatus = "online"; // 'online' | 'syncing' | 'pending' | 'error'
 let hasSyncedFromCloudOnce = false;
 let cloudPushInFlight = false;
 let cloudPushPending = false;
 let cloudPushDebounceTimer = null;
-let lastLocalMutationTs = 0;
+let cloudRetryTimer = null;
+let hasUnsyncedLocalChanges = Boolean(localStorage.getItem(DIRTY_FLAG_KEY));
+let lastKnownCloudRevision = Number(localStorage.getItem(CLOUD_REV_KEY) || "0") || 0;
+let cloudBackupsSupported = false;
+let lastLocalBackupSaveTs = 0;
+let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
 
-const CURRENT_APP_VERSION = "2026.11.20.v37";
+const CURRENT_APP_VERSION = "2026.11.20.v38";
+
+function getUserWeeklySalary(u) {
+  if (!u) return 0;
+  if (u.salario_fijo_semanal === undefined || u.salario_fijo_semanal === null || u.salario_fijo_semanal === "") {
+    return 0;
+  }
+  const n = Number(u.salario_fijo_semanal);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function isPartnerInManagementPayroll(u) {
+  if (!u || u.es_externo || u.rol === "outsourcing") return false;
+  if (u.en_nomina_gerencia === true) return true;
+  if (u.en_nomina_gerencia === false) return false;
+  return u.id_usuario === "USR-JESUS" || u.id_usuario === "USR-ENRIQUE" || u.id_usuario === "USR-JAVIER";
+}
+
+function isPartnerPayrollActive(u) {
+  if (!u) return false;
+  if (u.nomina_activa !== undefined) return u.nomina_activa !== false && String(u.nomina_activa).toLowerCase() !== "false";
+  return u.id_usuario !== "USR-JAVIER";
+}
 
 /* ==================== V31: SISTEMA DE PERSONALIZACIÓN DE TEXTOS Y AVISOS ==================== */
 const DEFAULT_TEXT_CUSTOMIZATIONS = {
@@ -324,6 +354,8 @@ function getInitialDatabase() {
         pin: "123456",
         telefono: "0414-6001122",
         salario_fijo_semanal: 100,
+        en_nomina_gerencia: true,
+        nomina_activa: true,
         huella_registrada: true,
         activo: true,
         modalidad_horario: "Tiempo Completo (Jefe de Taller)"
@@ -337,6 +369,8 @@ function getInitialDatabase() {
         pin: "111111",
         telefono: "0414-6003344",
         salario_fijo_semanal: 100,
+        en_nomina_gerencia: true,
+        nomina_activa: true,
         huella_registrada: false,
         activo: true,
         modalidad_horario: "Tiempo Completo (Jefe de Taller)"
@@ -355,14 +389,16 @@ function getInitialDatabase() {
       {
         id_usuario: "USR-JAVIER",
         nombre: "Javier Andrade",
-        rol: "inventario",
-        rol_label: "Inventario y Repuestos",
-        especialidad: "Control de Repuestos, Stock de Válvulas, Guías, Sellos y Empacaduras",
+        rol: "jefe_taller",
+        rol_label: "Gerencia",
+        especialidad: "Gerencia, Administración, Repuestos y Control General",
         pin: "333333",
         telefono: "0414-6005566",
-        salario_fijo_semanal: 80,
+        salario_fijo_semanal: 0,
+        en_nomina_gerencia: true,
+        nomina_activa: false,
         activo: true,
-        modalidad_horario: "Tiempo Completo (Inventario)"
+        modalidad_horario: "Gerencia (Inactivo en Nómina)"
       },
       {
         id_usuario: "USR-HAVELL",
@@ -488,6 +524,8 @@ function normalizeDatabaseSchema(d) {
       pin: "123456",
       telefono: "0414-6001122",
       salario_fijo_semanal: 100,
+      en_nomina_gerencia: true,
+      nomina_activa: true,
       huella_registrada: true,
       activo: true,
       modalidad_horario: "Tiempo Completo (Jefe de Taller)"
@@ -501,6 +539,8 @@ function normalizeDatabaseSchema(d) {
       pin: "111111",
       telefono: "0414-6003344",
       salario_fijo_semanal: 100,
+      en_nomina_gerencia: true,
+      nomina_activa: true,
       huella_registrada: false,
       activo: true,
       modalidad_horario: "Tiempo Completo (Jefe de Taller)"
@@ -519,14 +559,16 @@ function normalizeDatabaseSchema(d) {
     {
       id_usuario: "USR-JAVIER",
       nombre: "Javier Andrade",
-      rol: "inventario",
-      rol_label: "Inventario y Repuestos",
-      especialidad: "Control de Repuestos, Stock de Válvulas, Guías, Sellos y Empacaduras",
+      rol: "jefe_taller",
+      rol_label: "Gerencia",
+      especialidad: "Gerencia, Administración, Repuestos y Control General",
       pin: "333333",
       telefono: "0414-6005566",
-      salario_fijo_semanal: 80,
+      salario_fijo_semanal: 0,
+      en_nomina_gerencia: true,
+      nomina_activa: false,
       activo: true,
-      modalidad_horario: "Tiempo Completo (Inventario)"
+      modalidad_horario: "Gerencia (Inactivo en Nómina)"
     },
     {
       id_usuario: "USR-HAVELL",
@@ -612,11 +654,40 @@ function normalizeDatabaseSchema(d) {
   }
 
   d.usuarios.forEach((u) => {
-    if (u.salario_fijo_semanal === undefined && (u.rol === "admin" || u.rol === "jefe_taller")) {
-      u.salario_fijo_semanal = 100;
+    if (u.salario_fijo_semanal === undefined || u.salario_fijo_semanal === null || u.salario_fijo_semanal === "") {
+      if (u.id_usuario === "USR-JAVIER") {
+        u.salario_fijo_semanal = 0;
+      } else if (u.rol === "admin" || u.rol === "jefe_taller") {
+        u.salario_fijo_semanal = 100;
+      }
+    } else {
+      const parsedSal = Number(u.salario_fijo_semanal);
+      u.salario_fijo_semanal = Number.isFinite(parsedSal) && parsedSal >= 0 ? parsedSal : 0;
+    }
+    if (u.en_nomina_gerencia === undefined && (u.id_usuario === "USR-JESUS" || u.id_usuario === "USR-ENRIQUE" || u.id_usuario === "USR-JAVIER")) {
+      u.en_nomina_gerencia = true;
+    }
+    if (u.nomina_activa === undefined && u.en_nomina_gerencia) {
+      u.nomina_activa = u.id_usuario !== "USR-JAVIER";
     }
     if (u.huella_registrada === undefined) u.huella_registrada = false;
   });
+
+  // Migración única y respetuosa: elevar el perfil de Javier Andrade a Gerencia (inerte en nómina) si aún conservaba el rol antiguo de inventario
+  if (!d.config.migrations || typeof d.config.migrations !== "object") d.config.migrations = {};
+  if (!d.config.migrations.javier_gerencia_v38) {
+    const javier = d.usuarios.find((u) => u.id_usuario === "USR-JAVIER");
+    if (javier && javier.rol === "inventario") {
+      javier.rol = "jefe_taller";
+      javier.rol_label = "Gerencia";
+      javier.especialidad = "Gerencia, Administración, Repuestos y Control General";
+      javier.salario_fijo_semanal = 0;
+      javier.en_nomina_gerencia = true;
+      javier.nomina_activa = false;
+      javier.modalidad_horario = "Gerencia (Inactivo en Nómina)";
+    }
+    d.config.migrations.javier_gerencia_v38 = true;
+  }
 
   if (!d.config_taller) {
     d.config_taller = {
@@ -781,6 +852,32 @@ function safeJsonParse(val, fallback) {
   }
 }
 
+function sanitizeSheetsCellStr(val, maxChars = 44000) {
+  if (val === undefined || val === null) return "";
+  const str = typeof val === "string" ? val : JSON.stringify(val);
+  if (str.length <= maxChars) return str;
+  if (str.startsWith("data:image")) return "";
+  return str.slice(0, maxChars);
+}
+
+function sanitizeSheetsPhotoList(arr, maxChars = 42000) {
+  if (!Array.isArray(arr) || arr.length === 0) return "[]";
+  let list = arr.filter(Boolean);
+  let json = JSON.stringify(list);
+  if (json.length <= maxChars) return json;
+  // Mantener primero URLs externas/Drive y luego imágenes comprimidas que quepan en el límite de Google Sheets
+  const kept = [];
+  let size = 2;
+  for (const item of list) {
+    const s = String(item || "");
+    if (s.length > 38000 && s.startsWith("data:image")) continue;
+    if (size + s.length + 4 > maxChars) break;
+    kept.push(s);
+    size += s.length + 4;
+  }
+  return JSON.stringify(kept);
+}
+
 /* Convierte el estado en memoria al esquema exacto de las 8 pestañas de Google Sheets (Code.gs) */
 function prepareSheetsPayload(sourceDb) {
   const d = normalizeDatabaseSchema(sourceDb || db);
@@ -817,9 +914,9 @@ function prepareSheetsPayload(sourceDb) {
       nombre_cliente: o.nombre_cliente || "",
       telefono_cliente: o.telefono_cliente || "",
       codigo_troquel: String(o.codigo_troquel || ""),
-      datos_motor_json: JSON.stringify(motorPayload),
-      galeria_fotos_pieza_json: JSON.stringify(o.galeria_fotos_pieza || []),
-      galeria_fotos_repuestos_json: JSON.stringify(o.galeria_fotos_repuestos || []),
+      datos_motor_json: sanitizeSheetsCellStr(JSON.stringify(motorPayload), 44000),
+      galeria_fotos_pieza_json: sanitizeSheetsPhotoList(o.galeria_fotos_pieza || [], 42000),
+      galeria_fotos_repuestos_json: sanitizeSheetsPhotoList(o.galeria_fotos_repuestos || [], 42000),
       estado_actual: o.estado_actual || "diagnostico_presupuesto",
       subestado_ejecucion: o.subestado_ejecucion || "pendiente",
       tipo_condicion_pago: o.tipo_condicion_pago || "pendiente_definir",
@@ -827,7 +924,7 @@ function prepareSheetsPayload(sourceDb) {
       monto_abonado: Number(o.monto_abonado) || 0,
       saldo_pendiente: Number(o.saldo_pendiente) || 0,
       metodo_pago: o.metodo_pago || "n/a",
-      comprobante_pago_foto: o.comprobante_pago_foto || "",
+      comprobante_pago_foto: sanitizeSheetsCellStr(o.comprobante_pago_foto || "", 44000),
       prioridad_alta: Boolean(o.prioridad_alta),
       fecha_ingreso: o.fecha_ingreso || nowStr.slice(0, 16),
       fecha_inicio_produccion: o.fecha_inicio_produccion || "",
@@ -840,7 +937,7 @@ function prepareSheetsPayload(sourceDb) {
         devuelto_calidad: Boolean(o.devuelto_calidad),
         motivo_rechazo_qc: o.motivo_rechazo_qc || ""
       }),
-      foto_entrega_final: o.foto_entrega_final || "",
+      foto_entrega_final: sanitizeSheetsCellStr(o.foto_entrega_final || "", 44000),
       ultima_actualizacion: nowStr
     };
   });
@@ -860,7 +957,7 @@ function prepareSheetsPayload(sourceDb) {
       fecha_inicio: s.fecha_inicio || "",
       fecha_fin: s.fecha_fin || s.fecha_terminado || "",
       tiempo_neto_min: Number(s.minutos_acumulados ?? s.tiempo_neto_min ?? 0),
-      foto_evidencia_terminado: s.foto_terminado_url || s.foto_evidencia_terminado || "",
+      foto_evidencia_terminado: sanitizeSheetsCellStr(s.foto_terminado_url || s.foto_evidencia_terminado || "", 44000),
       checklist_salida_json: JSON.stringify(s.checklist_salida || {}),
       comision_pagada: Boolean(s.comision_pagada),
       id_liquidacion: s.id_liquidacion || ""
@@ -871,7 +968,9 @@ function prepareSheetsPayload(sourceDb) {
   (d.usuarios || []).forEach((u) => {
     if (!u || !u.id_usuario) return;
     usuariosExtras[u.id_usuario] = {
-      salario_fijo_semanal: u.salario_fijo_semanal,
+      salario_fijo_semanal: u.salario_fijo_semanal !== undefined && u.salario_fijo_semanal !== null ? Number(u.salario_fijo_semanal) : undefined,
+      en_nomina_gerencia: u.en_nomina_gerencia !== undefined ? Boolean(u.en_nomina_gerencia) : undefined,
+      nomina_activa: u.nomina_activa !== undefined ? Boolean(u.nomina_activa) : undefined,
       direccion: u.direccion || "",
       huella_registrada: Boolean(u.huella_registrada),
       es_externo: Boolean(u.es_externo || u.rol === "outsourcing" || u.tipo === "taller_externo"),
@@ -897,7 +996,9 @@ function prepareSheetsPayload(sourceDb) {
     if (!mid) return;
     finanzasExtras[mid] = {
       cuenta: m.cuenta || "",
-      referencia: m.referencia || ""
+      referencia: m.referencia || "",
+      usuario_id: m.usuario_id || "",
+      liquidado_en_nomina: Boolean(m.liquidado_en_nomina)
     };
   });
 
@@ -914,8 +1015,20 @@ function prepareSheetsPayload(sourceDb) {
     };
   });
 
+  const safeCxp = Array.isArray(d.cuentas_por_pagar)
+    ? d.cuentas_por_pagar.map((cxp) => ({
+        ...cxp,
+        historial_abonos: Array.isArray(cxp.historial_abonos)
+          ? cxp.historial_abonos.map((ab) => ({
+              ...ab,
+              comprobante_foto: (ab.comprobante_foto && String(ab.comprobante_foto).startsWith("data:")) ? "" : (ab.comprobante_foto || "")
+            }))
+          : []
+      }))
+    : [];
+
   const metaState = {
-    v: 1,
+    v: 2,
     config: {
       tasaBcv: Number(d.config?.tasaBcv) || 45.80,
       tasaBinance: Number(d.config?.tasaBinance) || 52.40,
@@ -924,12 +1037,22 @@ function prepareSheetsPayload(sourceDb) {
       correlativoTroquelActual: Number(d.config?.correlativoTroquelActual) || 5021,
       correlativoOrdenActual: Number(d.config?.correlativoOrdenActual) || 1007,
       forzar_actualizacion_version: d.config?.forzar_actualizacion_version || "",
-      cuentasFinancieras: Array.isArray(d.config?.cuentasFinancieras) ? d.config.cuentasFinancieras : undefined
+      cuentasFinancieras: Array.isArray(d.config?.cuentasFinancieras) ? d.config.cuentasFinancieras : undefined,
+      migrations: d.config?.migrations || { javier_gerencia_v38: true },
+      doc_template: d.config?.doc_template || {
+        tipo_documento: "ORDEN Y PRESUPUESTO",
+        razon_social: "RECTIFICADORA RENACER C.A.",
+        subtitulo: "Especialistas en Rectificación de Motores, Cámaras, Cigüeñales y Bloques · Maracaibo, Zulia",
+        rif: "",
+        direccion_fiscal: "Maracaibo, Edo. Zulia",
+        telefono_contacto: "+58 424-6999635",
+        modo_factura_activa: false
+      }
     },
     config_taller: d.config_taller || undefined,
     text_customizations: d.text_customizations || {},
     finanzas_categorias: d.finanzas_categorias || undefined,
-    cuentas_por_pagar: Array.isArray(d.cuentas_por_pagar) ? d.cuentas_por_pagar : [],
+    cuentas_por_pagar: safeCxp,
     inventario_repuestos: Array.isArray(d.inventario_repuestos)
       ? d.inventario_repuestos.map((r) => ({ ...r, foto: (r.foto && String(r.foto).startsWith("data:")) ? "" : (r.foto || "") }))
       : [],
@@ -941,8 +1064,12 @@ function prepareSheetsPayload(sourceDb) {
   };
 
   let metaJson = JSON.stringify(metaState);
-  if (metaJson.length > 45000) {
-    metaState.movimientos_inventario = metaState.movimientos_inventario.slice(-30);
+  if (metaJson.length > 44000) {
+    metaState.movimientos_inventario = metaState.movimientos_inventario.slice(-25);
+    metaJson = JSON.stringify(metaState);
+  }
+  if (metaJson.length > 46000) {
+    metaState.movimientos_inventario = [];
     metaJson = JSON.stringify(metaState);
   }
 
@@ -959,8 +1086,8 @@ function prepareSheetsPayload(sourceDb) {
       autor_nombre: b.autor_nombre || "",
       autor_rol: b.autor_rol || "",
       tipo_evento: b.tipo_evento || "comentario",
-      mensaje: b.mensaje || "",
-      foto_adjunta_url: b.foto_adjunta_url || "",
+      mensaje: sanitizeSheetsCellStr(b.mensaje || "", 44000),
+      foto_adjunta_url: sanitizeSheetsCellStr(b.foto_adjunta_url || "", 44000),
       fecha_hora: b.fecha_hora || nowStr.slice(0, 16)
     })),
     {
@@ -1009,8 +1136,8 @@ function prepareSheetsPayload(sourceDb) {
     monto_usd: Number(m.monto ?? m.monto_usd ?? 0),
     metodo_pago: m.metodo || m.metodo_pago || "efectivo",
     referencia: m.referencia || "",
-    comprobante_foto: m.comprobante_foto || "",
-    registrado_por: m.registrado_por || (currentUser ? currentUser.nombre : "Sistema")
+    comprobante_foto: sanitizeSheetsCellStr(m.comprobante_foto || m.soporte_foto || "", 44000),
+    registrado_por: m.registrado_por || m.usuario_registro || (currentUser ? currentUser.nombre : "Sistema")
   }));
 
   const asistencia = (d.asistencias || d.asistencia || []).map((a) => ({
@@ -1095,7 +1222,15 @@ function hydrateDatabaseFromSheets(cloudData) {
           pin: rawPin,
           telefono: String(u.telefono || ""),
           direccion: String(u.direccion || extra.direccion || ""),
-          salario_fijo_semanal: extra.salario_fijo_semanal !== undefined ? Number(extra.salario_fijo_semanal) : ((rol === "admin" || rol === "jefe_taller") ? 100 : undefined),
+          salario_fijo_semanal: extra.salario_fijo_semanal !== undefined && extra.salario_fijo_semanal !== null
+            ? Number(extra.salario_fijo_semanal)
+            : (uid === "USR-JAVIER" ? 0 : ((rol === "admin" || rol === "jefe_taller") ? 100 : undefined)),
+          en_nomina_gerencia: extra.en_nomina_gerencia !== undefined
+            ? Boolean(extra.en_nomina_gerencia)
+            : (uid === "USR-JESUS" || uid === "USR-ENRIQUE" || uid === "USR-JAVIER"),
+          nomina_activa: extra.nomina_activa !== undefined
+            ? Boolean(extra.nomina_activa)
+            : (uid !== "USR-JAVIER"),
           huella_registrada: Boolean(extra.huella_registrada),
           activo: u.activo !== false && String(u.activo).toLowerCase() !== "false",
           modalidad_horario: String(u.modalidad_horario || (isExt ? "Tercerizado" : "Jornada Completa")),
@@ -1263,6 +1398,8 @@ function hydrateDatabaseFromSheets(cloudData) {
       metodo: String(f.metodo_pago || f.metodo || "efectivo"),
       cuenta: String(extra.cuenta || ""),
       referencia: String(extra.referencia || f.referencia || ""),
+      usuario_id: String(extra.usuario_id || f.usuario_id || ""),
+      liquidado_en_nomina: Boolean(extra.liquidado_en_nomina),
       comprobante_foto: String(f.comprobante_foto || ""),
       registrado_por: String(f.registrado_por || ""),
       orden_id: String(f.orden_id || "-"),
@@ -1296,7 +1433,9 @@ function hydrateDatabaseFromSheets(cloudData) {
   const mergedConfig = {
     ...base.config,
     ...(db && db.config ? db.config : {}),
-    ...(meta.config || {})
+    ...(meta.config || {}),
+    // Las migraciones de nube deben evaluarse según lo guardado en Sheets (meta.config), no desde el default local
+    migrations: (meta.config && meta.config.migrations) ? { ...meta.config.migrations } : {}
   };
   // Si en memoria ya tenemos tasas en vivo del día y en meta siguen las default (45.80/52.40), mantener las vivas
   if (db && db.config && db.config.tasaFechaActualizacion && (!meta.config || !meta.config.tasaFechaActualizacion)) {
@@ -1333,45 +1472,201 @@ function updateCloudSyncBadge(state, detailText) {
   const badgeEl = document.getElementById("cloud-sync-badge-label");
   const iconEl = document.getElementById("cloud-sync-badge-icon");
   const btnEl = document.getElementById("btn-sidebar-cloud-sync") || document.getElementById("btn-header-cloud-sync");
-  if (!badgeEl) return;
+  const floatEl = document.getElementById("cloud-sync-floating-pill");
 
   if (state === "syncing") {
     if (iconEl) iconEl.className = "fas fa-sync fa-spin";
-    badgeEl.textContent = "Guardando en Sheets...";
-    if (btnEl) btnEl.style.borderColor = "rgba(245,196,0,0.6)";
-  } else if (state === "error") {
+    if (badgeEl) badgeEl.textContent = "Guardando en Nube...";
+    if (btnEl) btnEl.style.borderColor = "rgba(245,196,0,0.65)";
+    if (floatEl) {
+      floatEl.className = "cloud-sync-floating-pill cloud-sync-floating-pill--syncing";
+      floatEl.innerHTML = `<i class="fas fa-sync fa-spin"></i> Guardando cambios en Google Sheets...`;
+    }
+  } else if (state === "pending" || state === "error") {
     if (iconEl) iconEl.className = "fas fa-exclamation-triangle";
-    badgeEl.textContent = "Modo Local (Offline)";
-    if (btnEl) btnEl.style.borderColor = "rgba(239,68,68,0.6)";
+    if (badgeEl) badgeEl.textContent = hasUnsyncedLocalChanges ? "Pendiente de Subir" : "Modo Local (Offline)";
+    if (btnEl) btnEl.style.borderColor = "rgba(239,68,68,0.8)";
+    if (floatEl) {
+      floatEl.className = "cloud-sync-floating-pill cloud-sync-floating-pill--pending";
+      floatEl.innerHTML = hasUnsyncedLocalChanges
+        ? `<i class="fas fa-cloud-arrow-up"></i> Cambios guardados localmente · Reintentando nube...`
+        : `<i class="fas fa-wifi"></i> Sin conexión a Google Sheets (reintentando...)`;
+    }
   } else {
     if (iconEl) iconEl.className = "fas fa-cloud";
-    badgeEl.textContent = "Sheets Conectado";
+    if (badgeEl) badgeEl.textContent = "Sheets Conectado";
     if (btnEl) btnEl.style.borderColor = "rgba(34,197,94,0.65)";
+    if (floatEl) {
+      if (hasUnsyncedLocalChanges) {
+        floatEl.className = "cloud-sync-floating-pill cloud-sync-floating-pill--syncing";
+        floatEl.innerHTML = `<i class="fas fa-clock"></i> Cambios locales pendientes de respaldo...`;
+      } else {
+        floatEl.className = "cloud-sync-floating-pill hidden";
+      }
+    }
   }
 }
 
-async function _executeSingleCloudPush(silent = true) {
+function markLocalChangesDirty() {
+  lastLocalMutationTs = Date.now();
+  hasUnsyncedLocalChanges = true;
+  try {
+    localStorage.setItem(DIRTY_FLAG_KEY, String(lastLocalMutationTs));
+  } catch (e) {}
+  scheduleCloudRetry();
+}
+
+function clearLocalChangesDirtyIfUpToDate(pushSnapshotTs) {
+  // Solo limpiar la bandera dirty si NO hubo otra edición local mientras este push viajaba
+  if (lastLocalMutationTs <= pushSnapshotTs && !cloudPushPending && !cloudPushDebounceTimer) {
+    hasUnsyncedLocalChanges = false;
+    try {
+      localStorage.removeItem(DIRTY_FLAG_KEY);
+    } catch (e) {}
+    if (cloudRetryTimer) {
+      clearInterval(cloudRetryTimer);
+      cloudRetryTimer = null;
+    }
+  }
+}
+
+function scheduleCloudRetry() {
+  if (cloudRetryTimer) return;
+  cloudRetryTimer = setInterval(() => {
+    if (!hasUnsyncedLocalChanges) {
+      clearInterval(cloudRetryTimer);
+      cloudRetryTimer = null;
+      return;
+    }
+    if (!cloudPushInFlight && navigator.onLine !== false) {
+      _executeSingleCloudPush(true);
+    }
+  }, 8000);
+}
+
+function mergeArrayByKey(serverArr, localArr, keyFn) {
+  const map = new Map();
+  (Array.isArray(serverArr) ? serverArr : []).forEach((item) => {
+    const k = keyFn(item);
+    if (k) map.set(k, item);
+  });
+  (Array.isArray(localArr) ? localArr : []).forEach((item) => {
+    const k = keyFn(item);
+    if (k) map.set(k, item);
+  });
+  return Array.from(map.values());
+}
+
+function mergeDatabasesNonDestructive(serverDb, localDb) {
+  const s = normalizeDatabaseSchema(serverDb || getInitialDatabase());
+  const l = normalizeDatabaseSchema(localDb || db);
+  return normalizeDatabaseSchema({
+    ...s,
+    config: { ...(s.config || {}), ...(l.config || {}) },
+    config_taller: { ...(s.config_taller || {}), ...(l.config_taller || {}) },
+    text_customizations: { ...(s.text_customizations || {}), ...(l.text_customizations || {}) },
+    finanzas_categorias: l.finanzas_categorias || s.finanzas_categorias,
+    usuarios: mergeArrayByKey(s.usuarios, l.usuarios, (x) => x && x.id_usuario),
+    catalogo_servicios: mergeArrayByKey(s.catalogo_servicios, l.catalogo_servicios, (x) => x && (x.id_cat || x.id_servicio)),
+    clientes: mergeArrayByKey(s.clientes, l.clientes, (x) => x && x.id_cliente),
+    ordenes: mergeArrayByKey(s.ordenes, l.ordenes, (x) => x && x.id_orden),
+    subtareas: mergeArrayByKey(s.subtareas, l.subtareas, (x) => x && x.id_subtarea),
+    bitacora: mergeArrayByKey(s.bitacora, l.bitacora, (x) => x && x.id_mensaje),
+    finanzas_movimientos: mergeArrayByKey(s.finanzas_movimientos, l.finanzas_movimientos, (x) => x && (x.id_mov || x.id_movimiento)),
+    cuentas_por_pagar: mergeArrayByKey(s.cuentas_por_pagar, l.cuentas_por_pagar, (x) => x && x.id_cxp),
+    inventario_repuestos: mergeArrayByKey(s.inventario_repuestos, l.inventario_repuestos, (x) => x && (x.id_repuesto || x.id)),
+    movimientos_inventario: mergeArrayByKey(s.movimientos_inventario, l.movimientos_inventario, (x) => x && (x.id_mov || x.id)),
+    asistencias: mergeArrayByKey(s.asistencias, l.asistencias, (x) => x && (x.id_asist || x.id_asistencia))
+  });
+}
+
+function saveLocalSafetyBackup(reason = "Respaldo automático local") {
+  const now = Date.now();
+  if (now - lastLocalBackupSaveTs < 25000 && reason === "Respaldo automático local") return;
+  lastLocalBackupSaveTs = now;
+  try {
+    const existing = safeJsonParse(localStorage.getItem(LOCAL_BACKUPS_KEY), []);
+    const list = Array.isArray(existing) ? existing : [];
+    const lightDb = JSON.parse(JSON.stringify(db));
+    // Aligerar fotos pesadas en respaldos locales rotativos para no agotar cuota del navegador
+    (lightDb.ordenes || []).forEach((o) => {
+      if (Array.isArray(o.galeria_fotos_pieza)) o.galeria_fotos_pieza = o.galeria_fotos_pieza.slice(0, 1);
+      if (Array.isArray(o.galeria_fotos_repuestos)) o.galeria_fotos_repuestos = [];
+    });
+    list.unshift({
+      id: "LOC-" + now,
+      fecha: new Date().toLocaleString("es-VE"),
+      reason,
+      counts: `Usr:${(db.usuarios || []).length} · Cat:${(db.catalogo_servicios || []).length} · Cli:${(db.clientes || []).length} · Ord:${(db.ordenes || []).length} · CxP:${(db.cuentas_por_pagar || []).length}`,
+      snapshot: lightDb
+    });
+    localStorage.setItem(LOCAL_BACKUPS_KEY, JSON.stringify(list.slice(0, 5)));
+  } catch (e) {}
+}
+
+async function _executeSingleCloudPush(silent = true, opts = {}) {
   if (!GAS_API_URL) return false;
   cloudPushInFlight = true;
   cloudPushPending = false;
   updateCloudSyncBadge("syncing");
   let lastOk = false;
+  let conflictRetries = 0;
+
   try {
     do {
       cloudPushPending = false;
+      const pushSnapshotTs = lastLocalMutationTs;
       const payload = prepareSheetsPayload(db);
+      const requestBody = {
+        action: "push_state",
+        payload,
+        baseRevision: opts.force ? undefined : (lastKnownCloudRevision || undefined),
+        force: Boolean(opts.force),
+        forceBackup: Boolean(opts.forceBackup),
+        reason: opts.reason || "Actualización del taller",
+        actor: currentUser ? currentUser.nombre : "Sistema"
+      };
+
       const res = await fetch(GAS_API_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action: "push_state", payload })
+        body: JSON.stringify(requestBody)
       });
       const json = await res.json();
+
       if (json && json.success) {
+        const data = json.data || {};
+        if (data.backupsSupported) cloudBackupsSupported = true;
+
+        // Si el servidor reporta conflicto (otro equipo guardó cambios más nuevos), fusionamos sin perder nada y reintentamos
+        if (data.conflict && data.serverState && conflictRetries < 2) {
+          conflictRetries++;
+          const serverHydrated = hydrateDatabaseFromSheets(data.serverState);
+          db = mergeDatabasesNonDestructive(serverHydrated, db);
+          saveLocalOnly();
+          if (typeof data.revision === "number") {
+            lastKnownCloudRevision = data.revision;
+            try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+          }
+          cloudPushPending = true;
+          continue;
+        }
+
+        if (typeof data.revision === "number") {
+          lastKnownCloudRevision = data.revision;
+          try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+        }
+
         lastOk = true;
+        hasSyncedFromCloudOnce = true;
         lastCloudPushDoneTs = Date.now();
-        const stamp = (json.data && json.data.savedAt) || new Date().toLocaleTimeString();
-        updateCloudSyncBadge("online", stamp);
-        if (!silent && !cloudPushPending) showToast(`Datos guardados en Google Sheets (${stamp})`);
+        clearLocalChangesDirtyIfUpToDate(pushSnapshotTs);
+
+        const stamp = data.savedAt || new Date().toLocaleTimeString();
+        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "pending" : "online", stamp);
+        if (!silent && !cloudPushPending) {
+          showToast(`Respaldo guardado en la nube (${stamp})`);
+        }
       } else {
         throw new Error((json && json.error) || "Respuesta no válida de Sheets");
       }
@@ -1379,15 +1674,21 @@ async function _executeSingleCloudPush(silent = true) {
     return lastOk;
   } catch (err) {
     console.warn("Aviso al sincronizar hacia Google Sheets:", err);
-    updateCloudSyncBadge("error");
-    if (!silent) showToast("No se pudo conectar con Google Sheets. Guardado en memoria local.", "error");
+    // CONSERVAR SIEMPRE la bandera dirty para que el pull de 15s JAMÁS sobrescriba los cambios locales
+    hasUnsyncedLocalChanges = true;
+    try { localStorage.setItem(DIRTY_FLAG_KEY, String(lastLocalMutationTs || Date.now())); } catch (e) {}
+    scheduleCloudRetry();
+    updateCloudSyncBadge("pending");
+    if (!silent) {
+      showToast("Sin respuesta de la nube. Tus cambios siguen protegidos localmente y se subirán automáticamente al reconectar.", "error");
+    }
     return false;
   } finally {
     cloudPushInFlight = false;
   }
 }
 
-function queueCloudPush(silent = true) {
+function queueCloudPush(silent = true, opts = {}) {
   if (!GAS_API_URL) return;
   cloudPushPending = true;
   if (cloudPushInFlight) {
@@ -1397,11 +1698,11 @@ function queueCloudPush(silent = true) {
   if (cloudPushDebounceTimer) clearTimeout(cloudPushDebounceTimer);
   cloudPushDebounceTimer = setTimeout(() => {
     cloudPushDebounceTimer = null;
-    _executeSingleCloudPush(silent);
+    _executeSingleCloudPush(silent, opts);
   }, 350);
 }
 
-async function flushCloudPush(silent = false) {
+async function flushCloudPush(silent = false, opts = {}) {
   if (!GAS_API_URL) return false;
   if (cloudPushDebounceTimer) {
     clearTimeout(cloudPushDebounceTimer);
@@ -1414,44 +1715,82 @@ async function flushCloudPush(silent = false) {
     while (cloudPushInFlight && Date.now() - maxWaitStart < 20000) {
       await new Promise((r) => setTimeout(r, 150));
     }
-    return cloudSyncStatus === "online";
+    return !hasUnsyncedLocalChanges && cloudSyncStatus === "online";
   }
-  return await _executeSingleCloudPush(silent);
+  return await _executeSingleCloudPush(silent, opts);
 }
 
-async function pushToGoogleSheets(silent = true) {
-  return await flushCloudPush(silent);
+function sendKeepaliveCloudPushOnExit() {
+  if (!GAS_API_URL || (!hasUnsyncedLocalChanges && !cloudPushPending && !cloudPushDebounceTimer)) return;
+  try {
+    const payload = prepareSheetsPayload(db);
+    const bodyStr = JSON.stringify({
+      action: "push_state",
+      payload,
+      baseRevision: lastKnownCloudRevision || undefined,
+      force: false,
+      reason: "Guardado automático al salir",
+      actor: currentUser ? currentUser.nombre : "Sistema"
+    });
+    if (bodyStr.length < 60000) {
+      fetch(GAS_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: bodyStr,
+        keepalive: true
+      }).catch(() => {});
+    } else {
+      flushCloudPush(true);
+    }
+  } catch (e) {}
+}
+
+async function pushToGoogleSheets(silent = true, opts = {}) {
+  return await flushCloudPush(silent, opts);
 }
 
 async function syncFromGoogleSheets(silent = false) {
   if (!GAS_API_URL) return false;
 
-  // En sincronizaciones automáticas en segundo plano, JAMÁS interferir si hay cambios locales guardándose o recién guardados
-  if (silent) {
-    if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+  // BLINDAJE ANTI-PÉRDIDA: si hay cambios locales que aún NO han sido confirmados por Google Sheets,
+  // JAMÁS bajar datos viejos encima del trabajo del usuario. Primero subir los cambios pendientes.
+  if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+    if (silent) {
+      if (!cloudPushInFlight) {
+        _executeSingleCloudPush(true);
+      }
       return false;
     }
-    if (lastCloudPushDoneTs && Date.now() - lastCloudPushDoneTs < 3500) {
+    // Si el usuario pulsó manualmente "Traer Datos", primero aseguramos guardar lo pendiente
+    const pushedOk = await flushCloudPush(true);
+    if (!pushedOk && hasUnsyncedLocalChanges) {
+      showToast("Hay cambios locales pendientes sin subir. No se sobrescribieron tus datos.", "warning");
       return false;
     }
-  } else if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
-    // Si el usuario pulsó manualmente "Traer Datos", esperar a que termine de guardar cambios pendientes
-    await flushCloudPush(true);
+  }
+
+  if (silent && lastCloudPushDoneTs && Date.now() - lastCloudPushDoneTs < 4000) {
+    return false;
   }
 
   const pullStartTs = Date.now();
-  updateCloudSyncBadge("syncing");
+  if (!silent) updateCloudSyncBadge("syncing");
   try {
     const res = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
     const json = await res.json();
     if (json && json.success && json.data) {
       // PROTECCIÓN ANTI-SOBREESCRITURA: si el usuario hizo un cambio local mientras esta lectura viajaba, descartarla
-      if (silent && (cloudPushInFlight || cloudPushPending || lastLocalMutationTs > pullStartTs)) {
-        updateCloudSyncBadge("online");
+      if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || lastLocalMutationTs > pullStartTs) {
+        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "pending" : "online");
         return false;
       }
 
       hasSyncedFromCloudOnce = true;
+      if (json.data.backupsSupported) cloudBackupsSupported = true;
+      if (typeof json.data.revision === "number") {
+        lastKnownCloudRevision = json.data.revision;
+        try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+      }
 
       // Verificación de actualización remota obligatoria para todos los equipos (soporta config directo y SYS-META-STATE)
       const metaFromCloud = extractCloudMetaState(json.data);
@@ -1478,6 +1817,10 @@ async function syncFromGoogleSheets(silent = false) {
         (Array.isArray(json.data.finanzas) && json.data.finanzas.length > 0);
 
       if (cloudHasAnyData) {
+        const hadJavierInventario = Array.isArray(json.data.usuarios) &&
+          json.data.usuarios.some((u) => u && u.id_usuario === "USR-JAVIER" && u.rol === "inventario");
+        const hadMetaState = Boolean(metaFromCloud);
+
         db = hydrateDatabaseFromSheets(json.data);
         saveLocalOnly();
         populateLoginSelect();
@@ -1487,40 +1830,315 @@ async function syncFromGoogleSheets(silent = false) {
           renderApp();
         }
         updateCloudSyncBadge("online", json.data.serverTime || new Date().toLocaleTimeString());
+
+        // Si acabamos de aplicar la migración de Javier a Gerencia o aún no existía SYS-META-STATE, respaldar automáticamente en Sheets
+        if (hadJavierInventario || !hadMetaState) {
+          queueCloudPush(true, { reason: "Actualización estructura v38 (Gerencia Javier y Metadatos)" });
+        }
+
         if (!silent) showToast(`Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
         return true;
       } else {
         // Solo sembrar la nube si Google Sheets está 100% virgen (sin usuarios, ni catálogo, ni clientes, ni órdenes)
-        await flushCloudPush(silent);
+        await flushCloudPush(silent, { force: true, reason: "Inicialización inicial de base de datos" });
         return true;
       }
     }
     throw new Error((json && json.error) || "Error al leer Google Sheets");
   } catch (err) {
     console.warn("Aviso al leer desde Google Sheets:", err);
-    updateCloudSyncBadge("error");
+    updateCloudSyncBadge(hasUnsyncedLocalChanges ? "pending" : "error");
     if (!silent) showToast("Trabajando con base local (sin respuesta de Google Sheets).", "error");
     return false;
   }
 }
 
-function openCloudSyncModal() {
-  const isAdmin = currentUser && currentUser.rol === "admin";
+async function createCloudBackupNow() {
+  showToast("Creando respaldo completo en la nube...", "info");
+  // Primero asegurar que el estado actual esté guardado en Sheets
+  await flushCloudPush(true, { forceBackup: true, reason: "Respaldo manual desde panel" });
+  try {
+    const res = await fetch(GAS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "create_backup",
+        reason: "Respaldo manual solicitado",
+        actor: currentUser ? currentUser.nombre : "Administrador"
+      })
+    });
+    const json = await res.json();
+    if (json && json.success && json.data && json.data.id_respaldo) {
+      cloudBackupsSupported = true;
+      saveLocalSafetyBackup("Respaldo manual");
+      Swal.fire({
+        title: "Respaldo Creado en la Nube",
+        html: `ID: <strong>${json.data.id_respaldo}</strong><br>Fecha: ${json.data.fecha_hora}<br>Detalle: <code>${json.data.resumen || ""}</code>`,
+        icon: "success",
+        confirmButtonColor: "#182254"
+      });
+      return;
+    }
+  } catch (e) {}
+  saveLocalSafetyBackup("Respaldo local de seguridad");
+  showToast("Cambios guardados en Google Sheets y copia de seguridad local creada. (Actualiza Code.gs para historial en Google Drive).", "info");
+}
+
+async function openCloudBackupsModal() {
+  const localBackups = safeJsonParse(localStorage.getItem(LOCAL_BACKUPS_KEY), []);
   openModal({
-    title: "Google Sheets en Tiempo Real y Mantenimiento de Base de Datos",
+    title: "Historial de Respaldos en la Nube y Recuperación",
+    icon: "fa-clock-rotate-left",
+    wide: true,
+    body: `
+      <div id="cloud-backups-container" style="min-height:120px;">
+        <div style="text-align:center; padding:24px; color:var(--text-muted);">
+          <i class="fas fa-spinner fa-spin" style="font-size:20px; color:var(--renacer-gold);"></i>
+          <div style="margin-top:8px;">Consultando historial de respaldos en Google Sheets / Drive...</div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px; border-top:1px solid var(--border-color); padding-top:14px;">
+        <div style="font-size:12px; font-weight:900; color:#38bdf8; text-transform:uppercase; margin-bottom:8px;">
+          <i class="fas fa-laptop-file"></i> Copias de Seguridad Locales de Emergencia (${localBackups.length})
+        </div>
+        ${
+          localBackups.length
+            ? localBackups
+                .map(
+                  (b) => `
+                  <div class="backup-item-row">
+                    <div>
+                      <div style="font-weight:800; font-size:12.5px;">${b.fecha} — ${escapeHtml(b.reason || "Copia local")}</div>
+                      <div style="font-size:11px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">${escapeHtml(b.counts || "")}</div>
+                    </div>
+                    <button type="button" class="btn btn--ghost btn--xs" onclick="restoreLocalSafetyBackup('${b.id}')">
+                      <i class="fas fa-rotate-left"></i> Restaurar
+                    </button>
+                  </div>
+                `
+                )
+                .join("")
+            : `<div style="font-size:12px; color:var(--text-muted);">Aún no hay copias locales rotativas en este equipo.</div>`
+        }
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="exportFullBackupJson()"><i class="fas fa-download"></i> Descargar Archivo JSON</button>
+      <button type="button" class="btn btn--gold" onclick="createCloudBackupNow()"><i class="fas fa-shield-halved"></i> Crear Respaldo Ahora</button>
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>
+    `
+  });
+
+  try {
+    const res = await fetch(`${GAS_API_URL}?action=list_backups&t=${Date.now()}`);
+    const json = await res.json();
+    const container = document.getElementById("cloud-backups-container");
+    if (!container) return;
+
+    if (json && json.success && json.data && Array.isArray(json.data.backups)) {
+      cloudBackupsSupported = true;
+      const list = json.data.backups;
+      if (!list.length) {
+        container.innerHTML = `
+          <div style="text-align:center; padding:18px; color:var(--text-muted);">
+            Aún no hay respaldos registrados en la nube. Pulsa <strong>"Crear Respaldo Ahora"</strong> para generar el primero.
+          </div>
+        `;
+        return;
+      }
+      container.innerHTML = `
+        <div style="font-size:12px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:8px;">
+          <i class="fas fa-cloud"></i> Respaldos Históricos en Google Drive / Sheets (${list.length})
+        </div>
+        <div style="max-height:280px; overflow-y:auto; padding-right:4px;">
+          ${list
+            .map(
+              (b) => `
+              <div class="backup-item-row">
+                <div>
+                  <div style="font-weight:900; font-size:12.5px;">
+                    ${escapeHtml(b.fecha_hora)} · <span style="color:var(--renacer-gold);">Rev #${b.revision}</span>
+                    ${b.en_drive ? '<span class="state-badge state-badge--done" style="font-size:9.5px; margin-left:4px;">Google Drive</span>' : ""}
+                  </div>
+                  <div style="font-size:11.5px; color:var(--text-muted);">${escapeHtml(b.motivo)} · Por: ${escapeHtml(b.autor)}</div>
+                  <div style="font-size:11px; color:#38bdf8; font-family:'JetBrains Mono',monospace; margin-top:2px;">${escapeHtml(b.resumen)}</div>
+                </div>
+                ${
+                  b.recuperable
+                    ? `<button type="button" class="btn btn--gold btn--xs" onclick="restoreCloudBackupById('${escapeHtml(b.id_respaldo)}')">
+                         <i class="fas fa-rotate-left"></i> Restaurar
+                       </button>`
+                    : `<span style="font-size:11px; color:var(--text-muted);">Solo índice</span>`
+                }
+              </div>
+            `
+            )
+            .join("")}
+        </div>
+      `;
+    } else {
+      container.innerHTML = `
+        <div style="background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); border-radius:10px; padding:12px; font-size:12.5px;">
+          <strong>Aviso:</strong> El historial automático en Google Drive se activará en cuanto actualices <code>Code.gs</code> a la versión v38 en Google Apps Script. Mientras tanto, tus datos siguen guardándose en Google Sheets y en tus respaldos locales / JSON.
+        </div>
+      `;
+    }
+  } catch (err) {
+    const container = document.getElementById("cloud-backups-container");
+    if (container) {
+      container.innerHTML = `<div style="color:#f87171; font-size:12.5px;">No se pudo consultar el historial remoto ahora. Puedes usar las copias locales o importar un JSON.</div>`;
+    }
+  }
+}
+
+async function restoreCloudBackupById(backupId) {
+  const conf = await Swal.fire({
+    title: "¿Restaurar este respaldo de la nube?",
+    text: `Se restaurará el estado guardado (${backupId}) en Google Sheets y en todos los equipos. El estado actual se respaldará automáticamente antes de restaurar.`,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#182254",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, restaurar respaldo"
+  });
+  if (!conf.isConfirmed) return;
+
+  showToast("Restaurando respaldo desde la nube...", "info");
+  try {
+    const res = await fetch(GAS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "restore_backup",
+        backupId,
+        actor: currentUser ? currentUser.nombre : "Administrador"
+      })
+    });
+    const json = await res.json();
+    if (json && json.success && json.data && json.data.serverState) {
+      db = hydrateDatabaseFromSheets(json.data.serverState);
+      if (typeof json.data.revision === "number") {
+        lastKnownCloudRevision = json.data.revision;
+        try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+      }
+      hasUnsyncedLocalChanges = false;
+      try { localStorage.removeItem(DIRTY_FLAG_KEY); } catch (e) {}
+      saveLocalOnly();
+      closeModal();
+      renderApp();
+      showToast(`Respaldo ${backupId} restaurado con éxito.`);
+    } else {
+      throw new Error((json && json.error) || "No se pudo restaurar el respaldo");
+    }
+  } catch (err) {
+    Swal.fire({ title: "Error al restaurar", text: String(err.message || err), icon: "error" });
+  }
+}
+
+async function restoreLocalSafetyBackup(localId) {
+  const list = safeJsonParse(localStorage.getItem(LOCAL_BACKUPS_KEY), []);
+  const found = (Array.isArray(list) ? list : []).find((b) => b.id === localId);
+  if (!found || !found.snapshot) return;
+  const conf = await Swal.fire({
+    title: "¿Restaurar copia local y subirla a la nube?",
+    text: `Se restaurará la copia del ${found.fecha} (${found.counts}) y se sincronizará a Google Sheets.`,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#182254",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, restaurar"
+  });
+  if (!conf.isConfirmed) return;
+
+  db = normalizeDatabaseSchema(found.snapshot);
+  saveLocalOnly();
+  markLocalChangesDirty();
+  closeModal();
+  renderApp();
+  await flushCloudPush(false, { force: true, forceBackup: true, reason: "Restauración desde copia local" });
+}
+
+function exportFullBackupJson() {
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), version: CURRENT_APP_VERSION, db }, null, 2)], {
+      type: "application/json"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Respaldo_Rectificadora_Renacer_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("Archivo de respaldo JSON descargado correctamente.");
+  } catch (e) {
+    showToast("No se pudo descargar el archivo JSON.", "error");
+  }
+}
+
+function triggerImportBackupJson() {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = ".json,application/json";
+  inp.onchange = (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        const importedDb = parsed && parsed.db ? parsed.db : parsed;
+        if (!importedDb || !Array.isArray(importedDb.usuarios)) {
+          throw new Error("El archivo no tiene un formato válido de Rectificadora Renacer.");
+        }
+        const conf = await Swal.fire({
+          title: "¿Importar y restaurar este respaldo JSON?",
+          text: `Contiene ${(importedDb.usuarios || []).length} usuarios, ${(importedDb.catalogo_servicios || []).length} servicios, ${(importedDb.clientes || []).length} clientes y ${(importedDb.ordenes || []).length} órdenes. Se subirá inmediatamente a Google Sheets.`,
+          icon: "warning",
+          showCancelButton: true,
+          confirmButtonColor: "#182254",
+          cancelButtonText: "Cancelar",
+          confirmButtonText: "Sí, importar y respaldar en la nube"
+        });
+        if (!conf.isConfirmed) return;
+        db = normalizeDatabaseSchema(importedDb);
+        saveLocalOnly();
+        markLocalChangesDirty();
+        closeModal();
+        renderApp();
+        await flushCloudPush(false, { force: true, forceBackup: true, reason: "Importación manual JSON" });
+      } catch (err) {
+        Swal.fire({ title: "Archivo inválido", text: String(err.message || err), icon: "error" });
+      }
+    };
+    reader.readAsText(file);
+  };
+  inp.click();
+}
+
+function openCloudSyncModal() {
+  const statusBg = hasUnsyncedLocalChanges ? "rgba(239,68,68,0.12)" : "rgba(22,163,74,0.1)";
+  const statusBorder = hasUnsyncedLocalChanges ? "rgba(239,68,68,0.45)" : "rgba(22,163,74,0.4)";
+  const statusColor = hasUnsyncedLocalChanges ? "#f87171" : "#15803d";
+  openModal({
+    title: "Respaldo en la Nube (Google Sheets & Drive) — Cero Pérdida de Datos",
     icon: "fa-cloud",
     wide: true,
     body: `
-      <div style="background:rgba(22,163,74,0.1); border:1.5px solid rgba(22,163,74,0.4); border-radius:12px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <div style="background:${statusBg}; border:1.5px solid ${statusBorder}; border-radius:12px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
         <div>
-          <div style="font-size:13.5px; font-weight:900; color:#15803d;">
-            <i class="fas fa-check-circle"></i> Conectado al Google Sheets de Rectificadora Renacer
+          <div style="font-size:13.5px; font-weight:900; color:${statusColor};">
+            <i class="fas ${hasUnsyncedLocalChanges ? "fa-exclamation-triangle" : "fa-check-circle"}"></i>
+            ${hasUnsyncedLocalChanges ? "Hay cambios locales esperando conexión para subir a la nube" : "Conectado y Respaldado en Google Sheets"}
           </div>
           <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
-            Última sincronización: <strong>${lastCloudSyncTime}</strong> · Órdenes actuales: <strong>${db.ordenes.length}</strong>
+            Última sincronización: <strong>${lastCloudSyncTime}</strong> · Rev: <strong>#${lastKnownCloudRevision}</strong> · Órdenes: <strong>${db.ordenes.length}</strong> · Servicios: <strong>${(db.catalogo_servicios || []).length}</strong> · CxP: <strong>${(db.cuentas_por_pagar || []).length}</strong>
           </div>
         </div>
-        <span class="state-badge state-badge--done">${cloudSyncStatus === "online" ? "CONECTADO" : cloudSyncStatus === "syncing" ? "SINCRONIZANDO" : "LOCAL"}</span>
+        <span class="state-badge ${hasUnsyncedLocalChanges ? "state-badge--wait" : "state-badge--done"}">${hasUnsyncedLocalChanges ? "PENDIENTE" : cloudSyncStatus === "online" ? "RESPALDADO" : cloudSyncStatus === "syncing" ? "GUARDANDO" : "LOCAL"}</span>
       </div>
 
       <div class="form-field" style="margin-bottom:14px;">
@@ -1533,13 +2151,37 @@ function openCloudSyncModal() {
         />
       </div>
 
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin-bottom:16px;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap:10px; margin-bottom:14px;">
+        <button type="button" class="btn btn--gold btn--lg" style="justify-content:center;" onclick="pushToGoogleSheets(false, { forceBackup: true, reason: 'Guardado manual' }); closeModal();">
+          <i class="fas fa-cloud-arrow-up"></i> Guardar Todo en la Nube Ahora
+        </button>
         <button type="button" class="btn btn--primary btn--lg" style="justify-content:center;" onclick="syncFromGoogleSheets(false); closeModal();">
-          <i class="fas fa-cloud-arrow-down"></i> Traer Datos de Google Sheets
+          <i class="fas fa-cloud-arrow-down"></i> Traer Última Data de Sheets
         </button>
-        <button type="button" class="btn btn--gold btn--lg" style="justify-content:center;" onclick="pushToGoogleSheets(false); closeModal();">
-          <i class="fas fa-cloud-arrow-up"></i> Guardar Todo en Sheets Ahora
-        </button>
+      </div>
+
+      <!-- Respaldos Históricos y Recuperación -->
+      <div class="form-section-box" style="border-color:rgba(56,189,248,0.4); margin-bottom:14px; background:rgba(15,23,42,0.22);">
+        <div class="form-section-title" style="color:#38bdf8;">
+          <i class="fas fa-shield-halved"></i> Respaldos Automáticos en la Nube y Recuperación Histórica
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px; line-height:1.45;">
+          Cada cambio queda protegido localmente y se respalda en Google Sheets / Google Drive. Puedes ver versiones anteriores, restaurarlas en 1 clic o descargar una copia JSON.
+        </p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--primary btn--sm" onclick="openCloudBackupsModal()">
+            <i class="fas fa-clock-rotate-left"></i> Ver / Restaurar Respaldos
+          </button>
+          <button type="button" class="btn btn--gold btn--sm" onclick="createCloudBackupNow()">
+            <i class="fas fa-cloud-arrow-up"></i> Crear Respaldo Ahora
+          </button>
+          <button type="button" class="btn btn--ghost btn--sm" onclick="exportFullBackupJson()">
+            <i class="fas fa-download"></i> Exportar JSON
+          </button>
+          <button type="button" class="btn btn--ghost btn--sm" onclick="triggerImportBackupJson()">
+            <i class="fas fa-upload"></i> Importar JSON
+          </button>
+        </div>
       </div>
 
       <!-- Control de Actualización Remota Forzada (Sin borrar caché manual) -->
@@ -1548,7 +2190,7 @@ function openCloudSyncModal() {
           <i class="fas fa-satellite-dish"></i> Despliegue y Actualización Remota para Todos los Dispositivos
         </div>
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px; line-height:1.45;">
-          Fuerza de manera instantánea a todos los teléfonos de mecánicos, computadoras y tablets conectados a recargar la versión más reciente del sistema, sin que nadie tenga que borrar caché manualmente.
+          Fuerza de manera instantánea a todos los teléfonos de mecánicos, computadoras y tablets conectados a recargar la versión más reciente del sistema (${CURRENT_APP_VERSION}), sin perder sus datos.
         </p>
         <button type="button" class="btn btn--gold" onclick="triggerRemoteUpdateForAll(); closeModal();">
           <i class="fas fa-arrows-rotate"></i> Forzar Actualización Remota para Todos
@@ -1560,7 +2202,7 @@ function openCloudSyncModal() {
           <i class="fas fa-broom"></i> Limpieza de Pedidos de Prueba y Control de Demostración
         </div>
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
-          Usa estas opciones para eliminar todos los pedidos/órdenes de prueba y dejar el sistema en cero listo para producción real, o restaurar los ejemplos cuando quieras hacer una demostración.
+          Usa estas opciones para eliminar todos los pedidos/órdenes de prueba y dejar el sistema en cero listo para producción real, conservando usuarios, catálogo y personalizaciones.
         </p>
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <button type="button" class="btn btn--danger" onclick="clearAllTestOrders()">
@@ -1602,9 +2244,9 @@ function clearAllTestOrders() {
         db.config.correlativoOrdenActual = 1008;
       }
       saveLocalOnly();
-      lastLocalMutationTs = Date.now();
+      markLocalChangesDirty();
       showToast("Limpiando y sincronizando con Google Sheets...", "info");
-      await flushCloudPush(false);
+      await flushCloudPush(false, { force: true, forceBackup: true, reason: "Limpieza de pedidos de prueba" });
       closeModal();
       if (currentUser) renderApp();
       showToast("Sistema en cero real sincronizado con Google Sheets.");
@@ -1634,10 +2276,10 @@ function deleteOrder(orderId) {
         db.finanzas = db.finanzas.filter((f) => f.orden_id !== orderId);
       }
       saveLocalOnly();
-      lastLocalMutationTs = Date.now();
+      markLocalChangesDirty();
       closeModal();
       renderApp();
-      await flushCloudPush(true);
+      await flushCloudPush(true, { reason: `Orden #${ord.codigo_troquel} eliminada` });
       showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada y sincronizada.`);
     }
   });
@@ -1689,10 +2331,11 @@ function saveLocalOnly() {
   }
 }
 
-function saveDatabase() {
+function saveDatabase(reason = "Actualización del taller") {
   saveLocalOnly();
-  lastLocalMutationTs = Date.now();
-  queueCloudPush(true);
+  markLocalChangesDirty();
+  saveLocalSafetyBackup("Respaldo automático local");
+  queueCloudPush(true, { reason });
 }
 
 function resetDemoDatabase() {
@@ -2152,8 +2795,8 @@ function openInteractiveProfileModal(userId) {
             isJefe
               ? `
             <div class="form-field">
-              <label><i class="fas fa-dollar-sign"></i> Salario Fijo Semanal ($ USD)</label>
-              <input type="number" step="5" min="0" id="prof-salary" value="${u.salario_fijo_semanal || 100}" />
+              <label><i class="fas fa-dollar-sign"></i> Sueldo Base Semanal ($ USD, editable)</label>
+              <input type="number" step="1" min="0" id="prof-salary" value="${getUserWeeklySalary(u)}" />
             </div>
             `
               : ""
@@ -3288,38 +3931,6 @@ function renderDashboardScreen() {
   const countQC   = db.ordenes.filter((o) => o.estado_actual === "control_calidad").length;
   const countDone = db.ordenes.filter((o) => o.estado_actual === "entregado").length;
 
-  // Remuneración de Socios / Jefes de Taller (Jesús Andrade y Sr. Enrique)
-  const partners = db.usuarios.filter((u) => u.id_usuario === "USR-JESUS" || u.id_usuario === "USR-ENRIQUE");
-  const partnersRemunData = partners.map((p) => {
-    const salarioFijo = Number(p.salario_fijo_semanal) || 100;
-    // Extras realizados (subtareas completadas por ellos)
-    const extraSubs = db.subtareas.filter(
-      (s) => s.tecnico_id === p.id_usuario && s.estado_subtarea === "terminado" && !s.comision_pagada
-    );
-    const totalExtras = extraSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
-
-    // Adelantos tomados en la semana
-    const adelantosMovs = (db.finanzas_movimientos || []).filter(
-      (m) =>
-        m.usuario_id === p.id_usuario &&
-        m.tipo === "egreso" &&
-        (m.categoria === "Adelanto Socio / Retiro de Jefe" || m.categoria === "Adelanto / Vale a Trabajador") &&
-        !m.liquidado_en_nomina
-    );
-    const totalAdelantos = adelantosMovs.reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
-    const netoSemanal = salarioFijo + totalExtras - totalAdelantos;
-
-    return {
-      user: p,
-      salarioFijo,
-      extraSubsCount: extraSubs.length,
-      totalExtras,
-      adelantosCount: adelantosMovs.length,
-      totalAdelantos,
-      netoSemanal
-    };
-  });
-
   const recentOrdersHtml = db.ordenes
     .slice(0, 6)
     .map((o) => renderOrderCardTelegramStyle(o))
@@ -3509,75 +4120,6 @@ function renderDashboardScreen() {
         </button>
       </div>
 
-      <!-- MÓDULO EXCLUSIVO: REMUNERACIÓN, EXTRAS Y ADELANTOS DE SOCIOS / JEFES DE TALLER -->
-      <div class="partner-remun-card">
-        <div class="partner-remun-header">
-          <div>
-            <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase; letter-spacing:0.8px;">
-              CONTROL ADMINISTRATIVO Y FINANCIERO DE DIRECCIÓN
-            </span>
-            <h3 style="font-size:18px; font-weight:900; margin-top:2px;">
-              <i class="fas fa-user-tie" style="color:var(--renacer-gold);"></i> Remuneración de Socios y Jefes (Salario Fijo + Trabajos Extras - Adelantos)
-            </h3>
-            <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
-              Jesús Andrade y el Sr. Enrique Andrade perciben su salario fijo base más las comisiones por trabajos extras realizados en el taller, deduciendo los adelantos personales tomados durante la semana.
-            </p>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button type="button" class="btn btn--ghost btn--xs" onclick="openRegisterPartnerAdvanceModal()">
-              <i class="fas fa-hand-holding-usd"></i> + Registrar Adelanto / Retiro Personal
-            </button>
-          </div>
-        </div>
-
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px;">
-          ${partnersRemunData
-            .map(
-              (p) => `
-            <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-color); border-radius:14px; padding:16px;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                <div>
-                  <h4 style="font-size:16px; font-weight:900; margin-bottom:2px;">${p.user.nombre}</h4>
-                  <span class="state-badge state-badge--exec">${p.user.rol_label || "Jefe de Taller"}</span>
-                </div>
-                <div style="text-align:right;">
-                  <span style="font-size:10.5px; font-weight:800; color:#94a3b8; display:block;">A PERCIBIR FIN DE SEMANA</span>
-                  <span style="font-size:22px; font-weight:900; color:#22c55e; font-family:'JetBrains Mono',monospace;">
-                    $${p.netoSemanal.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; background:rgba(0,0,0,0.2); padding:10px 12px; border-radius:10px; margin-bottom:12px;">
-                <div style="display:flex; justify-content:space-between;">
-                  <span><i class="fas fa-briefcase" style="color:#94a3b8; margin-right:4px;"></i> Salario Fijo Semanal:</span>
-                  <strong style="color:#cbd5e1;">+$${p.salarioFijo.toFixed(2)}</strong>
-                </div>
-                <div style="display:flex; justify-content:space-between;">
-                  <span><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:4px;"></i> Trabajos Extras (${p.extraSubsCount} tareas):</span>
-                  <strong style="color:var(--renacer-gold);">+$${p.totalExtras.toFixed(2)}</strong>
-                </div>
-                <div style="display:flex; justify-content:space-between;">
-                  <span><i class="fas fa-arrow-down" style="color:#f87171; margin-right:4px;"></i> Adelantos Tomados (${p.adelantosCount} retiros):</span>
-                  <strong style="color:#f87171;">-$${p.totalAdelantos.toFixed(2)}</strong>
-                </div>
-              </div>
-
-              <div style="display:flex; gap:8px;">
-                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openRegisterPartnerAdvanceModal('${p.user.id_usuario}')">
-                  <i class="fas fa-minus-circle"></i> Retiro / Vale
-                </button>
-                <button type="button" class="btn btn--gold btn--xs" style="flex:1.2; font-weight:900;" onclick="openLiquidatePartnerWeeklyModal('${p.user.id_usuario}')">
-                  <i class="fas fa-hand-holding-usd"></i> Liquidar Semana ($${p.netoSemanal.toFixed(2)})
-                </button>
-              </div>
-            </div>
-          `
-            )
-            .join("")}
-        </div>
-      </div>
-
       <!-- MÓDULO DE PRÉSTAMOS Y CUENTAS POR PAGAR (MAQUINARIAS / PROVEEDORES) -->
       <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:16px; padding:18px 20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
@@ -3728,8 +4270,81 @@ function saveExchangeRates() {
   showToast(`Tasas actualizadas: BCV ${bcv.toFixed(2)} Bs / Paralelo ${binance.toFixed(2)} Bs.`, "success");
 }
 
+function openEditPartnerSalaryModal(userId) {
+  const p = db.usuarios.find((u) => u.id_usuario === userId);
+  if (!p) return;
+  const curSal = getUserWeeklySalary(p);
+  const activePay = isPartnerPayrollActive(p);
+  const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
+
+  openModal({
+    title: `Configurar Sueldo y Pagos — ${p.nombre}`,
+    icon: "fa-sliders",
+    body: `
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <p style="font-size:13px; color:var(--text-muted);">
+          Ajusta el sueldo semanal base (puedes aumentarlo, reducirlo o dejarlo en <strong>$0</strong> si solo devenga comisiones o está temporalmente inactivo en pagos).
+        </p>
+
+        <div class="form-grid-2">
+          <div class="form-field">
+            <label><i class="fas fa-dollar-sign"></i> Sueldo Semanal Base ($ USD) *</label>
+            <input type="number" step="1" min="0" id="edit-partner-salary-val" value="${curSal}" oninput="const el=document.getElementById('edit-partner-sal-bs'); if(el) el.textContent='≈ '+((Number(this.value)||0)*${tasaBcv}).toFixed(2)+' Bs (Tasa BCV)';" />
+            <div id="edit-partner-sal-bs" style="font-size:11.5px; color:#fde047; margin-top:4px; font-weight:800;">
+              ≈ ${(curSal * tasaBcv).toFixed(2)} Bs (Tasa BCV)
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label><i class="fas fa-power-off"></i> Estado en Nómina de Gerencia</label>
+            <select id="edit-partner-payroll-active">
+              <option value="true" ${activePay ? "selected" : ""}>Activo en Pagos / Sueldo</option>
+              <option value="false" ${!activePay ? "selected" : ""}>Inactivo / Inerte (Solo Acceso Gerencia)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:6px;">
+          <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+          <button type="button" class="btn btn--gold" onclick="savePartnerSalary('${p.id_usuario}')">
+            <i class="fas fa-save"></i> Guardar Sueldo y Estado
+          </button>
+        </div>
+      </div>
+    `
+  });
+}
+
+function savePartnerSalary(userId) {
+  const p = db.usuarios.find((u) => u.id_usuario === userId);
+  if (!p) return;
+  const rawSal = document.getElementById("edit-partner-salary-val")?.value;
+  const sal = Math.max(0, Number(rawSal) || 0);
+  const activePay = document.getElementById("edit-partner-payroll-active")?.value === "true";
+
+  p.salario_fijo_semanal = sal;
+  p.en_nomina_gerencia = true;
+  p.nomina_activa = activePay;
+
+  saveDatabase(`Ajuste de sueldo gerencia: ${p.nombre}`);
+  closeModal();
+  renderApp();
+  showToast(`Sueldo de ${p.nombre} actualizado a $${sal.toFixed(2)} (${activePay ? "Activo en pagos" : "Inactivo / Inerte"}).`);
+}
+
+function togglePartnerPayrollStatus(userId) {
+  const p = db.usuarios.find((u) => u.id_usuario === userId);
+  if (!p) return;
+  const next = !isPartnerPayrollActive(p);
+  p.en_nomina_gerencia = true;
+  p.nomina_activa = next;
+  saveDatabase(`Cambio estado nómina gerencia: ${p.nombre}`);
+  renderApp();
+  showToast(`${p.nombre}: ${next ? "Activado en pagos y nómina de Gerencia" : "Pausado / Inerte en nómina (mantiene acceso de Gerencia)"}.`);
+}
+
 function openRegisterPartnerAdvanceModal(preselectedUserId) {
-  const partners = db.usuarios.filter((u) => u.id_usuario === "USR-JESUS" || u.id_usuario === "USR-ENRIQUE" || u.id_usuario === "USR-MOISES");
+  const partners = db.usuarios.filter((u) => isPartnerInManagementPayroll(u) || u.rol === "jefe_taller" || u.id_usuario === "USR-MOISES");
   const defaultUser = preselectedUserId || (partners[0] ? partners[0].id_usuario : "USR-JESUS");
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
 
@@ -3807,20 +4422,17 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
 
 let tempPartnerAdvancePhoto = "";
 
-function handlePartnerAdvancePhotoUpload(input) {
+async function handlePartnerAdvancePhotoUpload(input) {
   const file = input.files && input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    tempPartnerAdvancePhoto = e.target.result;
-    const nameEl = document.getElementById("adv-partner-photo-name");
-    const prevEl = document.getElementById("adv-partner-photo-preview");
-    if (nameEl) nameEl.textContent = `✅ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
-    if (prevEl) {
-      prevEl.innerHTML = `<img src="${tempPartnerAdvancePhoto}" style="max-height:100px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
-    }
-  };
-  reader.readAsDataURL(file);
+  const compressed = await compressImageForSheets(file, 700, 34000);
+  tempPartnerAdvancePhoto = compressed;
+  const nameEl = document.getElementById("adv-partner-photo-name");
+  const prevEl = document.getElementById("adv-partner-photo-preview");
+  if (nameEl) nameEl.textContent = `✅ ${file.name} (optimizada para la nube)`;
+  if (prevEl) {
+    prevEl.innerHTML = `<img src="${tempPartnerAdvancePhoto}" style="max-height:100px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
+  }
 }
 
 function previewPartnerBsConversion(val) {
@@ -3889,11 +4501,24 @@ function savePartnerAdvance() {
   showToast(`Adelanto de $${amount.toFixed(2)} registrado para ${user.nombre} y cargado como egreso.`, "info");
 }
 
+function updatePartnerLiquidatePreview(totalExtras, totalAdelantos, tasaBcv) {
+  const salInput = document.getElementById("liq-partner-base-salary");
+  const sal = Math.max(0, Number(salInput?.value) || 0);
+  const neto = Math.max(0, sal + Number(totalExtras || 0) - Number(totalAdelantos || 0));
+  const netoEl = document.getElementById("liq-partner-neto-usd");
+  const bsEl = document.getElementById("liq-partner-neto-bs");
+  const btnLbl = document.getElementById("liq-partner-confirm-amt");
+  if (netoEl) netoEl.textContent = `$${neto.toFixed(2)}`;
+  if (bsEl) bsEl.textContent = `≈ ${(neto * Number(tasaBcv || 45.8)).toFixed(2)} Bs.`;
+  if (btnLbl) btnLbl.textContent = `$${neto.toFixed(2)}`;
+}
+
 function openLiquidatePartnerWeeklyModal(userId) {
   const p = db.usuarios.find((u) => u.id_usuario === userId);
   if (!p) return;
 
-  const salarioFijo = Number(p.salario_fijo_semanal) || 100;
+  const activePayroll = isPartnerPayrollActive(p);
+  const salarioFijo = activePayroll ? getUserWeeklySalary(p) : 0;
   const extraSubs = db.subtareas.filter(
     (s) => s.tecnico_id === p.id_usuario && s.estado_subtarea === "terminado" && !s.comision_pagada
   );
@@ -3916,14 +4541,18 @@ function openLiquidatePartnerWeeklyModal(userId) {
     body: `
       <div style="display:flex; flex-direction:column; gap:16px;">
         <div style="background:rgba(24,34,84,0.4); border:1px solid rgba(245,223,0,0.3); border-radius:14px; padding:16px;">
-          <h4 style="font-size:16px; font-weight:900; color:#fff; margin-bottom:8px;">Balance de Cierre Semanal</h4>
-          <div style="display:flex; flex-direction:column; gap:6px; font-size:13px;">
-            <div style="display:flex; justify-content:space-between;">
-              <span><i class="fas fa-briefcase"></i> Salario Fijo Semanal:</span>
-              <strong style="color:#22c55e;">+$${salarioFijo.toFixed(2)}</strong>
+          <h4 style="font-size:16px; font-weight:900; color:#fff; margin-bottom:10px;">Balance de Cierre Semanal (Sueldo Editable)</h4>
+          <div style="display:flex; flex-direction:column; gap:8px; font-size:13px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+              <span><i class="fas fa-briefcase"></i> Sueldo Base de esta Semana ($ USD):</span>
+              <input type="number" step="1" min="0" id="liq-partner-base-salary" value="${salarioFijo}" oninput="updatePartnerLiquidatePreview(${totalExtras}, ${totalAdelantos}, ${tasaBcv})" style="width:120px; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:900; color:#22c55e; padding:5px 8px; border-radius:8px; border:1px solid rgba(34,197,94,0.5); background:var(--bg-input);" />
             </div>
+            <label style="display:flex; align-items:center; gap:6px; font-size:11.5px; color:#cbd5e1; cursor:pointer;">
+              <input type="checkbox" id="liq-partner-save-new-base" style="accent-color:var(--renacer-gold);" />
+              Guardar este nuevo sueldo como base para próximas semanas
+            </label>
             <div style="display:flex; justify-content:space-between;">
-              <span><i class="fas fa-cogs"></i> Trabajos Extras Realizados (${extraSubs.length} subtareas):</span>
+              <span><i class="fas fa-cogs"></i> Trabajos Extras / Comisiones (${extraSubs.length} subtareas):</span>
               <strong style="color:var(--renacer-gold);">+$${totalExtras.toFixed(2)}</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
@@ -3933,8 +4562,8 @@ function openLiquidatePartnerWeeklyModal(userId) {
             <div style="border-top:1.5px solid rgba(255,255,255,0.15); padding-top:8px; margin-top:4px; display:flex; justify-content:space-between; align-items:baseline;">
               <span style="font-weight:900; font-size:14px; color:var(--renacer-gold);">NETO A PERCIBIR:</span>
               <div style="text-align:right;">
-                <span style="font-size:24px; font-weight:900; color:#22c55e; font-family:'JetBrains Mono',monospace;">$${netoSemanal.toFixed(2)}</span>
-                <div style="font-size:11.5px; color:#fde047; font-weight:800;">≈ ${(netoSemanal * tasaBcv).toFixed(2)} Bs.</div>
+                <span id="liq-partner-neto-usd" style="font-size:24px; font-weight:900; color:#22c55e; font-family:'JetBrains Mono',monospace;">$${netoSemanal.toFixed(2)}</span>
+                <div id="liq-partner-neto-bs" style="font-size:11.5px; color:#fde047; font-weight:800;">≈ ${(netoSemanal * tasaBcv).toFixed(2)} Bs.</div>
               </div>
             </div>
           </div>
@@ -3950,7 +4579,7 @@ function openLiquidatePartnerWeeklyModal(userId) {
         <!-- Evidencia Fotográfica Obligatoria de Billetes o Pago Móvil -->
         <div>
           <label style="font-weight:800; font-size:13px; display:block; margin-bottom:6px;">
-            <i class="fas fa-camera"></i> Registro Fotográfico Obligatorio de Entrega (Billetes / Pago Móvil) *
+            <i class="fas fa-camera"></i> Registro Fotográfico de Entrega (Billetes / Pago Móvil)
           </label>
           <div class="photo-evidence-capture" id="partner-liquidate-photo-box">
             <i class="fas fa-receipt" style="font-size:28px; color:var(--renacer-gold); margin-bottom:6px;"></i>
@@ -3975,8 +4604,8 @@ function openLiquidatePartnerWeeklyModal(userId) {
 
         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
           <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
-          <button type="button" class="btn btn--gold" onclick="confirmPartnerWeeklyLiquidation('${p.id_usuario}', ${netoSemanal})">
-            <i class="fas fa-check-circle"></i> Confirmar y Liquidar Semana ($${netoSemanal.toFixed(2)})
+          <button type="button" class="btn btn--gold" onclick="confirmPartnerWeeklyLiquidation('${p.id_usuario}', ${totalExtras}, ${totalAdelantos})">
+            <i class="fas fa-check-circle"></i> Confirmar y Liquidar Semana (<span id="liq-partner-confirm-amt">$${netoSemanal.toFixed(2)}</span>)
           </button>
         </div>
       </div>
@@ -3985,27 +4614,31 @@ function openLiquidatePartnerWeeklyModal(userId) {
 }
 
 let tempPartnerLiquidatePhoto = "";
-function handlePartnerLiquidatePhotoUpload(event) {
+async function handlePartnerLiquidatePhotoUpload(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    tempPartnerLiquidatePhoto = e.target.result;
-    const box = document.getElementById("partner-liquidate-photo-box");
-    const preview = document.getElementById("partner-liquidate-photo-preview");
-    const img = document.getElementById("partner-liquidate-img");
-    if (box) box.classList.add("has-photo");
-    if (preview) preview.classList.remove("hidden");
-    if (img) img.src = tempPartnerLiquidatePhoto;
-  };
-  reader.readAsDataURL(file);
+  tempPartnerLiquidatePhoto = await compressImageForSheets(file, 700, 34000);
+  const box = document.getElementById("partner-liquidate-photo-box");
+  const preview = document.getElementById("partner-liquidate-photo-preview");
+  const img = document.getElementById("partner-liquidate-img");
+  if (box) box.classList.add("has-photo");
+  if (preview) preview.classList.remove("hidden");
+  if (img) img.src = tempPartnerLiquidatePhoto;
 }
 
-function confirmPartnerWeeklyLiquidation(userId, neto) {
+function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
   const p = db.usuarios.find((u) => u.id_usuario === userId);
   if (!p) return;
 
-  const photo = tempPartnerLiquidatePhoto || DEMO_PHOTOS.pagoMovilCapture;
+  const salInput = document.getElementById("liq-partner-base-salary");
+  const baseUsed = salInput ? Math.max(0, Number(salInput.value) || 0) : getUserWeeklySalary(p);
+  const saveNewBase = Boolean(document.getElementById("liq-partner-save-new-base")?.checked);
+  if (saveNewBase) {
+    p.salario_fijo_semanal = baseUsed;
+  }
+
+  const neto = Math.max(0, baseUsed + Number(totalExtras || 0) - Number(totalAdelantos || 0));
+  const photo = tempPartnerLiquidatePhoto || "";
   const cuenta = document.getElementById("liq-partner-account")?.value || "efectivo";
   const nowStr = new Date().toISOString().slice(0, 10);
 
@@ -4036,7 +4669,7 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
       fecha: nowStr,
       tipo: "egreso",
       categoria: "Pago de Nómina / Comisiones",
-      concepto: `Liquidación Neta Semanal — ${p.nombre}`,
+      concepto: `Liquidación Neta Semanal — ${p.nombre} (Base $${baseUsed.toFixed(2)})`,
       monto: Number(neto),
       metodo: cuenta === "efectivo" ? "efectivo" : "pago_movil",
       cuenta: cuenta,
@@ -4049,7 +4682,7 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
   }
 
   tempPartnerLiquidatePhoto = "";
-  saveDatabase();
+  saveDatabase(`Liquidación semanal ${p.nombre}`);
   closeModal();
   renderApp();
 
@@ -4060,7 +4693,7 @@ function confirmPartnerWeeklyLiquidation(userId, neto) {
 
   Swal.fire({
     title: "¡Liquidación Exitosa!",
-    text: `Se liquidaron $${Number(neto).toFixed(2)} a ${p.nombre} con respaldo fotográfico de billetes/pago móvil.`,
+    text: `Se liquidaron $${Number(neto).toFixed(2)} a ${p.nombre} y se respaldó el movimiento en la nube.`,
     icon: "success",
     confirmButtonColor: "#182254"
   });
@@ -6721,36 +7354,49 @@ function handleLightboxMouseDown(e) {
   window.addEventListener("mouseup", onMouseUp);
 }
 
-function readFileAsCompressedDataUrl(file) {
+function compressImageForSheets(file, maxDim = 720, maxChars = 34000) {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        const maxDim = 1200; // Resolución optimizada HD (ahorro de cuota en localStorage sin pérdida de nitidez)
-        let w = img.width;
-        let h = img.height;
-        if (w > maxDim || h > maxDim) {
-          if (w > h) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
-          } else {
-            w = Math.round((w * maxDim) / h);
-            h = maxDim;
+        let targetDim = maxDim;
+        let quality = 0.72;
+        let dataUrl = "";
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+          let w = img.width;
+          let h = img.height;
+          if (w > targetDim || h > targetDim) {
+            if (w > h) {
+              h = Math.round((h * targetDim) / w);
+              w = targetDim;
+            } else {
+              w = Math.round((w * targetDim) / h);
+              h = targetDim;
+            }
           }
+          canvas.width = Math.max(1, w);
+          canvas.height = Math.max(1, h);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          dataUrl = canvas.toDataURL("image/jpeg", quality);
+          if (dataUrl.length <= maxChars) break;
+          quality = Math.max(0.35, quality - 0.12);
+          targetDim = Math.round(targetDim * 0.78);
         }
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", 0.75));
+        resolve(dataUrl);
       };
-      img.onerror = () => resolve(ev.target.result);
+      img.onerror = () => resolve(String(ev.target.result || "").slice(0, maxChars));
       img.src = ev.target.result;
     };
     reader.readAsDataURL(file);
   });
+}
+
+function readFileAsCompressedDataUrl(file) {
+  return compressImageForSheets(file, 720, 32000);
 }
 
 /* ============================================================================
@@ -9173,58 +9819,132 @@ function openWhatsAppTermsOnlyModal(orderId) {
   });
 }
 
-function openWhatsAppBudgetTextModal(orderId) {
+function buildWhatsAppPdfApprovalMessage(order) {
+  const troquel = order.codigo_troquel;
+  const motor = `${order.datos_motor?.tipo_pieza || "Pieza"} — ${order.datos_motor?.marca || ""} ${order.datos_motor?.modelo || ""}`.trim();
+  const total = Number(order.monto_total || 0).toFixed(2);
+
+  return (
+    `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
+    `*ENVÍO DE PRESUPUESTO — ORDEN #${troquel}*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `Estimado(a) *${order.nombre_cliente}*, adjunto le enviamos el presupuesto formal detallado en PDF correspondiente a su pieza (*${motor}*).\n\n` +
+    `*Total Presupuestado:* $${total}\n` +
+    `*Estado Actual:* ⏳ Esperando su aprobación\n\n` +
+    `Por favor, revise el documento PDF adjunto y confírmenos su aprobación por esta vía para iniciar los trabajos en el taller de inmediato.\n\n` +
+    `_Recuerde que dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller._\n` +
+    `¡Quedamos atentos a su respuesta!`
+  );
+}
+
+let activeWaBudgetMode = "pdf_approval";
+
+function switchWhatsAppBudgetMode(orderId, mode) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  activeWaBudgetMode = mode;
+
+  let textMsg = "";
+  if (mode === "pdf_approval") {
+    textMsg = buildWhatsAppPdfApprovalMessage(order);
+  } else if (mode === "terms_only") {
+    textMsg = buildWhatsAppTermsOnlyPlainText(order);
+  } else {
+    textMsg = buildWhatsAppBudgetPlainText(order);
+  }
+
+  const ta = document.getElementById("wa-budget-textarea");
+  if (ta) ta.value = textMsg;
+
+  document.querySelectorAll(".wa-mode-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-wa-mode") === mode);
+  });
+
+  syncWhatsAppBudgetLink(order.telefono_cliente);
+}
+
+function syncWhatsAppBudgetLink(rawPhone) {
+  const ta = document.getElementById("wa-budget-textarea");
+  const link = document.getElementById("wa-budget-send-link");
+  if (!ta || !link) return;
+  const intlPhone = formatWhatsAppPhone(rawPhone);
+  link.href = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(ta.value)}` : "#";
+}
+
+function openWhatsAppBudgetTextModal(orderId, initialMode) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  const textMsg = buildWhatsAppBudgetPlainText(order);
+  const isWaitingApproval =
+    order.estado_actual === "diagnostico_presupuesto" ||
+    order.estado_actual === "esperando_aprobacion_abono" ||
+    order.estado_actual === "aprobacion" ||
+    order.estado_actual === "recepcion" ||
+    order.estado_actual === "diagnostico";
+
+  activeWaBudgetMode = initialMode || (isWaitingApproval ? "pdf_approval" : "full_budget");
+  const textMsg =
+    activeWaBudgetMode === "pdf_approval"
+      ? buildWhatsAppPdfApprovalMessage(order)
+      : activeWaBudgetMode === "terms_only"
+      ? buildWhatsAppTermsOnlyPlainText(order)
+      : buildWhatsAppBudgetPlainText(order);
+
   const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
   const waUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}` : "#";
+  const safePhoneAttr = escapeHtml(order.telefono_cliente || "").replace(/'/g, "");
 
   openModal({
-    title: `Presupuesto Oficial por WhatsApp — Orden #${order.codigo_troquel}`,
+    title: `Envío al Cliente por WhatsApp — Orden #${order.codigo_troquel}`,
     icon: "fa-comment-dots",
     wide: true,
     body: `
-      <!-- Banner Informativo de Políticas de Taller 2026 -->
-      <div style="background:rgba(245,223,0,0.08); border:1.5px solid var(--renacer-gold); border-radius:12px; padding:12px 14px; margin-bottom:12px;">
-        <div style="font-size:12.5px; font-weight:900; color:var(--renacer-navy); display:flex; align-items:center; gap:6px;">
-          <i class="fas fa-balance-scale"></i> Términos y Condiciones Oficiales de Rectificadora Renacer (Incluidos en el Texto)
+      <!-- Selector Rápido de Etapa / Mensaje -->
+      <div class="wa-mode-tabs">
+        <button type="button" class="wa-mode-tab ${activeWaBudgetMode === "pdf_approval" ? "active" : ""}" data-wa-mode="pdf_approval" onclick="switchWhatsAppBudgetMode('${order.id_orden}', 'pdf_approval')">
+          <i class="fas fa-file-pdf"></i> Mensaje para PDF (Esperando Aprobación)
+        </button>
+        <button type="button" class="wa-mode-tab ${activeWaBudgetMode === "full_budget" ? "active" : ""}" data-wa-mode="full_budget" onclick="switchWhatsAppBudgetMode('${order.id_orden}', 'full_budget')">
+          <i class="fas fa-list-ul"></i> Presupuesto Detallado en Texto
+        </button>
+        <button type="button" class="wa-mode-tab ${activeWaBudgetMode === "terms_only" ? "active" : ""}" data-wa-mode="terms_only" onclick="switchWhatsAppBudgetMode('${order.id_orden}', 'terms_only')">
+          <i class="fas fa-file-contract"></i> Solo Recepción (Sin Precios)
+        </button>
+      </div>
+
+      <!-- Guía rápida de flujo PDF + WhatsApp -->
+      <div style="background:rgba(245,223,0,0.08); border:1.5px solid var(--renacer-gold); border-radius:12px; padding:10px 14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div style="font-size:12px; color:var(--text-main); line-height:1.4;">
+          <strong><i class="fas fa-paperclip" style="color:var(--renacer-gold);"></i> Flujo de Presupuesto PDF:</strong>
+          1) Genera el PDF con el botón <strong>"Orden y Presupuesto PDF"</strong> · 2) Adjunta el PDF en el chat del cliente junto con este mensaje de <strong>Esperando Aprobación</strong>.
         </div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:8px; margin-top:8px; font-size:11.5px; color:var(--text-secondary); line-height:1.45;">
-          <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.08);">
-            <strong>1. Aprobación:</strong> Plazo mín. de 3 días para aprobar o retirar piezas.
-          </div>
-          <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.08);">
-            <strong>2. Responsabilidad:</strong> Cero responsabilidad tras 1 mes sin finalizar/retirar.
-          </div>
-          <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.08);">
-            <strong>3. Entrega:</strong> Solo se retira si está cancelado al 100%.
-          </div>
-          <div style="background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:8px; border:1px solid rgba(0,0,0,0.08);">
-            <strong>4. Limpieza:</strong> Posibles ajustes por daños ocultos detectados en lavado.
-          </div>
-        </div>
+        <button type="button" class="btn btn--gold btn--xs" onclick="printOrderExcelSheet('${order.id_orden}')">
+          <i class="fas fa-file-pdf"></i> Abrir Orden / Presupuesto PDF
+        </button>
       </div>
 
       <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
-        Mensaje listo para enviar a <strong>${order.nombre_cliente} (${order.telefono_cliente})</strong> con el <strong>Código de Troquel #${order.codigo_troquel}</strong> y las 4 políticas del taller:
+        Mensaje editable listo para <strong>${order.nombre_cliente} (${order.telefono_cliente})</strong> · <strong>Orden #${order.codigo_troquel}</strong>:
       </p>
       <textarea
         id="wa-budget-textarea"
-        rows="15"
+        rows="13"
+        oninput="syncWhatsAppBudgetLink('${safePhoneAttr}')"
         style="width:100%; padding:12px; border-radius:12px; border:1.5px solid var(--border-color); font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.45; background:var(--bg-input); color:var(--text-main);"
       >${textMsg}</textarea>
     `,
     footer: `
-      <button type="button" class="btn btn--ghost" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Comprobante Físico">
-        <i class="fas fa-print"></i> Imprimir Ticket Físico
+      <button type="button" class="btn btn--ghost" onclick="printOrderExcelSheet('${order.id_orden}')" title="Generar PDF / Hoja de Orden y Presupuesto">
+        <i class="fas fa-file-pdf"></i> Generar PDF
+      </button>
+      <button type="button" class="btn btn--ghost" onclick="printOrderReceptionTicket('${order.id_orden}')" title="Imprimir Ticket 80mm">
+        <i class="fas fa-print"></i> Ticket 80mm
       </button>
       <button type="button" class="btn btn--ghost" onclick="copyTextToClipboard(document.getElementById('wa-budget-textarea').value)">
         <i class="fas fa-copy"></i> Copiar Texto
       </button>
-      <a href="${waUrl}" target="_blank" rel="noopener" class="btn btn--success btn--lg" style="text-decoration:none;">
-        <i class="fab fa-whatsapp"></i> Enviar Ahora por WhatsApp
+      <a id="wa-budget-send-link" href="${waUrl}" target="_blank" rel="noopener" class="btn btn--success btn--lg" style="text-decoration:none;">
+        <i class="fab fa-whatsapp"></i> Enviar por WhatsApp
       </a>
     `
   });
@@ -11360,9 +12080,9 @@ function renderCommissionsAndStaffScreen() {
     </div>
 
     <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:14px 18px; margin-bottom:12px;">
-      <h3 style="font-size:16px; font-weight:900;"><i class="fas fa-user-shield"></i> Perfiles de Dirección, Jefes de Taller, Recepción y PINs de Seguridad</h3>
+      <h3 style="font-size:16px; font-weight:900;"><i class="fas fa-user-shield"></i> Perfiles de Dirección, Gerencia, Jefes de Taller, Recepción y PINs de Seguridad</h3>
     </div>
-    <div class="data-table-wrapper">
+    <div class="data-table-wrapper" style="margin-bottom:28px;">
       <table class="renacer-table">
         <thead>
           <tr>
@@ -11379,6 +12099,129 @@ function renderCommissionsAndStaffScreen() {
         </tbody>
       </table>
     </div>
+
+    <!-- MÓDULO MOVIDO AL FINAL DE PERSONAL Y COMISIONES (SOLICITADO POR JESÚS ANDRADE): REMUNERACIÓN DE GERENCIA / SOCIOS -->
+    ${(() => {
+      const partners = db.usuarios.filter((u) => isPartnerInManagementPayroll(u));
+      const partnersRemunData = partners.map((p) => {
+        const payrollActive = isPartnerPayrollActive(p);
+        const salarioBase = payrollActive ? getUserWeeklySalary(p) : 0;
+        const extraSubs = db.subtareas.filter(
+          (s) => s.tecnico_id === p.id_usuario && s.estado_subtarea === "terminado" && !s.comision_pagada
+        );
+        const totalExtras = extraSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+
+        const adelantosMovs = (db.finanzas_movimientos || []).filter(
+          (m) =>
+            m.usuario_id === p.id_usuario &&
+            m.tipo === "egreso" &&
+            (m.categoria === "Adelanto Socio / Retiro de Jefe" || m.categoria === "Adelanto / Vale a Trabajador") &&
+            !m.liquidado_en_nomina
+        );
+        const totalAdelantos = adelantosMovs.reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+        const netoSemanal = Math.max(0, salarioBase + totalExtras - totalAdelantos);
+
+        return {
+          user: p,
+          payrollActive,
+          configuredSalary: getUserWeeklySalary(p),
+          salarioBase,
+          extraSubsCount: extraSubs.length,
+          totalExtras,
+          adelantosCount: adelantosMovs.length,
+          totalAdelantos,
+          netoSemanal
+        };
+      });
+
+      return `
+      <div class="partner-remun-card" style="margin-top:6px;">
+        <div class="partner-remun-header">
+          <div>
+            <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase; letter-spacing:0.8px;">
+              ADMINISTRACIÓN Y PAGOS DE GERENCIA / SOCIOS
+            </span>
+            <h3 style="font-size:18px; font-weight:900; margin-top:2px;">
+              <i class="fas fa-user-tie" style="color:var(--renacer-gold);"></i> Sueldos Editables, Comisiones y Adelantos de Dirección (Jesús, Sr. Enrique y Javier)
+            </h3>
+            <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
+              Cada perfil de Gerencia permite ajustar su sueldo semanal en cualquier momento, contabilizar trabajos extras/comisiones, registrar retiros o mantenerlo <strong>Inactivo / Inerte</strong> en pagos mientras conserva su acceso completo a Gerencia.
+            </p>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn--ghost btn--xs" onclick="openRegisterPartnerAdvanceModal()">
+              <i class="fas fa-hand-holding-usd"></i> + Registrar Adelanto / Retiro
+            </button>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
+          ${partnersRemunData
+            .map(
+              (p) => `
+            <div class="${p.payrollActive ? "" : "partner-card--inactive"}" style="background:rgba(255,255,255,0.02); border:1px solid var(--border-color); border-radius:14px; padding:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:12px;">
+                <div>
+                  <h4 style="font-size:16px; font-weight:900; margin-bottom:4px;">${p.user.nombre}</h4>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                    <span class="state-badge state-badge--exec">${p.user.rol_label || "Gerencia"}</span>
+                    <span class="state-badge ${p.payrollActive ? "state-badge--done" : "state-badge--wait"}" style="font-size:10px;">
+                      ${p.payrollActive ? "PAGOS ACTIVOS" : "INACTIVO / INERTE"}
+                    </span>
+                  </div>
+                </div>
+                <div style="text-align:right;">
+                  <span style="font-size:10px; font-weight:800; color:#94a3b8; display:block;">A PERCIBIR</span>
+                  <span style="font-size:22px; font-weight:900; color:${p.payrollActive || p.totalExtras > 0 ? "#22c55e" : "#94a3b8"}; font-family:'JetBrains Mono',monospace;">
+                    $${p.netoSemanal.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; background:rgba(0,0,0,0.2); padding:10px 12px; border-radius:10px; margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span><i class="fas fa-briefcase" style="color:#94a3b8; margin-right:4px;"></i> Sueldo Base Semanal:</span>
+                  <strong style="color:#cbd5e1;">
+                    ${p.payrollActive ? `+$${p.salarioBase.toFixed(2)}` : `$0.00 <span style="font-size:10.5px; color:#94a3b8;">(Inerte · Base cfg: $${p.configuredSalary.toFixed(2)})</span>`}
+                  </strong>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                  <span><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:4px;"></i> Trabajos Extras / Comisiones (${p.extraSubsCount}):</span>
+                  <strong style="color:var(--renacer-gold);">+$${p.totalExtras.toFixed(2)}</strong>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                  <span><i class="fas fa-arrow-down" style="color:#f87171; margin-right:4px;"></i> Adelantos Tomados (${p.adelantosCount}):</span>
+                  <strong style="color:#f87171;">-$${p.totalAdelantos.toFixed(2)}</strong>
+                </div>
+              </div>
+
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openEditPartnerSalaryModal('${p.user.id_usuario}')" title="Modificar sueldo semanal o estado en nómina">
+                  <i class="fas fa-pen-to-square"></i> Sueldo
+                </button>
+                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="togglePartnerPayrollStatus('${p.user.id_usuario}')" title="Activar o pausar en nómina de pagos">
+                  <i class="fas ${p.payrollActive ? "fa-pause-circle" : "fa-play-circle"}"></i> ${p.payrollActive ? "Inactivar" : "Activar"}
+                </button>
+                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openRegisterPartnerAdvanceModal('${p.user.id_usuario}')">
+                  <i class="fas fa-minus-circle"></i> Retiro
+                </button>
+                ${
+                  p.payrollActive || p.totalExtras > 0
+                    ? `<button type="button" class="btn btn--gold btn--xs" style="width:100%; justify-content:center; font-weight:900; margin-top:2px;" onclick="openLiquidatePartnerWeeklyModal('${p.user.id_usuario}')">
+                         <i class="fas fa-hand-holding-usd"></i> Liquidar Semana ($${p.netoSemanal.toFixed(2)})
+                       </button>`
+                    : `<div style="width:100%; font-size:11px; color:var(--text-muted); text-align:center; padding:4px 0;">
+                         <i class="fas fa-user-shield"></i> Perfil Gerencia activo · Pulsa <strong>Activar</strong> o <strong>Sueldo</strong> cuando comience a cobrar.
+                       </div>`
+                }
+              </div>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
+      </div>`;
+    })()}
   `;
 }
 
@@ -11546,18 +12389,21 @@ function confirmLiquidateExternalWorkshop(workshopId) {
 
   // 1. Asentar Egreso en Libro Diario
   const movId = "FIN-" + Date.now();
-  const now = new Date().toISOString();
-  db.finanzas_movimientos.push({
-    id_movimiento: movId,
+  const now = new Date().toISOString().slice(0, 10);
+  db.finanzas_movimientos.unshift({
+    id_mov: movId,
     fecha: now,
     tipo: "egreso",
     categoria: "Pago a Talleres Externos (Solteca / Outsourcing)",
     monto: amount,
-    metodo_pago: method,
+    metodo: method,
+    cuenta: method === "efectivo" ? "efectivo" : "mercantil",
     referencia: ref,
     concepto: "Pago por trabajos tercerizados a " + ws.nombre + ". " + notes,
-    usuario_registro: currentUser.nombre,
-    soporte_foto: null
+    registrado_por: currentUser ? currentUser.nombre : "Sistema",
+    comprobante_foto: "",
+    orden_id: "OUTSOURCING",
+    codigo_troquel: "-"
   });
 
   // 2. Marcar subtareas completadas como pagadas
@@ -11760,25 +12606,21 @@ function updateSubtaskCommissionFromFicha(subtaskId, newComm, techId) {
 
 let currentWorkerLiquidationPhoto = "";
 
-function handleWorkerLiquidationPhotoUpload(e) {
+async function handleWorkerLiquidationPhotoUpload(e) {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(evt) {
-    currentWorkerLiquidationPhoto = evt.target.result;
-    const previewEl = document.getElementById("liq-worker-photo-preview");
-    if (previewEl) {
-      previewEl.innerHTML = `
-        <div style="display:inline-block; position:relative; margin-top:8px;">
-          <img src="${currentWorkerLiquidationPhoto}" style="max-height:160px; max-width:100%; border-radius:10px; border:2px solid #16a34a; box-shadow:0 4px 12px rgba(0,0,0,0.25);" />
-          <div style="font-size:11.5px; font-weight:800; color:#22c55e; margin-top:5px;">
-            <i class="fas fa-check-circle"></i> Comprobante / Billetes cargados con éxito
-          </div>
+  currentWorkerLiquidationPhoto = await compressImageForSheets(file, 700, 34000);
+  const previewEl = document.getElementById("liq-worker-photo-preview");
+  if (previewEl) {
+    previewEl.innerHTML = `
+      <div style="display:inline-block; position:relative; margin-top:8px;">
+        <img src="${currentWorkerLiquidationPhoto}" style="max-height:160px; max-width:100%; border-radius:10px; border:2px solid #16a34a; box-shadow:0 4px 12px rgba(0,0,0,0.25);" />
+        <div style="font-size:11.5px; font-weight:800; color:#22c55e; margin-top:5px;">
+          <i class="fas fa-check-circle"></i> Comprobante / Billetes cargados y optimizados
         </div>
-      `;
-    }
-  };
-  reader.readAsDataURL(file);
+      </div>
+    `;
+  }
 }
 
 function openLiquidateWorkerModal(techId, suggestedAmount) {
@@ -11786,7 +12628,7 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
   if (!tech) return;
 
   currentWorkerLiquidationPhoto = "";
-  const tasaBcv = Number(db.configuracion.tasaBcv) || 45.80;
+  const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
   const amountUsd = Number(suggestedAmount) > 0 ? Number(suggestedAmount) : 0;
   const amountBs = amountUsd * tasaBcv;
 
@@ -11917,7 +12759,7 @@ function confirmWorkerLiquidation(techId) {
     }
   });
 
-  const tasaBcv = Number(db.configuracion.tasaBcv) || 45.80;
+  const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -12129,7 +12971,7 @@ function openAddWorkerModal() {
           <label>Rol en el Sistema</label>
           <select id="new-worker-role">
             <option value="tecnico">Técnico / Operador (Pago por Destajo)</option>
-            <option value="jefe_taller">Jefe de Taller / Supervisor</option>
+            <option value="jefe_taller">Gerencia / Jefe de Taller</option>
             <option value="recepcion">Recepción / Atención al Cliente</option>
             <option value="inventario">Inventario y Repuestos</option>
             <option value="admin">Administrador del Sistema</option>
@@ -12139,6 +12981,10 @@ function openAddWorkerModal() {
         <div class="form-field">
           <label>PIN de Acceso Confidencial (Numérico) *</label>
           <input type="text" id="new-worker-pin" placeholder="Ej. 654321" maxlength="8" required />
+        </div>
+        <div class="form-field">
+          <label>Sueldo Base Semanal ($ USD, opcional / editable)</label>
+          <input type="number" step="1" min="0" id="new-worker-salary" value="0" placeholder="0 si es solo destajo o inerte" />
         </div>
       </div>
     `,
@@ -12157,6 +13003,7 @@ function saveNewWorker() {
   const phone = (document.getElementById("new-worker-phone")?.value || "").trim();
   const role = document.getElementById("new-worker-role")?.value || "tecnico";
   const pin = (document.getElementById("new-worker-pin")?.value || "").trim();
+  const salary = Math.max(0, Number(document.getElementById("new-worker-salary")?.value) || 0);
 
   if (!name || !spec) {
     showToast("Completa el nombre y la especialidad del trabajador.", "error");
@@ -12171,12 +13018,13 @@ function saveNewWorker() {
     tecnico: "Trabajador de Taller",
     recepcion: "Recepción e Ingreso",
     inventario: "Inventario y Repuestos",
-    jefe_taller: "Jefe de Taller / Gerencia",
+    jefe_taller: "Gerencia / Jefe de Taller",
     admin: "Administrador del Sistema",
     outsourcing: "Taller Externo (Outsourcing)"
   };
 
   const isExt = role === "outsourcing";
+  const isMgmt = role === "jefe_taller";
   db.usuarios.push({
     id_usuario: (isExt ? "EXT-" : "USR-") + Date.now().toString().slice(-6),
     nombre: name,
@@ -12187,11 +13035,14 @@ function saveNewWorker() {
     especialidad: spec,
     telefono: phone || "0414-0000000",
     pin: pin || "123456",
+    salario_fijo_semanal: salary,
+    en_nomina_gerencia: isMgmt,
+    nomina_activa: isMgmt ? salary > 0 : false,
     activo: true,
     modalidad_horario: isExt ? "Tercerizado" : "Jornada Completa"
   });
 
-  saveDatabase();
+  saveDatabase(`Nuevo perfil registrado: ${name}`);
   populateLoginSelect();
   closeModal();
   renderApp();
@@ -12201,6 +13052,10 @@ function saveNewWorker() {
 function openEditWorkerModal(userId) {
   const u = db.usuarios.find((x) => x.id_usuario === userId);
   if (!u) return;
+
+  const curSal = getUserWeeklySalary(u);
+  const inMgmt = isPartnerInManagementPayroll(u);
+  const mgmtActive = isPartnerPayrollActive(u);
 
   openModal({
     title: `Editar Perfil y PIN — ${u.nombre}`,
@@ -12223,7 +13078,7 @@ function openEditWorkerModal(userId) {
           <label>Rol en el Sistema</label>
           <select id="edit-worker-role">
             <option value="tecnico" ${u.rol === "tecnico" ? "selected" : ""}>Técnico / Operador (Destajo)</option>
-            <option value="jefe_taller" ${u.rol === "jefe_taller" ? "selected" : ""}>Jefe de Taller / Supervisor</option>
+            <option value="jefe_taller" ${u.rol === "jefe_taller" ? "selected" : ""}>Gerencia / Jefe de Taller</option>
             <option value="recepcion" ${u.rol === "recepcion" ? "selected" : ""}>Recepción y Presupuesto</option>
             <option value="inventario" ${u.rol === "inventario" ? "selected" : ""}>Inventario y Repuestos</option>
             <option value="admin" ${u.rol === "admin" ? "selected" : ""}>Administrador del Sistema</option>
@@ -12235,10 +13090,22 @@ function openEditWorkerModal(userId) {
           <input type="text" id="edit-worker-pin" value="${escapeHtml(u.pin || "")}" placeholder="PIN numérico" maxlength="8" required />
         </div>
         <div class="form-field">
-          <label>Estado en el Taller</label>
+          <label>Estado de Acceso al Sistema</label>
           <select id="edit-worker-active">
-            <option value="true" ${u.activo !== false ? "selected" : ""}>Activo en Taller</option>
+            <option value="true" ${u.activo !== false ? "selected" : ""}>Activo (Puede iniciar sesión)</option>
             <option value="false" ${u.activo === false ? "selected" : ""}>Inactivo / Permiso</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Sueldo Base Semanal ($ USD, editable)</label>
+          <input type="number" step="1" min="0" id="edit-worker-salary" value="${curSal}" />
+        </div>
+        <div class="form-field">
+          <label>Nómina de Gerencia / Administración</label>
+          <select id="edit-worker-mgmt-payroll">
+            <option value="no" ${!inMgmt ? "selected" : ""}>No incluir en bloque de Gerencia</option>
+            <option value="active" ${inMgmt && mgmtActive ? "selected" : ""}>Incluir en Gerencia — Pagos ACTIVOS</option>
+            <option value="inert" ${inMgmt && !mgmtActive ? "selected" : ""}>Incluir en Gerencia — INACTIVO / INERTE</option>
           </select>
         </div>
       </div>
@@ -12262,6 +13129,8 @@ function saveEditedWorker(userId) {
   const role = document.getElementById("edit-worker-role")?.value || u.rol;
   const pin = (document.getElementById("edit-worker-pin")?.value || "").trim();
   const active = document.getElementById("edit-worker-active")?.value === "true";
+  const salary = Math.max(0, Number(document.getElementById("edit-worker-salary")?.value) || 0);
+  const mgmtOpt = document.getElementById("edit-worker-mgmt-payroll")?.value || "no";
 
   if (!name) {
     showToast("El nombre no puede estar vacío.", "error");
@@ -12276,7 +13145,7 @@ function saveEditedWorker(userId) {
     tecnico: "Trabajador de Taller",
     recepcion: "Recepción e Ingreso",
     inventario: "Inventario y Repuestos",
-    jefe_taller: "Jefe de Taller / Gerencia",
+    jefe_taller: u.id_usuario === "USR-JAVIER" ? "Gerencia" : "Jefe de Taller / Gerencia",
     admin: "Administrador del Sistema",
     outsourcing: "Taller Externo (Outsourcing)"
   };
@@ -12291,6 +13160,9 @@ function saveEditedWorker(userId) {
   u.es_externo = isExt;
   u.pin = pin;
   u.activo = active;
+  u.salario_fijo_semanal = salary;
+  u.en_nomina_gerencia = mgmtOpt !== "no";
+  u.nomina_activa = mgmtOpt === "active";
 
   // Actualizar nombre en subtareas asignadas a este usuario
   db.subtareas.forEach((s) => {
@@ -12299,7 +13171,7 @@ function saveEditedWorker(userId) {
     }
   });
 
-  saveDatabase();
+  saveDatabase(`Perfil actualizado: ${name}`);
   populateLoginSelect();
   closeModal();
   renderApp();
@@ -13027,20 +13899,16 @@ function saveNewFinanceCategory() {
 
 let tempMovementPhoto = "";
 
-function handleMovementPhotoUpload(input) {
+async function handleMovementPhotoUpload(input) {
   const file = input.files && input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    tempMovementPhoto = e.target.result;
-    const nameEl = document.getElementById("mov-photo-name");
-    const prevEl = document.getElementById("mov-photo-preview");
-    if (nameEl) nameEl.textContent = `✅ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
-    if (prevEl) {
-      prevEl.innerHTML = `<img src="${tempMovementPhoto}" style="max-height:100px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
-    }
-  };
-  reader.readAsDataURL(file);
+  tempMovementPhoto = await compressImageForSheets(file, 700, 34000);
+  const nameEl = document.getElementById("mov-photo-name");
+  const prevEl = document.getElementById("mov-photo-preview");
+  if (nameEl) nameEl.textContent = `✅ ${file.name} (optimizada para la nube)`;
+  if (prevEl) {
+    prevEl.innerHTML = `<img src="${tempMovementPhoto}" style="max-height:100px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
+  }
 }
 
 function openNewFinanceMovementModal(tipo) {
@@ -13509,9 +14377,12 @@ function renderCatalogManagerScreen() {
                   $${precio.toFixed(2)}
                 </div>
               </div>
-              <div>
+              <div style="display:flex; gap:4px;">
                 <button type="button" class="btn btn--ghost btn--xs" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio al cliente">
                   <i class="fas fa-edit"></i>
+                </button>
+                <button type="button" class="btn btn--ghost btn--xs" style="color:#f87171;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio del catálogo">
+                  <i class="fas fa-trash-alt"></i>
                 </button>
               </div>
             </div>
@@ -15376,7 +16247,7 @@ function markLunchReturnPrompt(asistId) {
 
 
 /* ============================================================================
-   PLANILLA / HOJA DE SERVICIO EN FORMATO TABLA / EXCEL (RECTIFICADORA RENACER)
+   PLANILLA / HOJA DE SERVICIO Y PRESUPUESTO PDF (ACTUALIZABLE A FACTURA FÍSICA)
    ============================================================================ */
 function printOrderExcelSheet(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
@@ -15387,6 +16258,20 @@ function printOrderExcelSheet(orderId) {
 
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
   const repuestos = Array.isArray(order.items_repuestos) ? order.items_repuestos : [];
+  const docCfg = (db.config && db.config.doc_template) || {};
+  const docTitle = docCfg.modo_factura_activa ? "FACTURA DE SERVICIO" : (docCfg.tipo_documento || "ORDEN Y PRESUPUESTO");
+  const companyName = docCfg.razon_social || "RECTIFICADORA RENACER C.A.";
+  const companySub = docCfg.subtitulo || "Especialistas en Rectificación de Motores, Cámaras, Cigüeñales y Bloques · Maracaibo, Zulia";
+  const companyRif = docCfg.rif ? ` · RIF: ${escapeHtml(docCfg.rif)}` : "";
+  const isWaitingApproval =
+    order.estado_actual === "diagnostico_presupuesto" ||
+    order.estado_actual === "esperando_aprobacion_abono" ||
+    order.estado_actual === "aprobacion";
+
+  const waApprovalMsg = buildWhatsAppPdfApprovalMessage(order);
+  const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
+  const waApprovalUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(waApprovalMsg)}` : "";
+  const safeClientTitle = String(order.nombre_cliente || "CLIENTE").toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ ]/gi, "").trim();
 
   let itemsHtml = "";
   let counter = 1;
@@ -15412,7 +16297,7 @@ function printOrderExcelSheet(orderId) {
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${counter++}</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${r.nombre}</strong> (Repuesto)</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">Repuesto Taller</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px;">Inventario Javier Andrade</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;">Inventario / Gerencia</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${r.cantidad}</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right;">$${Number(r.precio_unitario).toFixed(2)}</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right; font-weight:800;">$${sub.toFixed(2)}</td>
@@ -15431,7 +16316,7 @@ function printOrderExcelSheet(orderId) {
     <html lang="es">
     <head>
       <meta charset="UTF-8">
-      <title>Planilla de Control y Hoja de Servicio - Orden #${order.codigo_troquel}</title>
+      <title>${safeClientTitle} Orden #${order.codigo_troquel}</title>
       <style>
         body {
           font-family: 'Segoe UI', Arial, sans-serif;
@@ -15466,6 +16351,19 @@ function printOrderExcelSheet(orderId) {
           border: 2px solid #cbd5e1;
           border-radius: 8px;
           padding: 8px 14px;
+        }
+        .approval-banner {
+          background: #fef9c3;
+          border: 1.5px solid #ca8a04;
+          color: #854d0e;
+          border-radius: 8px;
+          padding: 8px 14px;
+          margin-bottom: 14px;
+          font-size: 12px;
+          font-weight: 700;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
         }
         .grid-info {
           display: grid;
@@ -15525,27 +16423,59 @@ function printOrderExcelSheet(orderId) {
           font-size: 11.5px;
           font-weight: bold;
         }
+        .action-bar {
+          margin-top: 24px;
+          padding: 14px;
+          background: #f1f5f9;
+          border: 1px solid #cbd5e1;
+          border-radius: 10px;
+          display: flex;
+          gap: 10px;
+          justify-content: center;
+          flex-wrap: wrap;
+        }
+        .action-btn {
+          padding: 10px 16px;
+          font-size: 13px;
+          font-weight: bold;
+          border: none;
+          border-radius: 8px;
+          cursor: pointer;
+          text-decoration: none;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
         @media print {
           body { margin: 0; }
-          .no-print { display: none; }
+          .no-print { display: none !important; }
         }
       </style>
     </head>
     <body>
       <div class="header-box">
         <div>
-          <div class="title-company">RECTIFICADORA RENACER C.A.</div>
+          <div class="title-company">${escapeHtml(companyName)}</div>
           <div class="biblical-quote">"Aunque tu principio haya sido pequeño, tu postrer estado será muy grande." (Job 8:7)</div>
           <div style="font-size:11px; color:#64748b; margin-top:3px;">
-            Especialistas en Rectificación de Motores, Cámaras, Cigüeñales y Bloques · Maracaibo, Zulia
+            ${escapeHtml(companySub)}${companyRif}
           </div>
         </div>
         <div class="order-badge-box">
-          <div style="font-size:11px; color:#64748b; font-weight:bold;">HOJA DE SERVICIO</div>
+          <div style="font-size:11px; color:#64748b; font-weight:bold;">${escapeHtml(docTitle)}</div>
           <div style="font-size:22px; font-weight:900; color:#0f1638; font-family:monospace;">ORDEN #${order.codigo_troquel}</div>
           <div style="font-size:11px; color:#0284c7; font-weight:bold;">Fecha: ${formatDateHuman(order.fecha_ingreso, false)}</div>
         </div>
       </div>
+
+      ${
+        isWaitingApproval
+          ? `<div class="approval-banner">
+               <span>⏳ ESTADO DEL PRESUPUESTO: ESPERANDO APROBACIÓN DEL CLIENTE</span>
+               <span>Plazo de vigencia / retiro: 3 días</span>
+             </div>`
+          : ""
+      }
 
       <div class="grid-info">
         <div class="info-card">
@@ -15584,7 +16514,7 @@ function printOrderExcelSheet(orderId) {
 
       <table class="totals-table">
         <tr>
-          <td style="padding:4px 8px; font-weight:bold;">Total Facturado:</td>
+          <td style="padding:4px 8px; font-weight:bold;">${docCfg.modo_factura_activa ? "Total Factura:" : "Total Presupuesto:"}</td>
           <td style="padding:4px 8px; text-align:right; font-weight:900; font-size:16px;">$${Number(order.monto_total).toFixed(2)}</td>
         </tr>
         <tr>
@@ -15609,7 +16539,7 @@ function printOrderExcelSheet(orderId) {
 
       <div class="signatures-grid">
         <div class="sig-line">
-          Firma Técnico Especialista
+          Firma Técnico / Gerencia
         </div>
         <div class="sig-line">
           Firma Control de Calidad
@@ -15619,15 +16549,36 @@ function printOrderExcelSheet(orderId) {
         </div>
       </div>
 
-      <div class="no-print" style="margin-top:30px; text-align:center;">
-        <button type="button" onclick="window.print()" style="padding:10px 20px; font-size:14px; font-weight:bold; background:#0f1638; color:#fff; border:none; border-radius:6px; cursor:pointer;">
-          🖨️ Imprimir Hoja de Servicio
+      <div class="no-print action-bar">
+        <button type="button" class="action-btn" onclick="window.print()" style="background:#0f1638; color:#fff;">
+          🖨️ Imprimir / Guardar PDF
         </button>
+        <button type="button" class="action-btn" id="btn-copy-wa-msg" onclick="copyApprovalMsg()" style="background:#eab308; color:#0f172a;">
+          📋 Copiar Mensaje "Esperando Aprobación"
+        </button>
+        ${
+          waApprovalUrl
+            ? `<a href="${waApprovalUrl}" target="_blank" rel="noopener" class="action-btn" style="background:#16a34a; color:#fff;">
+                 💬 Abrir WhatsApp ("Esperando Aprobación")
+               </a>`
+            : ""
+        }
       </div>
 
       <script>
+        var APPROVAL_MSG = ${JSON.stringify(waApprovalMsg)};
+        function copyApprovalMsg() {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(APPROVAL_MSG).then(function() {
+              var b = document.getElementById('btn-copy-wa-msg');
+              if (b) { b.textContent = '✅ Mensaje Copiado (Listo para pegar con el PDF)'; }
+            });
+          } else {
+            window.prompt('Copia el mensaje para enviar junto al PDF:', APPROVAL_MSG);
+          }
+        }
         window.onload = function() {
-          setTimeout(() => { window.print(); }, 400);
+          setTimeout(function() { window.print(); }, 450);
         };
       </script>
     </body>
@@ -15668,12 +16619,25 @@ window.addEventListener("DOMContentLoaded", () => {
   // Sincronización automática de fondo cada 15 segundos (protegida contra colisiones de escritura)
   setInterval(() => syncFromGoogleSheets(true), 15000);
 
-  // Sincronizar automáticamente en vivo al regresar a la pestaña; al salir, empujar cualquier cambio pendiente
+  // Sincronizar automáticamente en vivo al regresar a la pestaña; al salir, empujar cualquier cambio pendiente con keepalive
   window.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      if (cloudPushPending || cloudPushDebounceTimer) {
-        flushCloudPush(true);
+      if (hasUnsyncedLocalChanges || cloudPushPending || cloudPushDebounceTimer) {
+        sendKeepaliveCloudPushOnExit();
       }
+    } else {
+      syncFromGoogleSheets(true);
+    }
+  });
+  window.addEventListener("pagehide", () => {
+    if (hasUnsyncedLocalChanges || cloudPushPending || cloudPushDebounceTimer) {
+      sendKeepaliveCloudPushOnExit();
+    }
+  });
+  window.addEventListener("online", () => {
+    if (hasUnsyncedLocalChanges) {
+      showToast("Conexión restablecida. Respaldando cambios pendientes en Google Sheets...", "info");
+      flushCloudPush(false);
     } else {
       syncFromGoogleSheets(true);
     }
@@ -15682,15 +16646,22 @@ window.addEventListener("DOMContentLoaded", () => {
     syncFromGoogleSheets(true);
   });
   window.addEventListener("beforeunload", (e) => {
-    if (cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
-      flushCloudPush(true);
+    if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
+      sendKeepaliveCloudPushOnExit();
       e.preventDefault();
       e.returnValue = "";
     }
   });
 
-  // Secuencia segura de arranque: primero leer el estado real de Google Sheets y DESPUÉS consultar tasas BCV/Paralelo
+  // Secuencia segura de arranque:
+  // - Si había cambios locales sin subir de una sesión anterior, subirlos/fusionarlos PRIMERO para jamás perder trabajo.
+  // - Si todo estaba al día, leer primero Google Sheets y DESPUÉS consultar tasas BCV/Paralelo.
   const startInitialSync = async () => {
+    if (hasUnsyncedLocalChanges) {
+      updateCloudSyncBadge("pending");
+      scheduleCloudRetry();
+      await flushCloudPush(true, { reason: "Recuperación automática de cambios locales pendientes" });
+    }
     await syncFromGoogleSheets(true);
     fetchLiveExchangeRates(true);
     setInterval(() => fetchLiveExchangeRates(true), 30 * 60 * 1000);
