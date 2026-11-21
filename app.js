@@ -38,7 +38,63 @@ let lastLocalBackupSaveTs = 0;
 let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
 
-const CURRENT_APP_VERSION = "2026.11.20.v38";
+const CURRENT_APP_VERSION = "2026.11.21.v40";
+
+/* ---------- Helpers de Separación Real: Servicios Facturados al Cliente (Lista A) vs Trabajos de Destajo (Lista B) ---------- */
+function getOrderClientServices(order) {
+  if (!order) return [];
+  if (Array.isArray(order.servicios_cliente)) {
+    return order.servicios_cliente;
+  }
+  // Retrocompatibilidad para órdenes históricas creadas antes de separar Lista A y Lista B
+  const legacySubs = (db.subtareas || []).filter(
+    (s) => s.orden_id === order.id_orden && Number(s.monto_servicio) > 0
+  );
+  return legacySubs.map((s) => ({
+    id_item: s.id_subtarea,
+    descripcion: s.descripcion_servicio,
+    cantidad: 1,
+    precio_unitario: Number(s.monto_servicio) || 0,
+    monto: Number(s.monto_servicio) || 0,
+    es_item_extra: Boolean(s.es_item_extra),
+    _legacySubId: s.id_subtarea
+  }));
+}
+
+function formatServiceDisplayLabel(item) {
+  if (!item) return "";
+  const qty = Math.max(1, Number(item.cantidad) || 1);
+  const unitLabel = item.unidad_label ? ` ${item.unidad_label}` : " uds.";
+  const unitPrice = Number(item.precio_unitario) || (qty > 0 ? (Number(item.monto) || 0) / qty : 0);
+  if (qty > 1 || item.por_unidad) {
+    return `${item.descripcion} (x${qty}${unitLabel} · $${unitPrice.toFixed(2)} c/u)`;
+  }
+  return String(item.descripcion || "");
+}
+
+function formatSubtaskDisplayLabel(sub) {
+  if (!sub) return "";
+  const qty = Math.max(1, Number(sub.cantidad) || 1);
+  const unitLabel = sub.unidad_label ? ` ${sub.unidad_label}` : " uds.";
+  if (qty > 1) {
+    return `${sub.descripcion_servicio} (x${qty}${unitLabel})`;
+  }
+  return String(sub.descripcion_servicio || "");
+}
+
+function recalcOrderTotalsFromClientServices(order) {
+  if (!order) return;
+  const servs = getOrderClientServices(order);
+  const servTotal = servs.reduce((acc, it) => acc + (Number(it.monto) || 0), 0);
+  const repTotal = order.repuestos_comprados_taller
+    ? (order.items_repuestos || []).reduce(
+        (acc, r) => acc + (Number(r.subtotal) || (Number(r.precio_unitario) || 0) * (Number(r.cantidad) || 1)),
+        0
+      )
+    : 0;
+  order.monto_total = servTotal + repTotal;
+  order.saldo_pendiente = Math.max(0, order.monto_total - (Number(order.monto_abonado) || 0));
+}
 
 function getUserWeeklySalary(u) {
   if (!u) return 0;
@@ -70,7 +126,7 @@ const DEFAULT_TEXT_CUSTOMIZATIONS = {
   pipeline_subtitle: "Flujo de 6 etapas del taller: 1. Recepción → 2. Diagnóstico → 3. Aprobación → 4. Servicio → 5. Calidad → 6. Entrega.",
   reception_terms: "1. Plazo de Aprobación / Retiro: El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n2. Custodia de Piezas: La rectificadora no asume responsabilidad alguna por cámaras, motores, repuestos o piezas una vez transcurrido un (1) mes sin concretar o finalizar el trabajo.\n3. Retiro del Trabajo: El trabajo solo podrá ser retirado si se ha cancelado en su totalidad (100%).\n4. Ajustes por Lavado: Modificaciones de presupuesto por afectaciones detectadas tras limpieza serán notificadas previamente.",
   ar_title: "Control General de Cuentas por Cobrar",
-  attendance_notice: "Horario oficial: Entrada puntual hasta las 8:15 AM. Después de esa hora se marca Tardanza con deducción en nómina.",
+  attendance_notice: "Horario oficial del taller: 9:00 AM a 6:00 PM (1 hora de almuerzo). Entrada puntual hasta las 9:15 AM; después de esa hora se marca Tardanza.",
   payroll_notice: "Semana laboral de Lunes a Domingo. Corte y liquidación los días Domingo."
 };
 
@@ -86,34 +142,54 @@ function escapeHtml(str) {
 
 function getCustomText(key, defaultVal) {
   if (db && db.text_customizations && typeof db.text_customizations[key] === "string" && db.text_customizations[key].trim() !== "") {
-    return db.text_customizations[key];
+    const val = db.text_customizations[key];
+    // Migrar automáticamente el aviso viejo de 8:15 AM al nuevo horario oficial 9:00 AM - 6:00 PM
+    if (key === "attendance_notice" && val.includes("8:15 AM")) {
+      return DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice;
+    }
+    return val;
   }
   return defaultVal !== undefined ? defaultVal : (DEFAULT_TEXT_CUSTOMIZATIONS[key] || "");
 }
 
-const BANCOS_RENACER = [
+const DEFAULT_BANCOS_RENACER = [
   { id: "efectivo", nombre: "Efectivo Físico / Caja", moneda: "USD", icono: "fa-money-bill-wave", color: "#22c55e", badgeCls: "bank-badge--efectivo" },
   { id: "mercantil", nombre: "Banco Mercantil", moneda: "VES", icono: "fa-building-columns", color: "#0284c7", badgeCls: "bank-badge--mercantil" },
   { id: "banesco", nombre: "Banesco", moneda: "VES", icono: "fa-university", color: "#eab308", badgeCls: "bank-badge--banesco" },
   { id: "zelle_otro", nombre: "Zelle / Otros", moneda: "USD", icono: "fa-globe", color: "#a855f7", badgeCls: "bank-badge--zelle" }
 ];
+const BANCOS_RENACER = DEFAULT_BANCOS_RENACER;
+
+function getConfiguredBankAccounts() {
+  if (db && db.config && Array.isArray(db.config.bancos_cuentas) && db.config.bancos_cuentas.length > 0) {
+    return db.config.bancos_cuentas;
+  }
+  return DEFAULT_BANCOS_RENACER.map((b) => ({ ...b }));
+}
+
+function findBankAccountById(accId) {
+  const accounts = getConfiguredBankAccounts();
+  return accounts.find((b) => b.id === accId) || accounts[0] || DEFAULT_BANCOS_RENACER[0];
+}
 
 function getBalancesPorCuenta() {
-  const balances = {
-    efectivo: 0,
-    mercantil: 0,
-    banesco: 0,
-    zelle_otro: 0
-  };
+  const accounts = getConfiguredBankAccounts();
+  const balances = {};
+  accounts.forEach((b) => {
+    balances[b.id] = 0;
+  });
+
+  const defaultVesId = (accounts.find((b) => b.moneda === "VES") || accounts[0]).id;
+  const defaultUsdId = (accounts.find((b) => b.id === "efectivo") || accounts.find((b) => b.moneda === "USD") || accounts[0]).id;
 
   (db?.finanzas_movimientos || []).forEach((m) => {
     const monto = Number(m.monto) || 0;
     let c = m.cuenta;
     if (!c || balances[c] === undefined) {
       if (m.metodo === "pago_movil" || m.metodo === "transferencia") {
-        c = "mercantil";
+        c = defaultVesId;
       } else {
-        c = "efectivo";
+        c = defaultUsdId;
       }
     }
     if (m.tipo === "ingreso") {
@@ -123,8 +199,10 @@ function getBalancesPorCuenta() {
     }
   });
 
-  const totalLiquido = Object.values(balances).reduce((acc, val) => acc + val, 0);
-  return { balances, totalLiquido };
+  // Balance disponible positivo: solo cuentas con valor positivo (> 0) suman a la disponibilidad positiva
+  const totalLiquido = Object.values(balances).reduce((acc, val) => acc + (val > 0 ? val : 0), 0);
+  const totalNetoGlobal = Object.values(balances).reduce((acc, val) => acc + val, 0);
+  return { balances, totalLiquido, totalNetoGlobal, accounts };
 }
 
 async function fetchLiveExchangeRates(silent = false) {
@@ -384,7 +462,7 @@ function getInitialDatabase() {
         pin: "222222",
         telefono: "0412-0001122",
         activo: true,
-        modalidad_horario: "8:00 AM - 1:00 PM / 3:00 PM - 8:00 PM"
+        modalidad_horario: "9:00 AM - 6:00 PM (1h almuerzo)"
       },
       {
         id_usuario: "USR-JAVIER",
@@ -435,17 +513,29 @@ function getInitialDatabase() {
       }
     ],
     catalogo_servicios: [
-      { id_cat: "CAT-CAM-4C", categoria: "Cámara / Culata", nombre: "Servicio de cámara 4 C", precio_sugerido: 40.0, comision_sugerida: 12.5, activo: true },
-      { id_cat: "CAT-CAM-68", categoria: "Cámara / Culata", nombre: "Servicio de cámara 6 C / 8 C", precio_sugerido: 60.0, comision_sugerida: 18.0, activo: true },
-      { id_cat: "CAT-APLAN", categoria: "Cámara / Culata", nombre: "Aplanado / Cepillada de Cámara", precio_sugerido: 20.0, comision_sugerida: 5.0, activo: true },
-      { id_cat: "CAT-LAVQUIM", categoria: "Cámara / Culata", nombre: "Lavado Químico y Descarbonizado", precio_sugerido: 15.0, comision_sugerida: 3.5, activo: true },
-      { id_cat: "CAT-GUIAS", categoria: "Cámara / Culata", nombre: "Cambio e Instalación de Guías de Válvulas", precio_sugerido: 25.0, comision_sugerida: 8.0, activo: true },
-      { id_cat: "CAT-ASIENT", categoria: "Cámara / Culata", nombre: "Rectificación y Asentamiento de Válvulas", precio_sugerido: 30.0, comision_sugerida: 10.0, activo: true },
-      { id_cat: "CAT-SOLDAD", categoria: "Cámara / Culata", nombre: "Soldadura en Aluminio y Relleno de Pases de Agua", precio_sugerido: 35.0, comision_sugerida: 12.0, activo: true },
-      { id_cat: "CAT-ARMADO", categoria: "Cámara / Culata", nombre: "Armado de Cámara, Gomitas y Calibración", precio_sugerido: 25.0, comision_sugerida: 8.0, activo: true },
-      { id_cat: "CAT-PRUEBA", categoria: "Cámara / Culata", nombre: "Prueba de Presión Hidráulica / Vacío de Sellado", precio_sugerido: 20.0, comision_sugerida: 6.0, activo: true },
-      { id_cat: "CAT-CIGUENAL", categoria: "Bloque / Cigüeñal", nombre: "Rectificación y Pulitura de Cigüeñal", precio_sugerido: 55.0, comision_sugerida: 18.0, activo: true },
-      { id_cat: "CAT-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado De Block (Por Unidad)", precio_sugerido: 50.0, comision_sugerida: 23.25, activo: true }
+      { id_cat: "CAT-CAM-4C", categoria: "Cámara / Culata", nombre: "Servicio de cámara 4 C", precio_sugerido: 40.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-CAM-68", categoria: "Cámara / Culata", nombre: "Servicio de cámara 6 C / 8 C", precio_sugerido: 60.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-APLAN", categoria: "Cámara / Culata", nombre: "Aplanado / Cepillada de Cámara", precio_sugerido: 20.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-LAVQUIM", categoria: "Cámara / Culata", nombre: "Lavado Químico y Descarbonizado", precio_sugerido: 15.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-GUIAS", categoria: "Cámara / Culata", nombre: "Cambio e Instalación de Guías de Válvulas", precio_sugerido: 25.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-ASIENT", categoria: "Cámara / Culata", nombre: "Rectificación y Asentamiento de Válvulas", precio_sugerido: 30.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-SOLDAD", categoria: "Cámara / Culata", nombre: "Soldadura en Aluminio y Relleno de Pases de Agua", precio_sugerido: 35.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-ARMADO", categoria: "Cámara / Culata", nombre: "Armado de Cámara, Gomitas y Calibración", precio_sugerido: 25.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-PRUEBA", categoria: "Cámara / Culata", nombre: "Prueba de Presión Hidráulica / Vacío de Sellado", precio_sugerido: 20.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-CIGUENAL", categoria: "Bloque / Cigüeñal", nombre: "Rectificación y Pulitura de Cigüeñal", precio_sugerido: 55.0, comision_sugerida: 0, activo: true },
+      { id_cat: "CAT-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado De Block (Por Unidad)", precio_sugerido: 50.0, comision_sugerida: 0, activo: true }
+    ],
+    catalogo_destajo: [
+      { id_destajo: "DES-DESARME", categoria: "Cámara / Culata", nombre: "Desarme e Inspección de Cámara", pago_destajo: 4.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-LAVQUIM", categoria: "Lavado y Químico", nombre: "Lavado Químico y Descarbonizado", pago_destajo: 3.5, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-APLAN", categoria: "Cámara / Culata", nombre: "Cepillada / Aplanado de Superficie", pago_destajo: 5.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-GUIAS", categoria: "Cámara / Culata", nombre: "Extracción e Instalación de Guías", pago_destajo: 8.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-ASIENT", categoria: "Calibración y Asientos", nombre: "Corte de Asientos y Asentamiento de Válvulas", pago_destajo: 10.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-SOLDAD", categoria: "Soldadura Especial", nombre: "Soldadura de Aluminio / Relleno de Pases", pago_destajo: 12.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-ARMADO", categoria: "Cámara / Culata", nombre: "Armado de Cámara, Gomitas y Calibración", pago_destajo: 8.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-PRUEBA", categoria: "Cámara / Culata", nombre: "Prueba Hidráulica / Vacío de Sellado", pago_destajo: 6.0, es_outsourcing: false, taller_externo_nombre: "", activo: true },
+      { id_destajo: "DES-CIGUENAL", categoria: "Bloque / Cigüeñal", nombre: "Rectificación y Pulitura de Cigüeñal (Externo)", pago_destajo: 18.0, es_outsourcing: true, taller_externo_nombre: "Rectificadora Solteca", activo: true },
+      { id_destajo: "DES-BLOQUE", categoria: "Bloque / Cigüeñal", nombre: "Encamisado de Block por Cilindro (Externo)", pago_destajo: 23.25, es_outsourcing: true, taller_externo_nombre: "Rectificadora Solteca", activo: true }
     ],
     clientes: [],
     ordenes: [],
@@ -554,7 +644,7 @@ function normalizeDatabaseSchema(d) {
       pin: "222222",
       telefono: "0412-0001122",
       activo: true,
-      modalidad_horario: "8:00 AM - 1:00 PM / 3:00 PM - 8:00 PM"
+      modalidad_horario: "9:00 AM - 6:00 PM (1h almuerzo)"
     },
     {
       id_usuario: "USR-JAVIER",
@@ -727,6 +817,26 @@ function normalizeDatabaseSchema(d) {
     } else {
       d.catalogo_servicios = DEFAULT_CATALOGO_SERVICIOS.map((c) => ({ ...c }));
     }
+  }
+
+  // LISTA B INDEPENDIENTE: Catálogo de Trabajos / Operaciones de Destajo para Técnicos y Outsourcing
+  if (!Array.isArray(d.catalogo_destajo)) {
+    const seedDestajo = getInitialDatabase().catalogo_destajo || [];
+    d.catalogo_destajo = seedDestajo.map((x) => ({ ...x }));
+  } else {
+    d.catalogo_destajo = d.catalogo_destajo
+      .filter((x) => x && String(x.nombre || "").trim() !== "")
+      .map((x) => ({
+        id_destajo: String(x.id_destajo || ("DES-" + Math.random().toString(36).slice(2, 7))),
+        categoria: String(x.categoria || "Rectificación General"),
+        nombre: String(x.nombre || "").trim(),
+        pago_destajo: Math.max(0, Number(x.pago_destajo ?? x.comision_sugerida ?? 0)),
+        es_outsourcing: Boolean(x.es_outsourcing),
+        taller_externo_nombre: String(x.taller_externo_nombre || ""),
+        por_unidad: Boolean(x.por_unidad),
+        unidad_label: String(x.unidad_label || ""),
+        activo: x.activo !== false && String(x.activo).toLowerCase() !== "false"
+      }));
   }
   if (!d.finanzas_categorias) {
     d.finanzas_categorias = {
@@ -905,7 +1015,8 @@ function prepareSheetsPayload(sourceDb) {
       fecha_garantia_hasta: o.fecha_garantia_hasta || "",
       repuestos_comprados_taller: Boolean(o.repuestos_comprados_taller),
       items_repuestos: Array.isArray(o.items_repuestos) ? o.items_repuestos : [],
-      monto_repuestos: Number(o.monto_repuestos) || 0
+      monto_repuestos: Number(o.monto_repuestos) || 0,
+      servicios_cliente: Array.isArray(o.servicios_cliente) ? o.servicios_cliente : undefined
     };
     return {
       id_orden: o.id_orden || "",
@@ -944,6 +1055,15 @@ function prepareSheetsPayload(sourceDb) {
 
   const subtareas = (d.subtareas || []).map((s) => {
     const parentOrd = (d.ordenes || []).find((o) => o.id_orden === s.orden_id);
+    const checklistPayload = {
+      ...(s.checklist_salida && typeof s.checklist_salida === "object" ? s.checklist_salida : {}),
+      _unidad_meta: {
+        por_unidad: Boolean(s.por_unidad),
+        cantidad: Math.max(1, Number(s.cantidad) || 1),
+        pago_unitario: Number(s.pago_unitario) || (Number(s.comision_base_tecnico) || 0) / Math.max(1, Number(s.cantidad) || 1),
+        unidad_label: s.unidad_label || ""
+      }
+    };
     return {
       id_subtarea: s.id_subtarea || "",
       orden_id: s.orden_id || "",
@@ -958,7 +1078,7 @@ function prepareSheetsPayload(sourceDb) {
       fecha_fin: s.fecha_fin || s.fecha_terminado || "",
       tiempo_neto_min: Number(s.minutos_acumulados ?? s.tiempo_neto_min ?? 0),
       foto_evidencia_terminado: sanitizeSheetsCellStr(s.foto_terminado_url || s.foto_evidencia_terminado || "", 44000),
-      checklist_salida_json: JSON.stringify(s.checklist_salida || {}),
+      checklist_salida_json: JSON.stringify(checklistPayload),
       comision_pagada: Boolean(s.comision_pagada),
       id_liquidacion: s.id_liquidacion || ""
     };
@@ -986,7 +1106,9 @@ function prepareSheetsPayload(sourceDb) {
     catalogoExtras[cid] = {
       es_outsourcing: Boolean(c.es_outsourcing),
       taller_externo_nombre: c.taller_externo_nombre || "",
-      categoria: c.categoria || c.categoria_pieza || "Rectificación General"
+      categoria: c.categoria || c.categoria_pieza || "Rectificación General",
+      por_unidad: Boolean(c.por_unidad),
+      unidad_label: c.unidad_label || ""
     };
   });
 
@@ -1038,6 +1160,7 @@ function prepareSheetsPayload(sourceDb) {
       correlativoOrdenActual: Number(d.config?.correlativoOrdenActual) || 1007,
       forzar_actualizacion_version: d.config?.forzar_actualizacion_version || "",
       cuentasFinancieras: Array.isArray(d.config?.cuentasFinancieras) ? d.config.cuentasFinancieras : undefined,
+      bancos_cuentas: Array.isArray(d.config?.bancos_cuentas) && d.config.bancos_cuentas.length ? d.config.bancos_cuentas : undefined,
       migrations: d.config?.migrations || { javier_gerencia_v38: true },
       doc_template: d.config?.doc_template || {
         tipo_documento: "ORDEN Y PRESUPUESTO",
@@ -1059,6 +1182,7 @@ function prepareSheetsPayload(sourceDb) {
     movimientos_inventario: Array.isArray(d.movimientos_inventario) ? d.movimientos_inventario.slice(-150) : [],
     usuarios_extras: usuariosExtras,
     catalogo_extras: catalogoExtras,
+    catalogo_destajo: Array.isArray(d.catalogo_destajo) ? d.catalogo_destajo : [],
     finanzas_extras: finanzasExtras,
     asistencia_extras: asistenciaExtras
   };
@@ -1146,7 +1270,7 @@ function prepareSheetsPayload(sourceDb) {
     usuario_id: a.usuario_id || "",
     nombre_usuario: a.nombre || a.nombre_usuario || "",
     turno_modalidad: a.observacion || a.turno_modalidad || "Jornada Completa",
-    hora_registro: a.hora_entrada || a.hora_registro || "08:00 AM",
+    hora_registro: a.hora_entrada || a.hora_registro || "09:00 AM",
     observacion: a.estado || a.observacion || "Presente"
   }));
 
@@ -1291,6 +1415,7 @@ function hydrateDatabaseFromSheets(cloudData) {
       repuestos_comprados_taller: Boolean(motorObj.repuestos_comprados_taller),
       items_repuestos: Array.isArray(motorObj.items_repuestos) ? motorObj.items_repuestos : [],
       monto_repuestos: Number(motorObj.monto_repuestos) || 0,
+      servicios_cliente: Array.isArray(motorObj.servicios_cliente) ? motorObj.servicios_cliente : undefined,
       estado_actual: String(o.estado_actual || "diagnostico_presupuesto"),
       subestado_ejecucion: String(o.subestado_ejecucion || "pendiente"),
       tipo_condicion_pago: String(o.tipo_condicion_pago || "pendiente_definir"),
@@ -1318,27 +1443,37 @@ function hydrateDatabaseFromSheets(cloudData) {
   const validSubtasks = Array.isArray(cloudData.subtareas)
     ? cloudData.subtareas.filter((s) => s && String(s.descripcion_servicio || s.id_subtarea || "").trim() !== "")
     : [];
-  const subtareas = validSubtasks.map((s) => ({
-    id_subtarea: String(s.id_subtarea || ""),
-    orden_id: String(s.orden_id || ""),
-    codigo_troquel: String(s.codigo_troquel || ""),
-    descripcion_servicio: String(s.descripcion_servicio || ""),
-    tecnico_id: String(s.tecnico_id || "") || null,
-    nombre_tecnico: String(s.nombre_tecnico || "Sin asignar"),
-    monto_servicio: Number(s.monto_servicio) || 0,
-    comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
-    estado_subtarea: String(s.estado_subtarea || "pendiente"),
-    minutos_acumulados: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
-    tiempo_neto_min: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
-    fecha_inicio: cleanDateISO(s.fecha_inicio, true),
-    fecha_fin: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
-    fecha_terminado: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
-    foto_terminado_url: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
-    foto_evidencia_terminado: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
-    checklist_salida: safeJsonParse(s.checklist_salida_json, {}),
-    comision_pagada: s.comision_pagada === true || String(s.comision_pagada).toLowerCase() === "true",
-    id_liquidacion: String(s.id_liquidacion || "")
-  }));
+  const subtareas = validSubtasks.map((s) => {
+    const parsedChk = safeJsonParse(s.checklist_salida_json, {});
+    const uMeta = (parsedChk && typeof parsedChk === "object" && parsedChk._unidad_meta) ? parsedChk._unidad_meta : {};
+    const qty = Math.max(1, Number(uMeta.cantidad) || 1);
+    const totalComm = Number(s.comision_base_tecnico) || 0;
+    return {
+      id_subtarea: String(s.id_subtarea || ""),
+      orden_id: String(s.orden_id || ""),
+      codigo_troquel: String(s.codigo_troquel || ""),
+      descripcion_servicio: String(s.descripcion_servicio || ""),
+      tecnico_id: String(s.tecnico_id || "") || null,
+      nombre_tecnico: String(s.nombre_tecnico || "Sin asignar"),
+      monto_servicio: Number(s.monto_servicio) || 0,
+      comision_base_tecnico: totalComm,
+      por_unidad: Boolean(uMeta.por_unidad),
+      cantidad: qty,
+      pago_unitario: Number(uMeta.pago_unitario) || (qty > 0 ? totalComm / qty : totalComm),
+      unidad_label: String(uMeta.unidad_label || ""),
+      estado_subtarea: String(s.estado_subtarea || "pendiente"),
+      minutos_acumulados: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
+      tiempo_neto_min: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
+      fecha_inicio: cleanDateISO(s.fecha_inicio, true),
+      fecha_fin: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
+      fecha_terminado: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
+      foto_terminado_url: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
+      foto_evidencia_terminado: String(s.foto_evidencia_terminado || s.foto_terminado_url || ""),
+      checklist_salida: parsedChk,
+      comision_pagada: s.comision_pagada === true || String(s.comision_pagada).toLowerCase() === "true",
+      id_liquidacion: String(s.id_liquidacion || "")
+    };
+  });
 
   const validBitacora = Array.isArray(cloudData.bitacora)
     ? cloudData.bitacora.filter(
@@ -1377,6 +1512,8 @@ function hydrateDatabaseFromSheets(cloudData) {
             comision_sugerida: Number(c.comision_tecnico_usd ?? c.comision_sugerida ?? 0),
             es_outsourcing: Boolean(extra.es_outsourcing),
             taller_externo_nombre: String(extra.taller_externo_nombre || ""),
+            por_unidad: Boolean(extra.por_unidad),
+            unidad_label: String(extra.unidad_label || ""),
             activo: c.activo !== false && String(c.activo).toLowerCase() !== "false"
           };
         })
@@ -1461,6 +1598,7 @@ function hydrateDatabaseFromSheets(cloudData) {
     subtareas,
     bitacora,
     catalogo_servicios,
+    catalogo_destajo: Array.isArray(meta.catalogo_destajo) ? meta.catalogo_destajo : undefined,
     finanzas_movimientos,
     asistencias
   });
@@ -1568,6 +1706,7 @@ function mergeDatabasesNonDestructive(serverDb, localDb) {
     finanzas_categorias: l.finanzas_categorias || s.finanzas_categorias,
     usuarios: mergeArrayByKey(s.usuarios, l.usuarios, (x) => x && x.id_usuario),
     catalogo_servicios: mergeArrayByKey(s.catalogo_servicios, l.catalogo_servicios, (x) => x && (x.id_cat || x.id_servicio)),
+    catalogo_destajo: mergeArrayByKey(s.catalogo_destajo, l.catalogo_destajo, (x) => x && x.id_destajo),
     clientes: mergeArrayByKey(s.clientes, l.clientes, (x) => x && x.id_cliente),
     ordenes: mergeArrayByKey(s.ordenes, l.ordenes, (x) => x && x.id_orden),
     subtareas: mergeArrayByKey(s.subtareas, l.subtareas, (x) => x && x.id_subtarea),
@@ -1924,6 +2063,7 @@ async function openCloudBackupsModal() {
       </div>
     `,
     footer: `
+      <button type="button" class="btn btn--ghost" onclick="openPdfArchiveAndExportModal()"><i class="fas fa-file-pdf"></i> Archivo PDFs (Drive)</button>
       <button type="button" class="btn btn--ghost" onclick="exportFullBackupJson()"><i class="fas fa-download"></i> Descargar Archivo JSON</button>
       <button type="button" class="btn btn--gold" onclick="createCloudBackupNow()"><i class="fas fa-shield-halved"></i> Crear Respaldo Ahora</button>
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>
@@ -3141,6 +3281,13 @@ function toggleSidebarMenu() {
 }
 
 function navigateTab(tabId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    const allowedForTech = ["worker_panel", "worker_earnings", "attendance", "default"];
+    if (!allowedForTech.includes(tabId)) {
+      showToast("Acceso restringido: Tu perfil técnico solo tiene acceso a Mis Trabajos, Mis Comisiones y Asistencia.", "warning");
+      tabId = "worker_panel";
+    }
+  }
   if (currentUser && currentUser.rol === "recepcion") {
     const forbiddenForRecep = ["accounts_receivable", "finances_ledger", "commissions_hr", "catalog_mgr", "inventario", "clients_dir", "clients_catalog"];
     if (forbiddenForRecep.includes(tabId)) {
@@ -4057,13 +4204,15 @@ function renderDashboardScreen() {
           </div>
         </div>
 
-        <!-- Panel 5: Disponibilidad Total en Cuentas y Caja Líquida (Desglose Real por Banco) -->
+        <!-- Panel 5: Disponibilidad Total en Cuentas y Caja Líquida (Control Dinámico de Cuentas) -->
         <div class="kpi-card--assets" style="border-radius:16px; padding:18px 20px; box-shadow:0 4px 20px rgba(0,0,0,0.25); border:1.5px solid rgba(56, 189, 248, 0.45);">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:6px;">
             <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#93c5fd;">
               DISPONIBILIDAD TOTAL (CUENTAS Y CAJA)
             </div>
-            <i class="fas fa-vault" style="color:#60a5fa;"></i>
+            <button type="button" class="btn btn--ghost btn--xs" onclick="openManageBankAccountsModal()" style="padding:2px 8px; font-size:10px; border-color:rgba(56,189,248,0.45); color:#7dd3fc;" title="Agregar, quitar o ajustar saldos de cuentas y bancos">
+              <i class="fas fa-sliders"></i> Cuentas
+            </button>
           </div>
           <div style="font-size:28px; font-weight:900; color:#38bdf8; font-family:'JetBrains Mono',monospace; margin-top:4px;">
             $${cajaDisponible.toFixed(2)}
@@ -4071,24 +4220,24 @@ function renderDashboardScreen() {
           <div style="font-size:12px; color:#7dd3fc; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
             ≈ ${(cajaDisponible * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
           </div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px;">
+            Balance calculado con cuentas en saldo positivo
+          </div>
           <div style="margin-top:8px;">
-            <div class="kpi-breakdown-row">
-              <span><i class="fas fa-money-bill-wave" style="color:#4ade80;"></i> Efectivo Físico / Caja:</span>
-              <strong style="color:#4ade80;">$${balances.efectivo.toFixed(2)}</strong>
-            </div>
-            <div class="kpi-breakdown-row">
-              <span><i class="fas fa-building-columns" style="color:#38bdf8;"></i> Banco Mercantil:</span>
-              <strong style="color:#38bdf8;">$${balances.mercantil.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.mercantil * tasaBcv).toFixed(0)} Bs)</span></strong>
-            </div>
-            <div class="kpi-breakdown-row">
-              <span><i class="fas fa-university" style="color:#fde047;"></i> Banesco:</span>
-              <strong style="color:#fde047;">$${balances.banesco.toFixed(2)} <span style="font-size:10px; opacity:0.8;">(≈ ${(balances.banesco * tasaBcv).toFixed(0)} Bs)</span></strong>
-            </div>
-            ${balances.zelle_otro ? `
-            <div class="kpi-breakdown-row">
-              <span><i class="fas fa-globe" style="color:#c084fc;"></i> Zelle / Otros:</span>
-              <strong style="color:#c084fc;">$${balances.zelle_otro.toFixed(2)}</strong>
-            </div>` : ""}
+            ${(balancesInfo.accounts || []).map((acc) => {
+              const bal = Number(balances[acc.id] || 0);
+              const isPos = bal > 0;
+              const isNeg = bal < 0;
+              const valColor = isNeg ? "#f87171" : (isPos ? acc.color : "#94a3b8");
+              return `
+                <div class="kpi-breakdown-row">
+                  <span><i class="fas ${acc.icono || "fa-building-columns"}" style="color:${acc.color || "#38bdf8"};"></i> ${escapeHtml(acc.nombre)}:</span>
+                  <strong style="color:${valColor};">
+                    $${bal.toFixed(2)}${acc.moneda === "VES" ? ` <span style="font-size:10px; opacity:0.8;">(≈ ${(bal * tasaBcv).toFixed(0)} Bs)</span>` : ""}
+                  </strong>
+                </div>
+              `;
+            }).join("")}
             <div class="kpi-breakdown-row" style="margin-top:4px; padding-top:4px; border-top:1px dashed rgba(255,255,255,0.12); opacity:0.85;">
               <span><i class="fas fa-gears" style="color:var(--renacer-gold);"></i> Motores / Piezas en Taller:</span>
               <strong style="color:var(--renacer-gold);">$${valorPiezasEnTaller.toFixed(2)}</strong>
@@ -4109,8 +4258,14 @@ function renderDashboardScreen() {
         <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
           <i class="fas fa-minus-circle"></i> Registrar Egreso
         </button>
+        <button type="button" class="btn btn--ghost" onclick="openManageBankAccountsModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(56, 189, 248, 0.45); color:#38bdf8;">
+          <i class="fas fa-building-columns"></i> Gestionar Cuentas / Bancos
+        </button>
         <button type="button" class="btn btn--ghost" onclick="openNewAccountPayableModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(239, 68, 68, 0.4); color:#f87171;">
           <i class="fas fa-file-invoice"></i> Cuenta por Pagar / Préstamo
+        </button>
+        <button type="button" class="btn btn--ghost" onclick="openPdfArchiveAndExportModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(245, 223, 0, 0.45); color:#fde047;">
+          <i class="fas fa-file-pdf"></i> Archivo PDF / Exportar por Fecha
         </button>
         <button type="button" class="btn btn--ghost" onclick="navigateTab('finances_ledger')" style="padding:10px 18px; border-radius:99px; border-color:var(--border-color);">
           <i class="fas fa-wallet"></i> Libro Diario
@@ -4158,8 +4313,8 @@ function renderDashboardScreen() {
                     .map(
                       (c) => `
                     <tr>
-                      <td><strong>${c.acreedor}</strong></td>
-                      <td>${c.concepto}</td>
+                      <td><strong>${escapeHtml(c.acreedor)}</strong></td>
+                      <td>${escapeHtml(c.concepto)}</td>
                       <td style="font-family:'JetBrains Mono',monospace;">$${Number(c.monto_total).toFixed(2)}</td>
                       <td style="font-family:'JetBrains Mono',monospace; color:#22c55e;">$${Number(c.monto_abonado || 0).toFixed(2)}</td>
                       <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:${c.saldo_pendiente > 0 ? "#ef4444" : "#22c55e"};">
@@ -4171,15 +4326,20 @@ function renderDashboardScreen() {
                         </span>
                       </td>
                       <td>
-                        ${
-                          c.estado === "activa" && c.saldo_pendiente > 0
-                            ? `
-                          <button type="button" class="btn btn--success btn--xs" onclick="openPayAccountPayableModal('${c.id_cxp}')">
-                            <i class="fas fa-hand-holding-dollar"></i> Abonar a Deuda
+                        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                          ${
+                            c.estado === "activa" && c.saldo_pendiente > 0
+                              ? `
+                            <button type="button" class="btn btn--success btn--xs" onclick="openPayAccountPayableModal('${c.id_cxp}')">
+                              <i class="fas fa-hand-holding-dollar"></i> Abonar a Deuda
+                            </button>
+                          `
+                              : `<span style="font-size:11px; color:var(--text-muted);">Saldada y Archivada</span>`
+                          }
+                          <button type="button" class="btn btn--ghost btn--xs" style="color:#ef4444; border-color:rgba(239,68,68,0.35);" onclick="deleteAccountPayable('${c.id_cxp}')" title="Eliminar deuda (en caso de error de asiento)">
+                            <i class="fas fa-trash-alt"></i> Eliminar
                           </button>
-                        `
-                            : `<span style="font-size:11px; color:var(--text-muted);">Saldada y Archivada</span>`
-                        }
+                        </div>
                       </td>
                     </tr>
                   `
@@ -4189,6 +4349,11 @@ function renderDashboardScreen() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <!-- MÓDULO INTEGRADO EN INICIO: MONITOREO DE HORARIOS, ENTRADA, ALMUERZO Y SALIDA (9:00 AM - 6:00 PM) -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:16px; padding:18px 20px;">
+        ${renderAttendanceMonitorWidget({ embeddedInDashboard: true })}
       </div>
 
       <!-- SECCIÓN INFERIOR: ÓRDENES RECIENTES EN EJECUCIÓN (CON BOTÓN DE TICKET Y WHATSAPP) -->
@@ -4384,7 +4549,7 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
           <div class="form-field">
             <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
             <select id="adv-partner-account" style="font-weight:800;">
-              ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
             </select>
           </div>
           <div class="form-field" style="grid-column:1/-1;">
@@ -4572,7 +4737,7 @@ function openLiquidatePartnerWeeklyModal(userId) {
         <div class="form-field">
           <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen del Pago *</label>
           <select id="liq-partner-account" style="font-weight:800;">
-            ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+            ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
           </select>
         </div>
 
@@ -4827,7 +4992,7 @@ function openPayAccountPayableModal(cxpId) {
           <div class="form-field">
             <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
             <select id="pay-cxp-account" style="font-weight:800;">
-              ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
             </select>
           </div>
           <div class="form-field" style="grid-column:1/-1;">
@@ -4898,6 +5063,263 @@ function saveAccountPayableAbono(cxpId) {
   closeModal();
   renderApp();
   showToast(`Abono de $${amount.toFixed(2)} registrado para ${cxp.acreedor}.`, "success");
+}
+
+function deleteAccountPayable(cxpId) {
+  const cxp = (db.cuentas_por_pagar || []).find((c) => c.id_cxp === cxpId);
+  if (!cxp) return;
+
+  const linkedMovs = (db.finanzas_movimientos || []).filter((m) => m.orden_id === cxp.id_cxp);
+  const linkedNote = linkedMovs.length
+    ? ` También se eliminarán ${linkedMovs.length} movimiento(s) de egreso asociados en el Libro Diario para evitar descuadres.`
+    : "";
+
+  Swal.fire({
+    title: `¿Eliminar deuda "${cxp.acreedor}"?`,
+    text: `Concepto: ${cxp.concepto} ($${Number(cxp.monto_total || 0).toFixed(2)}).${linkedNote} Esta acción se sincroniza con la nube.`,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar deuda"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    db.cuentas_por_pagar = (db.cuentas_por_pagar || []).filter((c) => c.id_cxp !== cxpId);
+    if (linkedMovs.length) {
+      db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((m) => m.orden_id !== cxpId);
+    }
+    saveDatabase(`Cuenta por pagar eliminada: ${cxp.acreedor}`);
+    renderApp();
+    await flushCloudPush(true);
+    showToast(`Deuda "${cxp.acreedor}" eliminada correctamente.`);
+  });
+}
+
+/* ---------- CONTROL DINÁMICO DE CUENTAS BANCARIAS Y CAJA (AGREGAR, QUITAR, SUMAR/RESTAR SALDO) ---------- */
+function openManageBankAccountsModal() {
+  const accounts = getConfiguredBankAccounts();
+  const { balances, totalLiquido } = getBalancesPorCuenta();
+  const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
+
+  const rowsHtml = accounts
+    .map((acc) => {
+      const bal = Number(balances[acc.id] || 0);
+      const isPos = bal > 0;
+      const isNeg = bal < 0;
+      return `
+        <div class="bank-manage-row" style="border-left:4px solid ${acc.color || "#38bdf8"};">
+          <div style="flex:1; min-width:170px;">
+            <div style="font-weight:900; font-size:13.5px; color:var(--text-main);">
+              <i class="fas ${acc.icono || "fa-building-columns"}" style="color:${acc.color || "#38bdf8"}; margin-right:5px;"></i>
+              ${escapeHtml(acc.nombre)}
+              <span style="font-size:10px; font-weight:800; padding:2px 6px; border-radius:6px; background:rgba(255,255,255,0.08); color:var(--text-muted); margin-left:4px;">${acc.moneda || "USD"}</span>
+            </div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:${isNeg ? "#ef4444" : isPos ? "#22c55e" : "#94a3b8"}; margin-top:2px;">
+              $${bal.toFixed(2)}
+              ${acc.moneda === "VES" ? `<span style="font-size:11px; color:#94a3b8; font-weight:700;">(≈ ${(bal * tasaBcv).toLocaleString("es-VE", { maximumFractionDigits: 0 })} Bs)</span>` : ""}
+              ${isPos ? `<span style="font-size:10px; color:#22c55e; font-weight:800; margin-left:4px;">● Suma al balance</span>` : `<span style="font-size:10px; color:#94a3b8; font-weight:700; margin-left:4px;">○ Sin saldo positivo</span>`}
+            </div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <button type="button" class="btn btn--success btn--xs" onclick="adjustBankAccountBalancePrompt('${acc.id}', 'ingreso')" title="Sumar saldo a esta cuenta">
+              <i class="fas fa-plus"></i> Sumar
+            </button>
+            <button type="button" class="btn btn--danger btn--xs" onclick="adjustBankAccountBalancePrompt('${acc.id}', 'egreso')" title="Restar saldo de esta cuenta">
+              <i class="fas fa-minus"></i> Restar
+            </button>
+            ${
+              accounts.length > 1
+                ? `<button type="button" class="btn btn--ghost btn--xs" style="color:#ef4444;" onclick="deleteDynamicBankAccount('${acc.id}')" title="Quitar cuenta">
+                     <i class="fas fa-trash-alt"></i>
+                   </button>`
+                : ""
+            }
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  openModal({
+    title: "Control de Cuentas Bancarias y Caja (Saldos y Balance)",
+    icon: "fa-building-columns",
+    wide: true,
+    body: `
+      <div style="background:rgba(56,189,248,0.1); border:1px solid rgba(56,189,248,0.35); border-radius:12px; padding:12px 14px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div style="font-size:12.5px; color:var(--text-main);">
+          <strong>Balance Positivo Disponible:</strong> Solo las cuentas que mantengan un valor <strong>positivo (&gt; $0)</strong> suman a la Disponibilidad Total del taller. Puedes sumar, restar, agregar o quitar cuentas en cualquier momento.
+        </div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#38bdf8;">
+          $${totalLiquido.toFixed(2)}
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        ${rowsHtml}
+      </div>
+
+      <div class="form-section-box" style="margin-bottom:0; border-color:rgba(245,223,0,0.4);">
+        <div class="form-section-title"><i class="fas fa-plus-circle"></i> Agregar Nueva Cuenta Bancaria / Caja</div>
+        <div class="form-grid-3">
+          <div class="form-field">
+            <label>Nombre de la Cuenta / Banco *</label>
+            <input type="text" id="new-bank-name" placeholder="Ej: Banco de Venezuela, BNC, Binance..." />
+          </div>
+          <div class="form-field">
+            <label>Moneda *</label>
+            <select id="new-bank-currency">
+              <option value="VES">Bolívares (VES)</option>
+              <option value="USD">Dólares (USD)</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Saldo Inicial ($ USD opcional)</label>
+            <input type="number" step="0.5" min="0" id="new-bank-initial" value="0" />
+          </div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+          <button type="button" class="btn btn--gold" onclick="addDynamicBankAccount()">
+            <i class="fas fa-plus"></i> Agregar Cuenta
+          </button>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--primary" onclick="closeModal()">Listo</button>
+    `
+  });
+}
+
+function addDynamicBankAccount() {
+  const name = (document.getElementById("new-bank-name")?.value || "").trim();
+  const moneda = document.getElementById("new-bank-currency")?.value || "USD";
+  const initialBal = Math.max(0, Number(document.getElementById("new-bank-initial")?.value) || 0);
+  if (!name) {
+    showToast("Escribe el nombre de la cuenta o banco.", "error");
+    return;
+  }
+
+  if (!db.config) db.config = {};
+  const list = getConfiguredBankAccounts().map((b) => ({ ...b }));
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "cuenta";
+  const id = list.some((b) => b.id === slug) ? `${slug}_${Date.now().toString().slice(-4)}` : slug;
+  const palette = ["#22c55e", "#0284c7", "#eab308", "#a855f7", "#f97316", "#ec4899", "#14b8a6"];
+  const color = palette[list.length % palette.length];
+
+  list.push({
+    id,
+    nombre: name,
+    moneda,
+    icono: moneda === "USD" ? "fa-money-bill-wave" : "fa-building-columns",
+    color,
+    badgeCls: moneda === "USD" ? "bank-badge--efectivo" : "bank-badge--mercantil"
+  });
+  db.config.bancos_cuentas = list;
+
+  if (initialBal > 0) {
+    if (!Array.isArray(db.finanzas_movimientos)) db.finanzas_movimientos = [];
+    db.finanzas_movimientos.unshift({
+      id_mov: "MOV-INI-" + Date.now().toString().slice(-6),
+      fecha: new Date().toISOString().slice(0, 10),
+      tipo: "ingreso",
+      categoria: "Saldo Inicial / Ajuste de Cuenta",
+      concepto: `Saldo inicial de apertura — ${name}`,
+      monto: initialBal,
+      metodo: moneda === "USD" ? "efectivo" : "transferencia",
+      cuenta: id,
+      orden_id: "AJUSTE_CUENTA",
+      codigo_troquel: "-",
+      registrado_por: currentUser ? currentUser.nombre : "Sistema"
+    });
+  }
+
+  saveDatabase(`Nueva cuenta bancaria: ${name}`);
+  renderApp();
+  openManageBankAccountsModal();
+  showToast(`Cuenta "${name}" agregada y respaldada en la nube.`);
+}
+
+async function adjustBankAccountBalancePrompt(accountId, tipo) {
+  const acc = findBankAccountById(accountId);
+  if (!acc) return;
+  const isSum = tipo === "ingreso";
+
+  const { value: formValues } = await Swal.fire({
+    title: `${isSum ? "Sumar (+)" : "Restar (−)"} saldo en ${acc.nombre}`,
+    html: `
+      <div style="text-align:left; display:flex; flex-direction:column; gap:10px;">
+        <label style="font-size:12px; font-weight:800;">Monto en USD ($) *</label>
+        <input id="swal-bank-amt" type="number" step="0.5" min="0.1" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej: 50" />
+        <label style="font-size:12px; font-weight:800;">Concepto / Motivo *</label>
+        <input id="swal-bank-concept" type="text" class="swal2-input" style="margin:0; width:100%;" value="${isSum ? `Aporte / Ingreso directo a ${acc.nombre}` : `Retiro / Ajuste de salida en ${acc.nombre}`}" />
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonColor: isSum ? "#16a34a" : "#dc2626",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: isSum ? "Sumar a Cuenta" : "Restar de Cuenta",
+    preConfirm: () => {
+      const amt = Number(document.getElementById("swal-bank-amt")?.value) || 0;
+      const concept = (document.getElementById("swal-bank-concept")?.value || "").trim();
+      if (amt <= 0) {
+        Swal.showValidationMessage("Ingresa un monto mayor a cero.");
+        return false;
+      }
+      return { amt, concept: concept || (isSum ? "Ingreso a cuenta" : "Egreso de cuenta") };
+    }
+  });
+
+  if (!formValues) return;
+
+  if (!Array.isArray(db.finanzas_movimientos)) db.finanzas_movimientos = [];
+  db.finanzas_movimientos.unshift({
+    id_mov: "MOV-AJ-" + Date.now().toString().slice(-6),
+    fecha: new Date().toISOString().slice(0, 10),
+    tipo: isSum ? "ingreso" : "egreso",
+    categoria: "Ajuste / Movimiento de Cuenta",
+    concepto: formValues.concept,
+    monto: formValues.amt,
+    metodo: acc.moneda === "USD" ? "efectivo" : "transferencia",
+    cuenta: acc.id,
+    orden_id: "AJUSTE_CUENTA",
+    codigo_troquel: "-",
+    registrado_por: currentUser ? currentUser.nombre : "Sistema"
+  });
+
+  saveDatabase(`Ajuste de saldo (${isSum ? "+" : "-"}$${formValues.amt}) en ${acc.nombre}`);
+  renderApp();
+  openManageBankAccountsModal();
+  showToast(`Saldo ${isSum ? "sumado (+$" : "restado (-$"}${formValues.amt.toFixed(2)}) en ${acc.nombre}.`);
+}
+
+function deleteDynamicBankAccount(accountId) {
+  const list = getConfiguredBankAccounts();
+  if (list.length <= 1) {
+    showToast("Debe existir al menos una cuenta activa.", "error");
+    return;
+  }
+  const acc = list.find((b) => b.id === accountId);
+  if (!acc) return;
+
+  Swal.fire({
+    title: `¿Quitar la cuenta "${acc.nombre}"?`,
+    text: "La cuenta dejará de mostrarse en el balance y en los selectores de pago. Los movimientos históricos permanecen en el Libro Diario.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, quitar cuenta"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    if (!db.config) db.config = {};
+    db.config.bancos_cuentas = list.filter((b) => b.id !== accountId);
+    saveDatabase(`Cuenta bancaria eliminada: ${acc.nombre}`);
+    renderApp();
+    openManageBankAccountsModal();
+    await flushCloudPush(true);
+    showToast(`Cuenta "${acc.nombre}" eliminada.`);
+  });
 }
 
 /* ---------- Acciones Rápidas Móviles y Utilidades del Sistema ---------- */
@@ -5069,6 +5491,9 @@ function setWarrantySubfilter(sub) {
 }
 
 function renderPipelineScreen(forcedState) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    return renderWorkerPanelScreen();
+  }
   const activeFilter = forcedState && forcedState !== "all" ? forcedState : currentPhaseFilter;
 
   const countArchivados = db.ordenes.filter((o) => o.estado_actual === "archivado" || o.estado_actual === "anulado").length;
@@ -5512,35 +5937,28 @@ function renderOrderCardTelegramStyle(order) {
   };
   const finBadge = finBadgeMap[order.tipo_condicion_pago] || finBadgeMap.pendiente_definir;
 
-  // 1. Lista Limpia de Servicios al Cliente (Sin duplicar asignaciones de técnicos)
-  const subtasksListHtml = subtasks.length
-    ? subtasks
-        .map((s) => {
-          const stateText =
-            s.estado_subtarea === "terminado"
-              ? '<span style="color:#22c55e; font-weight:700;"><i class="fas fa-check-circle"></i> Listo</span>'
-              : s.estado_subtarea === "empezado"
-              ? '<span style="color:#0284c7; font-weight:700;"><i class="fas fa-wrench"></i> En proceso</span>'
-              : '<span style="color:var(--text-muted);"><i class="fas fa-clock"></i> Pendiente</span>';
-          return `
-            <div class="order-clean-service-row ${s.estado_subtarea === "terminado" ? "done" : ""}">
+  // 1. Lista Limpia de Servicios Facturados al Cliente (Lista A — independiente del destajo técnico)
+  const clientServices = getOrderClientServices(order);
+  const subtasksListHtml = clientServices.length
+    ? clientServices
+        .map((s) => `
+            <div class="order-clean-service-row">
               <div style="flex:1;">
                 <div class="service-title">
-                  <i class="fas fa-wrench" style="color:var(--renacer-gold); font-size:11px; margin-right:4px;"></i> ${s.descripcion_servicio} ${s.es_item_extra ? '<span class="extra-tag">(Ítem Extra)</span>' : ""}
+                  <i class="fas fa-wrench" style="color:var(--renacer-gold); font-size:11px; margin-right:4px;"></i> ${escapeHtml(formatServiceDisplayLabel(s))} ${s.es_item_extra ? '<span class="extra-tag">(Ítem Extra)</span>' : ""}
                 </div>
                 <div class="service-meta">
-                  <span>${stateText}</span>
-                  ${canManage && !isEntregado ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10.5px; margin-left:8px; font-weight:700;" onclick="removeSubtaskFromOrder('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar servicio de la orden"><i class="fas fa-trash-alt"></i> Quitar</button>` : ""}
+                  <span style="color:var(--text-muted); font-size:11px;"><i class="fas fa-tag"></i> Servicio al cliente</span>
+                  ${canManage && !isEntregado ? `<button type="button" class="btn-clean-link" style="color:#ef4444; font-size:10.5px; margin-left:8px; font-weight:700;" onclick="removeClientServiceFromOrder('${s.id_item}', '${order.id_orden}')" title="Quitar servicio facturado"><i class="fas fa-trash-alt"></i> Quitar</button>` : ""}
                 </div>
               </div>
               <div class="service-right">
-                ${currentUser && currentUser.rol === "tecnico" ? "" : `<div class="price-val">$${Number(s.monto_servicio).toFixed(2)}</div>`}
+                ${currentUser && currentUser.rol === "tecnico" ? "" : `<div class="price-val">$${Number(s.monto).toFixed(2)}</div>`}
               </div>
             </div>
-          `;
-        })
+          `)
         .join("")
-    : `<div style="font-size:11.5px; color:var(--text-muted); padding:8px 0; text-align:center;">No hay servicios presupuestados aún.</div>`;
+    : `<div style="font-size:11.5px; color:var(--text-muted); padding:8px 0; text-align:center;">No hay servicios presupuestados al cliente aún.</div>`;
 
   // 2. Agrupación Exclusiva de Destajo y Asignación de Trabajos
   const techMap = {};
@@ -5560,7 +5978,7 @@ function renderOrderCardTelegramStyle(order) {
         totalComm: 0
       };
     }
-    techMap[tId].servicios.push(s.descripcion_servicio);
+    techMap[tId].servicios.push(formatSubtaskDisplayLabel(s));
     techMap[tId].totalComm += Number(s.comision_base_tecnico || 0);
   });
 
@@ -5612,7 +6030,12 @@ function renderOrderCardTelegramStyle(order) {
     `;
   }
   if (!assignedTechKeys.length && !unassignedSubs.length) {
-    assignmentsHtml = `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">Sin subtareas registradas en esta orden.</div>`;
+    assignmentsHtml = `
+      <div style="font-size:11.5px; color:var(--text-muted); padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:10px; border:1px dashed var(--border-subtle); display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <span><i class="fas fa-hard-hat" style="color:var(--renacer-gold);"></i> Sin trabajos de destajo asignados todavía.</span>
+        ${canManage && !isEntregado ? `<button type="button" class="btn btn--gold btn--xs" onclick="openSubtaskAssignmentModal('${order.id_orden}')"><i class="fas fa-plus"></i> Asignar Trabajos</button>` : ""}
+      </div>
+    `;
   }
 
   // Botón de acción según el flujo de las 6 etapas oficiales de Jesús Andrade
@@ -5683,12 +6106,8 @@ function renderOrderCardTelegramStyle(order) {
     `;
   } else if (order.estado_actual === "entrega" || order.estado_actual === "entregado") {
     primaryActionBtn = `
-      <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        ${order.saldo_pendiente > 0 ? `
-          <button type="button" class="btn btn--warning" onclick="openCollectReceivableModal('${order.id_orden}')">
-            <i class="fas fa-dollar-sign"></i> Cobrar Resto ($${Number(order.saldo_pendiente).toFixed(2)})
-          </button>
-        ` : `<span class="state-badge state-badge--done" style="font-size:11px; padding:6px 10px;"><i class="fas fa-check"></i> 100% Pagada</span>`}
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        ${order.saldo_pendiente <= 0 ? `<span class="state-badge state-badge--done" style="font-size:11px; padding:6px 10px;"><i class="fas fa-check"></i> 100% Pagada</span>` : ""}
         <button type="button" class="btn btn--gold" onclick="archiveOrder('${order.id_orden}')" title="Mover orden a histórico y garantía">
           <i class="fas fa-box-archive"></i> Archivar Orden
         </button>
@@ -5964,9 +6383,13 @@ function unassignTechnicianFromOrderCard(subtaskId, orderId) {
 function deleteSubtaskDirect(subtaskId, orderId) {
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  const usesSeparateClientServices = Boolean(order && Array.isArray(order.servicios_cliente));
   Swal.fire({
-    title: `¿Eliminar "${sub.descripcion_servicio}"?`,
-    text: "Esta acción removerá la subtarea de la orden y actualizará el presupuesto total.",
+    title: `¿Eliminar trabajo "${sub.descripcion_servicio}"?`,
+    text: usesSeparateClientServices
+      ? "Se quitará este trabajo de destajo de los técnicos sin alterar el presupuesto facturado al cliente."
+      : "Esta acción removerá la subtarea de la orden y actualizará el presupuesto total.",
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#ef4444",
@@ -5975,12 +6398,13 @@ function deleteSubtaskDirect(subtaskId, orderId) {
   }).then((res) => {
     if (res.isConfirmed) {
       db.subtareas = db.subtareas.filter((s) => s.id_subtarea !== subtaskId);
-      const remaining = db.subtareas.filter((s) => s.orden_id === orderId);
-      const newTotal = remaining.reduce((sum, s) => sum + (Number(s.monto_servicio) || 0), 0);
-      const order = db.ordenes.find((o) => o.id_orden === orderId);
       if (order) {
-        order.monto_total = newTotal;
-        order.saldo_pendiente = Math.max(0, newTotal - (Number(order.monto_abonado) || 0));
+        if (!usesSeparateClientServices) {
+          const remaining = db.subtareas.filter((s) => s.orden_id === orderId);
+          const newTotal = remaining.reduce((sum, s) => sum + (Number(s.monto_servicio) || 0), 0);
+          order.monto_total = newTotal;
+          order.saldo_pendiente = Math.max(0, newTotal - (Number(order.monto_abonado) || 0));
+        }
         const nowStr = cleanDateISO(new Date().toISOString(), true);
         db.bitacora.push({
           id_mensaje: "MSG-" + Date.now(),
@@ -5990,12 +6414,12 @@ function deleteSubtaskDirect(subtaskId, orderId) {
           autor_nombre: currentUser.nombre,
           autor_rol: currentUser.rol_label,
           tipo_evento: "subtarea_eliminada",
-          mensaje: `Subtarea "${sub.descripcion_servicio}" ($${Number(sub.monto_servicio).toFixed(2)}) eliminada por ${currentUser.nombre}. Nuevo total: $${newTotal.toFixed(2)}.`,
+          mensaje: `Trabajo de destajo "${sub.descripcion_servicio}" ($${Number(sub.comision_base_tecnico || 0).toFixed(2)}) eliminado por ${currentUser.nombre}.`,
           foto_adjunta_url: "",
           fecha_hora: nowStr
         });
       }
-      saveDatabase();
+      saveDatabase("Trabajo de destajo eliminado");
       if (document.getElementById("live-assignment-totals-box")) {
         openSubtaskAssignmentModal(orderId);
       } else if (document.getElementById("edit-subtasks-list")) {
@@ -6003,8 +6427,49 @@ function deleteSubtaskDirect(subtaskId, orderId) {
       } else {
         renderScreen();
       }
-      showToast("Subtarea eliminada correctamente.");
+      showToast("Trabajo de destajo eliminado correctamente.");
     }
+  });
+}
+
+function removeClientServiceFromOrder(itemId, orderId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  if (order.estado_actual === "entregado" || order.factura_bloqueada) {
+    showToast("No se pueden eliminar servicios de una orden ya entregada y cerrada.", "error");
+    return;
+  }
+  // Si es orden heredada (sin servicios_cliente), materializar primero su lista de servicios al cliente
+  if (!Array.isArray(order.servicios_cliente)) {
+    order.servicios_cliente = getOrderClientServices(order).map((it) => ({
+      id_item: it.id_item,
+      descripcion: it.descripcion,
+      monto: Number(it.monto) || 0,
+      es_item_extra: Boolean(it.es_item_extra)
+    }));
+  }
+  const target = order.servicios_cliente.find((x) => x.id_item === itemId);
+  if (!target) return;
+
+  Swal.fire({
+    title: `¿Quitar "${target.descripcion}"?`,
+    text: `Se quitará del presupuesto del cliente ($${Number(target.monto).toFixed(2)}) sin borrar los trabajos asignados a los técnicos.`,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#ef4444",
+    confirmButtonText: "Sí, Quitar",
+    cancelButtonText: "Cancelar"
+  }).then((res) => {
+    if (!res.isConfirmed) return;
+    order.servicios_cliente = order.servicios_cliente.filter((x) => x.id_item !== itemId);
+    recalcOrderTotalsFromClientServices(order);
+    saveDatabase(`Servicio cliente quitado de Orden #${order.codigo_troquel}`);
+    if (document.getElementById("edit-subtasks-list")) {
+      openEditBudgetModal(orderId);
+    } else {
+      renderScreen();
+    }
+    showToast(`Servicio removido. Nuevo total cliente: $${order.monto_total.toFixed(2)}.`);
   });
 }
 
@@ -6336,12 +6801,22 @@ function renderClickableTroquelBadge(orderOrId, labelPrefix = "#") {
   }
   const id = ord ? ord.id_orden : orderOrId;
   const num = ord ? (ord.codigo_troquel || ord.numero_troquel || ord.id_orden) : orderOrId;
+  // PRIVACIDAD TÉCNICA: En perfiles de trabajador el troquel es informativo (inerte, sin acceso a datos de cliente/facturación/tablero)
+  if (currentUser && currentUser.rol === "tecnico") {
+    return `<span class="btn-troquel-clickable" style="cursor:default; pointer-events:none;" title="Número de Troquel ${escapeHtml(num)}">
+      <i class="fas fa-barcode"></i> ${labelPrefix}${escapeHtml(num)}
+    </span>`;
+  }
   return `<button type="button" class="btn-troquel-clickable" onclick="event.stopPropagation(); quickViewOrderDetails('${id}')" title="Clic para inspeccionar ficha técnica de la Orden ${num}">
     <i class="fas fa-barcode"></i> ${labelPrefix}${num}
   </button>`;
 }
 
 function quickViewOrderDetails(orderId) {
+  // BLINDAJE DE PRIVACIDAD: Los técnicos NO pueden inspeccionar fichas comerciales, datos de cliente, montos ni saltar al tablero
+  if (currentUser && currentUser.rol === "tecnico") {
+    return;
+  }
   const cleanId = String(orderId).replace(/^#/, "").trim();
   const order = (db.ordenes || []).find(
     (o) => o.id_orden === cleanId || 
@@ -6384,24 +6859,45 @@ function quickViewOrderDetails(orderId) {
        </div>`
     : `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">Sin fotos registradas para esta pieza.</div>`;
 
-  const tasksHtml = subtasks.length
-    ? subtasks.map(s => `
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 10px; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:5px; border:1px solid var(--border-subtle);">
-          <div>
-            <strong style="font-size:12.5px;">${s.descripcion_servicio}</strong>
-            <div style="font-size:11px; color:var(--text-muted);">
-              <i class="fas fa-user-circle"></i> ${s.nombre_tecnico || "Sin asignar"} · ⏱️ ${formatMinutes(s.minutos_acumulados || 0)}
-            </div>
-          </div>
-          <div style="text-align:right;">
-            <span style="font-size:11px; font-weight:800; ${s.estado_subtarea === 'terminado' ? 'color:#22c55e;' : 'color:#f59e0b;'}">
-              ${s.estado_subtarea === 'terminado' ? 'Listo' : 'En Proceso'}
-            </span>
-            ${(currentUser && (currentUser.rol === 'admin' || currentUser.rol === 'jefe_taller')) ? `<div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; font-weight:800; color:#16a34a;">$${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>` : ''}
-          </div>
+  const clientServices = getOrderClientServices(order);
+  const clientServicesHtml = clientServices.length
+    ? clientServices.map((c) => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:rgba(245,223,0,0.05); border-radius:8px; margin-bottom:4px; border:1px solid rgba(245,223,0,0.2);">
+          <strong style="font-size:12.5px;"><i class="fas fa-tag" style="color:var(--renacer-gold); margin-right:5px;"></i>${c.descripcion}</strong>
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold);">$${Number(c.monto || 0).toFixed(2)}</span>
         </div>
       `).join("")
-    : `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">No hay subtareas desglosadas.</div>`;
+    : `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">Sin servicios facturados al cliente.</div>`;
+
+  const tasksHtml = `
+    <div style="margin-bottom:10px;">
+      <div style="font-size:11px; font-weight:800; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:4px;">Servicios Facturados al Cliente (${clientServices.length})</div>
+      ${clientServicesHtml}
+    </div>
+    <div>
+      <div style="font-size:11px; font-weight:800; color:#22c55e; text-transform:uppercase; margin-bottom:4px;">Trabajos de Destajo Asignados a Técnicos (${subtasks.length})</div>
+      ${
+        subtasks.length
+          ? subtasks.map(s => `
+              <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 10px; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:5px; border:1px solid var(--border-subtle);">
+                <div>
+                  <strong style="font-size:12.5px;">${s.descripcion_servicio}</strong>
+                  <div style="font-size:11px; color:var(--text-muted);">
+                    <i class="fas fa-user-circle"></i> ${s.nombre_tecnico || "Sin asignar"} · ⏱️ ${formatMinutes(s.minutos_acumulados || 0)}
+                  </div>
+                </div>
+                <div style="text-align:right;">
+                  <span style="font-size:11px; font-weight:800; ${s.estado_subtarea === 'terminado' ? 'color:#22c55e;' : 'color:#f59e0b;'}">
+                    ${s.estado_subtarea === 'terminado' ? 'Listo' : 'En Proceso'}
+                  </span>
+                  ${(currentUser && (currentUser.rol === 'admin' || currentUser.rol === 'jefe_taller')) ? `<div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; font-weight:800; color:#16a34a;">Destajo: $${Number(s.comision_base_tecnico || 0).toFixed(2)}</div>` : ''}
+                </div>
+              </div>
+            `).join("")
+          : `<div style="font-size:11.5px; color:var(--text-muted); font-style:italic;">Aún no se han asignado trabajos de destajo a técnicos en la Matriz.</div>`
+      }
+    </div>
+  `;
 
   const cleanPhone = (order.telefono_cliente || "").replace(/[^0-9]/g, "");
 
@@ -6510,6 +7006,10 @@ function quickViewOrderDetails(orderId) {
 }
 
 function jumpToOrderInPipeline(orderId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    closeModal();
+    return;
+  }
   closeModal();
   const cleanId = String(orderId).replace(/^#/, "").trim();
   const order = (db.ordenes || []).find(
@@ -8037,12 +8537,15 @@ function filterBudgetServicesLive(query) {
     .map((s) => `
       <div class="budget-service-item-pick" onclick="pickBudgetServiceFromDropdown('${s.id_cat}')">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <strong style="color:var(--text-main); font-size:13px;"><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:6px;"></i>${s.nombre}</strong>
-          <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold); font-size:14px;">$${Number(s.precio_sugerido).toFixed(2)}</span>
+          <strong style="color:var(--text-main); font-size:13px;">
+            <i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:6px;"></i>${escapeHtml(s.nombre)}
+            ${s.por_unidad ? `<span class="unit-mode-pill" style="margin-left:4px;"><i class="fas fa-hashtag"></i> Por ${escapeHtml(s.unidad_label || "unidad")}</span>` : ""}
+          </strong>
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold); font-size:14px;">$${Number(s.precio_sugerido).toFixed(2)}${s.por_unidad ? ` <small style="font-size:10px; opacity:0.8;">c/u</small>` : ""}</span>
         </div>
         <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); margin-top:3px;">
-          <span>${s.categoria || (s.es_outsourcing ? "Outsourcing / Solteca" : "Servicio de Taller")}</span>
-          <span style="color:var(--renacer-gold); font-weight:700;"><i class="fas fa-tag"></i> Tarifa Oficial</span>
+          <span>${escapeHtml(s.categoria || (s.es_outsourcing ? "Outsourcing / Solteca" : "Servicio de Taller"))}</span>
+          <span style="color:var(--renacer-gold); font-weight:700;"><i class="fas fa-tag"></i> ${s.por_unidad ? "Tarifa por Unidad (Multiplicable)" : "Tarifa Oficial"}</span>
         </div>
       </div>
     `)
@@ -8055,10 +8558,15 @@ function pickBudgetServiceFromDropdown(serviceId) {
   const s = (db.catalogo_servicios || []).find((c) => c.id_cat === serviceId);
   if (!s) return;
 
+  const unitPrice = Number(s.precio_sugerido) || 0;
   tempNewOrderState.itemsPresupuesto.push({
     id_temp: "T-" + Date.now() + Math.random().toString(36).slice(2, 5),
     descripcion: s.nombre,
-    monto: Number(s.precio_sugerido) || 0,
+    por_unidad: Boolean(s.por_unidad),
+    unidad_label: s.unidad_label || "",
+    cantidad: 1,
+    precio_unitario: unitPrice,
+    monto: unitPrice,
     comision: Number(s.comision_sugerida) || 0
   });
 
@@ -8068,13 +8576,17 @@ function pickBudgetServiceFromDropdown(serviceId) {
   if (dropdown) dropdown.classList.add("hidden");
 
   renderTempBudgetItems();
-  showToast(`Servicio "${s.nombre}" añadido ($${Number(s.precio_sugerido).toFixed(2)}).`);
+  showToast(`Servicio "${s.nombre}" añadido ($${unitPrice.toFixed(2)}${s.por_unidad ? " c/u — ajusta la cantidad" : ""}).`);
 }
 
 function addCustomServiceWithName(name) {
   tempNewOrderState.itemsPresupuesto.push({
     id_temp: "T-" + Date.now() + Math.random().toString(36).slice(2, 5),
     descripcion: name || "Servicio Adicional",
+    por_unidad: false,
+    unidad_label: "",
+    cantidad: 1,
+    precio_unitario: 25,
     monto: 25,
     comision: 8
   });
@@ -8090,6 +8602,10 @@ function addCustomServiceToTempOrder() {
   tempNewOrderState.itemsPresupuesto.push({
     id_temp: "T-" + Date.now() + Math.random().toString(36).slice(2, 5),
     descripcion: "Servicio Adicional",
+    por_unidad: false,
+    unidad_label: "",
+    cantidad: 1,
+    precio_unitario: 25,
     monto: 25,
     comision: 8
   });
@@ -8097,11 +8613,28 @@ function addCustomServiceToTempOrder() {
 }
 
 function updateTempBudgetItem(index, field, value) {
-  if (!tempNewOrderState.itemsPresupuesto[index]) return;
+  const item = tempNewOrderState.itemsPresupuesto[index];
+  if (!item) return;
   if (field === "descripcion") {
-    tempNewOrderState.itemsPresupuesto[index].descripcion = value;
+    item.descripcion = value;
+  } else if (field === "cantidad") {
+    const qty = Math.max(1, Number(value) || 1);
+    item.cantidad = qty;
+    if (qty > 1) item.por_unidad = true;
+    const uPrice = Number(item.precio_unitario ?? item.monto) || 0;
+    item.precio_unitario = uPrice;
+    item.monto = Number((uPrice * qty).toFixed(2));
+    const subEl = document.getElementById(`temp-budget-sub-${index}`);
+    if (subEl) subEl.textContent = "$" + item.monto.toFixed(2);
+  } else if (field === "precio_unitario" || field === "monto") {
+    const uPrice = Math.max(0, Number(value) || 0);
+    item.precio_unitario = uPrice;
+    const qty = Math.max(1, Number(item.cantidad) || 1);
+    item.monto = Number((uPrice * qty).toFixed(2));
+    const subEl = document.getElementById(`temp-budget-sub-${index}`);
+    if (subEl) subEl.textContent = "$" + item.monto.toFixed(2);
   } else {
-    tempNewOrderState.itemsPresupuesto[index][field] = Math.max(0, Number(value) || 0);
+    item[field] = Math.max(0, Number(value) || 0);
   }
   const total = tempNewOrderState.itemsPresupuesto.reduce((acc, it) => acc + (Number(it.monto) || 0), 0);
   const totalEl = document.getElementById("temp-budget-total-display");
@@ -8121,30 +8654,59 @@ function renderTempBudgetItems() {
 
   const rowsHtml = tempNewOrderState.itemsPresupuesto
     .map(
-      (item, idx) => `
-      <div style="display:grid; grid-template-columns: 1fr 140px 42px; gap:10px; align-items:center; margin-bottom:8px;">
-        <input
-          type="text"
-          value="${item.descripcion}"
-          oninput="updateTempBudgetItem(${idx}, 'descripcion', this.value)"
-          placeholder="Descripción del servicio"
-          style="padding:9px 12px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;"
-        />
+      (item, idx) => {
+        const qty = Math.max(1, Number(item.cantidad) || 1);
+        const unitPrice = Number(item.precio_unitario !== undefined ? item.precio_unitario : (Number(item.monto) || 0) / qty);
+        const subtotal = Number((unitPrice * qty).toFixed(2));
+        item.cantidad = qty;
+        item.precio_unitario = unitPrice;
+        item.monto = subtotal;
+        return `
+      <div style="display:grid; grid-template-columns: 1fr 76px 108px 92px 40px; gap:8px; align-items:end; margin-bottom:8px;">
         <div>
-          <label style="font-size:10px; display:block; color:var(--renacer-gold); font-weight:800; margin-bottom:2px;">PRECIO CLIENTE ($)</label>
+          <label style="font-size:10px; display:block; color:var(--text-muted); font-weight:800; margin-bottom:2px;">
+            SERVICIO ${item.por_unidad ? `<span style="color:#38bdf8;">(POR ${escapeHtml((item.unidad_label || "UNIDAD").toUpperCase())})</span>` : ""}
+          </label>
+          <input
+            type="text"
+            value="${escapeHtml(item.descripcion)}"
+            oninput="updateTempBudgetItem(${idx}, 'descripcion', this.value)"
+            placeholder="Descripción del servicio"
+            style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;"
+          />
+        </div>
+        <div>
+          <label style="font-size:10px; display:block; color:${item.por_unidad ? "#38bdf8" : "var(--text-muted)"}; font-weight:800; margin-bottom:2px;">CANT.</label>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value="${qty}"
+            oninput="updateTempBudgetItem(${idx}, 'cantidad', this.value)"
+            style="width:100%; padding:8px 6px; border-radius:8px; border:1.5px solid ${item.por_unidad ? "#38bdf8" : "var(--border-color)"}; font-weight:900; text-align:center;"
+          />
+        </div>
+        <div>
+          <label style="font-size:10px; display:block; color:var(--renacer-gold); font-weight:800; margin-bottom:2px;">${item.por_unidad || qty > 1 ? "P. UNIT ($)" : "PRECIO ($)"}</label>
           <input
             type="number"
             step="0.5"
-            value="${item.monto}"
-            oninput="updateTempBudgetItem(${idx}, 'monto', this.value)"
-            style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border-color); font-weight:900; font-size:14px; text-align:right;"
+            min="0"
+            value="${unitPrice}"
+            oninput="updateTempBudgetItem(${idx}, 'precio_unitario', this.value)"
+            style="width:100%; padding:8px 8px; border-radius:8px; border:1px solid var(--border-color); font-weight:900; font-size:13.5px; text-align:right;"
           />
         </div>
-        <button type="button" class="btn btn--danger" style="padding:9px; height:38px; display:flex; align-items:center; justify-content:center; margin-top:14px;" onclick="removeTempBudgetItem(${idx})" title="Quitar ítem">
+        <div style="text-align:right; padding-bottom:8px;">
+          <div style="font-size:9.5px; color:var(--text-muted); font-weight:800;">SUBTOTAL</div>
+          <strong id="temp-budget-sub-${idx}" style="font-family:'JetBrains Mono',monospace; font-size:14px; font-weight:900; color:var(--renacer-gold);">$${subtotal.toFixed(2)}</strong>
+        </div>
+        <button type="button" class="btn btn--danger" style="padding:8px; height:36px; display:flex; align-items:center; justify-content:center;" onclick="removeTempBudgetItem(${idx})" title="Quitar ítem">
           <i class="fas fa-trash"></i>
         </button>
       </div>
-    `
+    `;
+      }
     )
     .join("");
 
@@ -8242,13 +8804,12 @@ function saveNewOrder(advanceToService = false) {
     devuelto_calidad: false,
     motivo_rechazo_qc: "",
     fecha_ingreso: nowStr,
-    tiempo_neto_minutos: 0
+    tiempo_neto_minutos: 0,
+    servicios_cliente: []
   };
 
-  db.ordenes.unshift(newOrder);
-
   tempNewOrderState.itemsPresupuesto.forEach((it, idx) => {
-    // Si es repuesto del inventario de Javier Andrade, descontar stock físico y registrar movimiento
+    // Si es repuesto del inventario, descontar stock físico y registrar movimiento
     if (it.es_repuesto_inventario && it.id_repuesto) {
       const sp = (db.inventario_repuestos || []).find((r) => r.id_repuesto === it.id_repuesto);
       if (sp) {
@@ -8269,23 +8830,23 @@ function saveNewOrder(advanceToService = false) {
       }
     }
 
-    db.subtareas.push({
-      id_subtarea: `SUB-${cleanTroquel}-${idx + 1}-${Date.now().toString().slice(-3)}`,
-      orden_id: newOrderId,
-      codigo_troquel: cleanTroquel,
-      descripcion_servicio: it.descripcion,
-      tecnico_id: null,
-      nombre_tecnico: "Sin asignar",
-      monto_servicio: Number(it.monto) || 0,
-      comision_base_tecnico: Number(it.comision) || 0,
-      estado_subtarea: "pendiente",
-      inicio_activo_ts: null,
-      minutos_acumulados: 0,
-      foto_terminado_url: "",
-      fecha_terminado: null,
-      comision_pagada: false
+    // Guardar en la Lista A de la orden (Servicios facturados al cliente, 100% independiente del destajo técnico)
+    const itemQty = Math.max(1, Number(it.cantidad) || 1);
+    const itemTotal = Number(it.monto) || 0;
+    const itemUnitPrice = Number(it.precio_unitario !== undefined ? it.precio_unitario : itemTotal / itemQty) || 0;
+    newOrder.servicios_cliente.push({
+      id_item: `SRV-${cleanTroquel}-${idx + 1}-${Date.now().toString().slice(-3)}`,
+      descripcion: it.descripcion,
+      por_unidad: Boolean(it.por_unidad || itemQty > 1),
+      unidad_label: it.unidad_label || "",
+      cantidad: itemQty,
+      precio_unitario: itemUnitPrice,
+      monto: itemTotal,
+      es_item_extra: false
     });
   });
+
+  db.ordenes.unshift(newOrder);
 
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
@@ -8342,28 +8903,34 @@ let tempFinConditionState = {
 };
 
 function openFinancialApprovalModal(orderId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    showToast("Acceso restringido a Gerencia y Administración.", "warning");
+    return;
+  }
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
   tempFinConditionState = {
     orderId: order.id_orden,
     selectedOption: order.tipo_condicion_pago !== "pendiente_definir" ? order.tipo_condicion_pago : "abono",
-    proofPhotoDataUrl: order.comprobante_pago_foto || DEMO_PHOTOS.comprobantePago
+    proofPhotoDataUrl: order.comprobante_pago_foto || "",
+    prevAbonado: Number(order.monto_abonado) || 0
   };
 
   openModal({
-    title: `Estado 2: Condición Financiera / Interruptor Taller Aliado — Troquel #${order.codigo_troquel}`,
+    title: `Condición Financiera / Abono o Crédito — Troquel #${order.codigo_troquel}`,
     icon: "fa-hand-holding-usd",
     wide: true,
     body: `
       <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px;">
-        <strong>Regla de Visibilidad (Fase 1 y Fase 2):</strong> La orden se detiene en <em>2. Esperando Aprobación</em> hasta que se registra el <strong>Pago Total (100%)</strong>, el <strong>Abono (50% u otro monto)</strong> o se activa el <strong>Interruptor de Excepción / Taller Aliado</strong>. Mientras tanto, ningún técnico la ve en su lista.
+        <strong>Control Financiero y Soporte Fotográfico:</strong> Registra <strong>Pago Total (100%)</strong>, <strong>Abono Parcial</strong> o activa <strong>Excepción / Taller Aliado (Crédito)</strong>. Incluso en órdenes a crédito puedes registrar abonos posteriores con su método de pago, cuenta destino y foto del comprobante.
       </div>
 
-      <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-input); padding:12px 16px; border-radius:12px; margin-bottom:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-input); padding:12px 16px; border-radius:12px; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
         <div>
-          <div style="font-size:12px; color:var(--text-muted); font-weight:700;">Cliente: ${order.nombre_cliente} (${order.documento_cliente})</div>
-          <div style="font-size:15px; font-weight:900;">${order.datos_motor.tipo_pieza} · ${order.datos_motor.marca} ${order.datos_motor.modelo}</div>
+          <div style="font-size:12px; color:var(--text-muted); font-weight:700;">Cliente: ${escapeHtml(order.nombre_cliente)} (${escapeHtml(order.documento_cliente)})</div>
+          <div style="font-size:15px; font-weight:900;">${escapeHtml(order.datos_motor.tipo_pieza)} · ${escapeHtml(order.datos_motor.marca)} ${escapeHtml(order.datos_motor.modelo)}</div>
+          ${Number(order.monto_abonado) > 0 ? `<div style="font-size:11.5px; color:#22c55e; font-weight:800; margin-top:2px;">Ya abonado: $${Number(order.monto_abonado).toFixed(2)} · Resto actual: $${Number(order.saldo_pendiente).toFixed(2)}</div>` : ""}
         </div>
         <div style="text-align:right;">
           <span style="font-size:11px; font-weight:800; color:var(--text-muted);">MONTO TOTAL PRESUPUESTO</span>
@@ -8378,19 +8945,19 @@ function openFinancialApprovalModal(orderId) {
         <div id="fin-card-pago_total" class="fin-option-card" onclick="selectFinCondition('pago_total', ${order.monto_total})">
           <span class="fin-option-badge" style="background:rgba(22,163,74,0.16); color:#15803d;">OPCIÓN A · PRIORIDAD ALTA</span>
           <h4>Pago Total (100%)</h4>
-          <p>El cliente liquida el 100% ($${Number(order.monto_total).toFixed(2)}) antes de iniciar. Marca automáticamente la orden con <strong>Prioridad Alta</strong>.</p>
+          <p>El cliente liquida el 100% ($${Number(order.monto_total).toFixed(2)}). Marca la orden con <strong>Prioridad Alta</strong> y saldo $0.</p>
         </div>
 
         <div id="fin-card-abono" class="fin-option-card" onclick="selectFinCondition('abono', ${order.monto_total})">
-          <span class="fin-option-badge" style="background:rgba(217,119,6,0.18); color:#b45309;">OPCIÓN B · ADELANTO 50%</span>
+          <span class="fin-option-badge" style="background:rgba(217,119,6,0.18); color:#b45309;">OPCIÓN B · ADELANTO / ABONO</span>
           <h4>Abono (50% u otro monto)</h4>
-          <p>Registra el monto abonado (ej. $${(order.monto_total * 0.5).toFixed(2)}), método de pago con foto y calcula el Resto automáticamente.</p>
+          <p>Registra el monto abonado acumulado (ej. $${(order.monto_total * 0.5).toFixed(2)}), método de pago con foto y calcula el Resto.</p>
         </div>
 
         <div id="fin-card-credito" class="fin-option-card" onclick="selectFinCondition('credito', ${order.monto_total})">
           <span class="fin-option-badge" style="background:rgba(2,132,199,0.18); color:#0284c7;">OPCIÓN C · INTERRUPTOR EXCEPCIÓN</span>
           <h4>Excepción / Taller Aliado (Crédito)</h4>
-          <p>Activa el interruptor para talleres aliados o clientes autorizados: inicia sin pago previo y deja la cuenta abierta en Cuentas por Cobrar.</p>
+          <p>Inicia sin pago previo o registra abonos/liquidaciones posteriores con comprobante fotográfico en Cuentas por Cobrar.</p>
         </div>
       </div>
 
@@ -8398,9 +8965,8 @@ function openFinancialApprovalModal(orderId) {
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
-      <button type="button" class="btn btn--Request" style="display:none;"></button>
       <button type="button" class="btn btn--gold btn--lg" onclick="confirmFinancialCondition()">
-        <i class="fas fa-check-circle"></i> Guardar Condición Financiera
+        <i class="fas fa-check-circle"></i> Guardar Condición / Pago
       </button>
     `
   });
@@ -8421,44 +8987,92 @@ function selectFinCondition(optionKey, montoTotal) {
   const detailsBox = document.getElementById("fin-condition-details-box");
   if (!detailsBox) return;
 
+  const bankOptionsHtml = getConfiguredBankAccounts()
+    .map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`)
+    .join("");
+  const previewSrc = tempFinConditionState.proofPhotoDataUrl || DEMO_PHOTOS.comprobantePago;
+  const hasRealPhoto = Boolean(tempFinConditionState.proofPhotoDataUrl);
+
+  const proofUploadBlockHtml = (isOptional) => `
+    <div style="margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--bg-card); padding:12px; border-radius:12px; border:1.5px dashed var(--border-color);">
+      <div>
+        <div style="font-size:13px; font-weight:900;">
+          <i class="fas fa-camera"></i> Soporte Multimedia ${isOptional ? "(Comprobante si registra pago / abono)" : "Obligatorio (Capture o Foto de Billetes)"}
+        </div>
+        <div style="font-size:11.5px; color:var(--text-muted);">
+          Adjunta la captura de la transferencia/Pago Móvil o la foto de los billetes recibidos en efectivo.
+          ${hasRealPhoto ? `<span style="color:#22c55e; font-weight:800;"> ✓ Comprobante cargado</span>` : ""}
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <img id="fin-proof-preview" src="${previewSrc}" alt="Comprobante" style="width:68px; height:52px; object-fit:cover; border-radius:8px; border:1px solid var(--border-color);" />
+        <label class="btn btn--primary" style="cursor:pointer; padding:7px 12px; font-size:12px; font-weight:800; background:#0284c7;" title="Tomar foto con la cámara del teléfono">
+          <i class="fas fa-camera"></i> Tomar Foto
+          <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handlePaymentProofUpload(event)" />
+        </label>
+        <label class="btn btn--ghost" style="cursor:pointer; padding:7px 12px; font-size:12px; font-weight:800; border-color:rgba(56,189,248,0.5); color:#38bdf8;" title="Elegir captura o comprobante de la galería">
+          <i class="fas fa-images"></i> Galería / Capture
+          <input type="file" accept="image/*" style="display:none;" onchange="handlePaymentProofUpload(event)" />
+        </label>
+      </div>
+    </div>
+  `;
+
   if (optionKey === "credito") {
+    const curAbono = Number(tempFinConditionState.prevAbonado) || 0;
+    const curSaldo = Math.max(0, Number(montoTotal) - curAbono);
     detailsBox.innerHTML = `
       <div class="form-section-title" style="color:#0284c7;">
         <i class="fas fa-toggle-on"></i> Interruptor Activado: Excepción / Taller Aliado (Crédito Flexible)
       </div>
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:10px;">
-        Esta orden quedará autorizada para ser asignada a los técnicos sin exigir abono ni repuestos previos. El saldo de <strong>$${Number(montoTotal).toFixed(2)}</strong> aparecerá en el módulo de <strong>Cuentas por Cobrar (Resto)</strong> y podrá cobrarse en cualquier momento (incluso después de entregada la pieza).
+        Esta orden queda autorizada sin exigir pago previo. Si el cliente realiza un abono o liquida el total ahora, indica el monto, cuenta y adjunta la <strong>foto del comprobante</strong> debajo.
       </p>
       <div class="form-grid-2">
         <div class="form-field">
-          <label>Abono Inicial Opcional ($)</label>
-          <input type="number" id="fin-input-abono" value="0" min="0" max="${montoTotal}" step="1" oninput="recalcPendingBalance(${montoTotal})" />
+          <label>Abono Acumulado / Cobro Recibido ($)</label>
+          <input type="number" id="fin-input-abono" value="${curAbono}" min="0" max="${montoTotal}" step="0.5" oninput="recalcPendingBalance(${montoTotal})" style="font-weight:900; font-size:16px;" />
         </div>
         <div class="form-field">
           <label>Resto Pendiente en Cuenta por Cobrar ($)</label>
-          <input type="text" id="fin-input-saldo" value="$${Number(montoTotal).toFixed(2)}" readonly style="font-weight:900; color:#dc2626;" />
+          <input type="text" id="fin-input-saldo" value="$${curSaldo.toFixed(2)}" readonly style="font-weight:900; font-size:16px; color:${curSaldo > 0 ? "#dc2626" : "#16a34a"};" />
+        </div>
+        <div class="form-field">
+          <label>Cuenta / Banco de Ingreso (si hay pago)</label>
+          <select id="fin-input-cuenta">
+            ${bankOptionsHtml}
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Método de Pago (si hay pago)</label>
+          <select id="fin-input-metodo">
+            <option value="pago_movil">Transferencia / Pago Móvil</option>
+            <option value="efectivo">Efectivo (Billetes Físicos)</option>
+            <option value="transferencia">Zelle / Transferencia Digital</option>
+          </select>
         </div>
       </div>
+      ${proofUploadBlockHtml(true)}
     `;
     return;
   }
 
-  const defaultAbono = optionKey === "pago_total" ? montoTotal : Math.round(montoTotal * 0.5);
+  const defaultAbono = optionKey === "pago_total" ? montoTotal : Math.max(Number(tempFinConditionState.prevAbonado) || 0, Math.round(montoTotal * 0.5));
   const defaultSaldo = Math.max(0, montoTotal - defaultAbono);
 
   detailsBox.innerHTML = `
     <div class="form-section-title">
-      <i class="fas fa-receipt"></i> Detalle del ${optionKey === "pago_total" ? "Pago Total (100%)" : "Abono Inicial"} y Soporte Multimedia
+      <i class="fas fa-receipt"></i> Detalle del ${optionKey === "pago_total" ? "Pago Total (100%)" : "Abono Inicial / Acumulado"} y Soporte Multimedia
     </div>
     <div class="form-grid-2">
       <div class="form-field">
-        <label>Monto Recibido ($) *</label>
+        <label>Monto Recibido Total ($) *</label>
         <input
           type="number"
           id="fin-input-abono"
           value="${defaultAbono}"
           ${optionKey === "pago_total" ? "readonly" : ""}
-          min="1"
+          min="0.5"
           max="${montoTotal}"
           step="0.5"
           oninput="recalcPendingBalance(${montoTotal})"
@@ -8478,11 +9092,7 @@ function selectFinCondition(optionKey, montoTotal) {
       <div class="form-field">
         <label>Cuenta / Banco de Ingreso *</label>
         <select id="fin-input-cuenta">
-          <option value="efectivo">Efectivo Físico / Caja ($)</option>
-          <option value="mercantil">Banco Mercantil (Pago Móvil / Transf.)</option>
-          <option value="bnc">Banco Nacional de Crédito (BNC)</option>
-          <option value="banesco">Banesco</option>
-          <option value="zelle_otro">Zelle / Otros ($)</option>
+          ${bankOptionsHtml}
         </select>
       </div>
       <div class="form-field">
@@ -8494,24 +9104,7 @@ function selectFinCondition(optionKey, montoTotal) {
         </select>
       </div>
     </div>
-
-    <div style="margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--bg-card); padding:12px; border-radius:12px; border:1.5px dashed var(--border-color);">
-      <div>
-        <div style="font-size:13px; font-weight:900;"><i class="fas fa-camera"></i> Soporte Multimedia Obligatorio (Capture o Foto de Billetes)</div>
-        <div style="font-size:11.5px; color:var(--text-muted);">Adjunta la captura de la transferencia/Pago Móvil o la foto de los billetes recibidos en efectivo.</div>
-      </div>
-      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-        <img id="fin-proof-preview" src="${tempFinConditionState.proofPhotoDataUrl}" alt="Comprobante" style="width:68px; height:52px; object-fit:cover; border-radius:8px; border:1px solid var(--border-color);" />
-        <label class="btn btn--primary" style="cursor:pointer; padding:7px 12px; font-size:12px; font-weight:800; background:#0284c7;" title="Tomar foto con la cámara del teléfono">
-          <i class="fas fa-camera"></i> Tomar Foto
-          <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handlePaymentProofUpload(event)" />
-        </label>
-        <label class="btn btn--ghost" style="cursor:pointer; padding:7px 12px; font-size:12px; font-weight:800; border-color:rgba(56,189,248,0.5); color:#38bdf8;" title="Elegir captura o comprobante de la galería">
-          <i class="fas fa-images"></i> Galería / Capture
-          <input type="file" accept="image/*" style="display:none;" onchange="handlePaymentProofUpload(event)" />
-        </label>
-      </div>
-    </div>
+    ${proofUploadBlockHtml(false)}
   `;
 }
 
@@ -8522,16 +9115,17 @@ function recalcPendingBalance(montoTotal) {
   const abono = Math.max(0, Number(abonoEl.value) || 0);
   const saldo = Math.max(0, montoTotal - abono);
   saldoEl.value = "$" + saldo.toFixed(2);
+  saldoEl.style.color = saldo > 0 ? "#dc2626" : "#16a34a";
 }
 
 async function handlePaymentProofUpload(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-  const dataUrl = await readFileAsCompressedDataUrl(file);
+  const dataUrl = await compressImageForSheets(file, 700, 34000);
   tempFinConditionState.proofPhotoDataUrl = dataUrl;
   const img = document.getElementById("fin-proof-preview");
   if (img) img.src = dataUrl;
-  showToast("Foto de comprobante de pago cargada.");
+  showToast("Foto de comprobante de pago cargada y optimizada.");
 }
 
 function confirmFinancialCondition() {
@@ -8541,7 +9135,7 @@ function confirmFinancialCondition() {
   const opt = tempFinConditionState.selectedOption;
   const abonoInput = document.getElementById("fin-input-abono");
   const metodoInput = document.getElementById("fin-input-metodo");
-  const cuentaInput = document.getElementById("fin-input-cuenta")?.value || "efectivo";
+  const cuentaInput = document.getElementById("fin-input-cuenta")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
   const nuevoAbono = opt === "pago_total" ? Number(order.monto_total) : Math.max(0, Number(abonoInput?.value) || 0);
   const diferenciaAbono = Math.max(0, nuevoAbono - (Number(order.monto_abonado) || 0));
 
@@ -8550,13 +9144,13 @@ function confirmFinancialCondition() {
     return;
   }
 
-  order.tipo_condicion_pago = opt;
+  order.tipo_condicion_pago = nuevoAbono >= Number(order.monto_total) && Number(order.monto_total) > 0 ? "pago_total" : opt;
   order.monto_abonado = nuevoAbono;
   order.saldo_pendiente = Math.max(0, Number(order.monto_total) - nuevoAbono);
   order.metodo_pago = opt === "credito" && nuevoAbono === 0 ? "n/a" : metodoInput?.value || "pago_movil";
   order.cuenta_pago = opt === "credito" && nuevoAbono === 0 ? "" : cuentaInput;
-  order.comprobante_pago_foto = opt === "credito" && nuevoAbono === 0 ? "" : tempFinConditionState.proofPhotoDataUrl;
-  order.prioridad_alta = opt === "pago_total";
+  order.comprobante_pago_foto = opt === "credito" && nuevoAbono === 0 ? (order.comprobante_pago_foto || "") : (tempFinConditionState.proofPhotoDataUrl || order.comprobante_pago_foto || "");
+  order.prioridad_alta = order.tipo_condicion_pago === "pago_total";
 
   if (order.estado_actual === "diagnostico_presupuesto") {
     order.estado_actual = "esperando_aprobacion_abono";
@@ -8568,12 +9162,15 @@ function confirmFinancialCondition() {
       id_mov: "MOV-" + Date.now(),
       fecha: nowStr.slice(0, 10),
       tipo: "ingreso",
-      categoria: opt === "pago_total" ? "Liquidación Total de Orden" : "Abono de Orden",
-      concepto: `${opt === "pago_total" ? "Pago Total 100%" : "Abono"} ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
+      categoria: order.saldo_pendiente === 0 ? "Liquidación Total de Orden" : "Abono de Orden",
+      concepto: `${order.saldo_pendiente === 0 ? "Pago Total 100%" : "Abono"} ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
       monto: diferenciaAbono,
       metodo: order.metodo_pago,
       cuenta: cuentaInput,
-      orden_id: order.id_orden
+      comprobante_foto: tempFinConditionState.proofPhotoDataUrl || "",
+      orden_id: order.id_orden,
+      codigo_troquel: order.codigo_troquel,
+      registrado_por: currentUser ? currentUser.nombre : "Sistema"
     });
   }
 
@@ -8585,22 +9182,23 @@ function confirmFinancialCondition() {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "finanzas",
-    mensaje: `Condición financiera registrada: ${opt.toUpperCase()}. Abonado: $${nuevoAbono.toFixed(2)} | Resto: $${order.saldo_pendiente.toFixed(2)}. ${
+    mensaje: `Condición financiera registrada: ${order.tipo_condicion_pago.toUpperCase()}. Abonado: $${nuevoAbono.toFixed(2)} | Resto: $${order.saldo_pendiente.toFixed(2)}. ${
       order.prioridad_alta ? "Marcada con PRIORIDAD ALTA." : ""
     }`,
     foto_adjunta_url: order.comprobante_pago_foto || "",
     fecha_hora: nowStr
   });
 
-  saveDatabase();
+  saveDatabase(`Pago/condición orden #${order.codigo_troquel}`);
   closeModal();
   renderApp();
 
-  if (currentUser.rol === "admin" || currentUser.rol === "jefe_taller") {
-    showToast(`Condición registrada. Ahora puedes asignar los técnicos para pasar a 3. Asignación y Ejecución.`);
+  const lateStages = ["servicio", "asignacion_ejecucion", "terminado", "calidad", "control_calidad", "entrega", "entregado", "archivado"];
+  if (!lateStages.includes(order.estado_actual) && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller")) {
+    showToast(`Condición registrada. Ahora puedes asignar los técnicos para pasar a 4. Servicio.`);
     openSubtaskAssignmentModal(order.id_orden);
   } else {
-    showToast(`Condición financiera guardada en ${order.id_orden}. Lista para asignación por el Jefe de Taller.`);
+    showToast(`Pago / condición guardado en Orden #${order.codigo_troquel}. Resto: $${order.saldo_pendiente.toFixed(2)}.`);
   }
 }
 
@@ -8684,6 +9282,8 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
   }
 
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  const clientServices = getOrderClientServices(order);
+  const clientServicesTotal = Number(order.monto_total) || clientServices.reduce((a, c) => a + (Number(c.monto) || 0), 0);
   const assignableWorkers = db.usuarios.filter(
     (u) => (u.rol === "tecnico" || u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo) && u.activo
   );
@@ -8716,38 +9316,63 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     return `<span class="state-badge state-badge--diag"><i class="fas fa-clock"></i> Por Hacer</span>`;
   };
 
-  const rowsHtml = subtasks
-    .map(
-      (s, i) => `
+  const rowsHtml = subtasks.length
+    ? subtasks
+        .map(
+          (s, i) => {
+            const qty = Math.max(1, Number(s.cantidad) || 1);
+            const totalComm = Number(s.comision_base_tecnico || 0);
+            const unitPay = Number(s.pago_unitario !== undefined ? s.pago_unitario : totalComm / qty);
+            const isPerUnit = Boolean(s.por_unidad || qty > 1);
+            return `
       <tr>
         <td><strong>#${i + 1}</strong></td>
         <td>
           <input
             type="text"
             id="assign-desc-${s.id_subtarea}"
-            value="${s.descripcion_servicio}"
+            value="${escapeHtml(s.descripcion_servicio)}"
             style="width:100%; padding:6px 8px; border-radius:8px; border:1px solid var(--border-color); font-weight:800; font-size:13px; margin-bottom:4px;"
           />
-          <div>${stateBadgeLabel(s.estado_subtarea)}</div>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            ${stateBadgeLabel(s.estado_subtarea)}
+            ${isPerUnit ? `<span class="unit-mode-pill"><i class="fas fa-hashtag"></i> Por ${escapeHtml(s.unidad_label || "unidad")} · 1 sola tarea</span>` : ""}
+          </div>
+        </td>
+        <td style="white-space:nowrap;">
+          <div style="display:flex; align-items:center; gap:5px;">
+            <input
+              type="number"
+              min="1"
+              step="1"
+              id="assign-qty-${s.id_subtarea}"
+              value="${qty}"
+              title="Cantidad de unidades (1 sola tarea asignada)"
+              oninput="recalcSubtaskRowUnitTotal('${s.id_subtarea}', '${order.id_orden}')"
+              style="width:58px; padding:6px 5px; border-radius:8px; border:1.5px solid ${isPerUnit ? "#38bdf8" : "var(--border-color)"}; font-weight:900; text-align:center;"
+            />
+            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">×</span>
+            <input
+              type="number"
+              step="0.25"
+              min="0"
+              id="assign-unit-${s.id_subtarea}"
+              value="${Number(unitPay.toFixed(2))}"
+              title="Pago destajo por unidad ($)"
+              oninput="recalcSubtaskRowUnitTotal('${s.id_subtarea}', '${order.id_orden}')"
+              style="width:74px; padding:6px 6px; border-radius:8px; border:1px solid var(--border-color); font-weight:800; font-family:'JetBrains Mono',monospace;"
+            />
+          </div>
         </td>
         <td>
           <input
             type="number"
-            step="0.5"
-            id="assign-price-${s.id_subtarea}"
-            value="${s.monto_servicio}"
-            oninput="updateLiveAssignmentTotals('${order.id_orden}')"
-            style="width:95px; padding:6px 8px; border-radius:8px; border:1px solid var(--border-color); font-weight:900; font-family:'JetBrains Mono',monospace;"
-          />
-        </td>
-        <td>
-          <input
-            type="number"
-            step="0.5"
+            step="0.25"
+            min="0"
             id="assign-comm-${s.id_subtarea}"
-            value="${s.comision_base_tecnico}"
+            value="${Number(totalComm.toFixed(2))}"
             oninput="updateLiveAssignmentTotals('${order.id_orden}')"
-            style="width:95px; padding:6px 8px; border-radius:8px; border:1.5px solid rgba(22,163,74,0.5); font-weight:900; color:#16a34a; font-family:'JetBrains Mono',monospace;"
+            style="width:94px; padding:6px 8px; border-radius:8px; border:1.5px solid rgba(22,163,74,0.5); font-weight:900; color:#16a34a; font-family:'JetBrains Mono',monospace;"
           />
         </td>
         <td>
@@ -8766,15 +9391,17 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
                 <i class="fas fa-times"></i> Quitar
               </button>
             ` : ""}
-            <button type="button" class="btn btn--ghost btn--xs" style="padding:4px 6px; font-size:10.5px; color:#ef4444;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar subtarea">
+            <button type="button" class="btn btn--ghost btn--xs" style="padding:4px 6px; font-size:10.5px; color:#ef4444;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar trabajo de destajo">
               <i class="fas fa-trash"></i>
             </button>
           </div>
         </td>
       </tr>
-    `
-    )
-    .join("");
+    `;
+          }
+        )
+        .join("")
+    : `<tr><td colspan="6" style="text-align:center; padding:18px; color:var(--text-muted); font-size:12.5px;">Aún no has agregado trabajos de destajo a esta orden. Selecciona arriba los trabajos del <strong>Catálogo de Destajo (Lista B)</strong> que realizarán los técnicos para cumplir los servicios del cliente.</td></tr>`;
 
   const quickAssignButtons = internalTechs
     .slice(0, 6)
@@ -8787,8 +9414,18 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     )
     .join("");
 
+  const clientServicesBadges = clientServices.length
+    ? clientServices
+        .map(
+          (c) => `<span style="display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:99px; background:rgba(245,223,0,0.12); border:1px solid rgba(245,223,0,0.35); font-size:11.5px; font-weight:800; color:var(--text-main);">
+            ${escapeHtml(c.descripcion)} <strong style="color:var(--renacer-gold);">$${Number(c.monto || 0).toFixed(2)}</strong>
+          </span>`
+        )
+        .join(" ")
+    : `<span style="font-size:11.5px; color:var(--text-muted);">Sin servicios facturados registrados</span>`;
+
   openModal({
-    title: `Fase 3: Matriz de Asignación Modular y Destajo — TROQUEL #${order.codigo_troquel}`,
+    title: `Fase 3: Matriz de Trabajos de Destajo y Asignación — TROQUEL #${order.codigo_troquel}`,
     icon: "fa-user-check",
     wide: true,
     body: `
@@ -8807,30 +9444,44 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
             Observaciones: ${order.datos_motor.observaciones}
           </div>
         </div>
-        <div class="form-section-box" style="margin-bottom:0;">
-          <div class="form-section-title"><i class="fas fa-images"></i> Soporte Visual (Pieza + Repuestos del Cliente)</div>
-          <div style="display:flex; gap:10px; align-items:center;">
-            <img src="${(order.galeria_fotos_pieza && order.galeria_fotos_pieza[0]) || DEMO_PHOTOS.camaraCorsa}" style="width:74px; height:58px; object-fit:cover; border-radius:8px; border:1px solid var(--border-color);" />
-            <div style="font-size:12px;">
-              <div><i class="fas fa-camera"></i> <strong>${(order.galeria_fotos_pieza || []).length} foto(s)</strong> estado inicial de la pieza</div>
-              <div><i class="fas fa-camera"></i> <strong>${(order.galeria_fotos_repuestos || []).length} foto(s)</strong> repuestos en mesa</div>
-              <button type="button" class="btn btn--ghost" style="margin-top:4px; padding:4px 8px; font-size:11px;" onclick="openDualGalleryInspector('${order.id_orden}')">
-                <i class="fas fa-expand"></i> Ver / Subir Fotos
-              </button>
-            </div>
+        <div class="form-section-box" style="margin-bottom:0; border-color:rgba(245,223,0,0.35);">
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+            <span><i class="fas fa-receipt"></i> Servicios Facturados al Cliente (Lista A)</span>
+            <strong style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">Total: $${clientServicesTotal.toFixed(2)}</strong>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+            ${clientServicesBadges}
+          </div>
+          <div style="font-size:11px; color:var(--text-muted);">
+            <i class="fas fa-info-circle"></i> Los trabajos de destajo que agregues abajo son independientes y <strong>no alteran</strong> el precio facturado al cliente.
           </div>
         </div>
       </div>
 
-      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
-        <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
-          B. Asignación Multipersonal y Ajuste Flexible de Comisión por Destajo:
-        </span>
-        <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          ${quickAssignButtons}
-          <button type="button" class="btn btn--gold" style="padding:5px 10px; font-size:11.5px;" onclick="addSubtaskDirectInAssignmentModal('${order.id_orden}')">
-            <i class="fas fa-plus"></i> + Añadir Subtarea
-          </button>
+      <!-- SELECTOR RÁPIDO DESDE LISTA B (CATÁLOGO DE TRABAJOS DE DESTAJO & OUTSOURCING) -->
+      <div class="form-section-box" style="margin-bottom:12px; border-color:rgba(34,197,94,0.4); background:rgba(34,197,94,0.04);">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+          <span style="font-size:12px; font-weight:900; color:#22c55e;">
+            <i class="fas fa-hammer"></i> B. Agregar Trabajos de Destajo (Lista B) para los Técnicos / Talleres Aliados:
+          </span>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${quickAssignButtons}
+            <button type="button" class="btn btn--gold btn--xs" onclick="addSubtaskDirectInAssignmentModal('${order.id_orden}')">
+              <i class="fas fa-plus"></i> + Trabajo Libre
+            </button>
+          </div>
+        </div>
+        <div style="position:relative;">
+          <input
+            type="text"
+            id="search-destajo-work-input"
+            placeholder="Buscar trabajo de destajo en Lista B (ej. desarme, lavado, cepillada, guías, armado, Solteca)..."
+            oninput="filterDestajoWorksForOrder('${order.id_orden}', this.value)"
+            onfocus="filterDestajoWorksForOrder('${order.id_orden}', this.value)"
+            autocomplete="off"
+            style="width:100%; padding:9px 12px; border-radius:10px; border:1.5px solid rgba(34,197,94,0.45); background:var(--bg-input); color:var(--text-main); font-weight:700; font-size:12.5px;"
+          />
+          <div id="destajo-works-live-dropdown" class="budget-services-dropdown-list hidden"></div>
         </div>
       </div>
 
@@ -8839,10 +9490,10 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
           <thead>
             <tr>
               <th>#</th>
-              <th>Tarea / Servicio de la Orden</th>
-              <th>Precio Cliente ($)</th>
-              <th>Comisión Destajo ($)</th>
-              <th>Técnico Asignado</th>
+              <th>Trabajo de Destajo a Ejecutar (Lista B)</th>
+              <th>Cant. × Tarifa ($)</th>
+              <th>Total Destajo ($)</th>
+              <th>Técnico / Taller Asignado</th>
               <th style="text-align:center;">Acciones</th>
             </tr>
           </thead>
@@ -8858,7 +9509,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--gold btn--lg" onclick="confirmSubtaskAssignments('${order.id_orden}')">
-        <i class="fas ${["servicio", "calidad", "control_calidad", "entrega", "entregado", "archivado"].includes(order.estado_actual) ? 'fa-save' : 'fa-play-circle'}"></i> ${["servicio", "calidad", "control_calidad", "entrega", "entregado", "archivado"].includes(order.estado_actual) ? 'Guardar Cambios de Asignación' : 'Confirmar Matriz y Pasar a 4. Servicio'}
+        <i class="fas ${["servicio", "calidad", "control_calidad", "entrega", "entregado", "archivado"].includes(order.estado_actual) ? 'fa-save' : 'fa-play-circle'}"></i> ${["servicio", "calidad", "control_calidad", "entrega", "entregado", "archivado"].includes(order.estado_actual) ? 'Guardar Cambios de Destajo' : 'Confirmar Destajo y Pasar a 4. Servicio'}
       </button>
     `
   });
@@ -8866,30 +9517,163 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
   updateLiveAssignmentTotals(order.id_orden);
 }
 
+function recalcSubtaskRowUnitTotal(subtaskId, orderId) {
+  const qty = Math.max(1, Number(document.getElementById(`assign-qty-${subtaskId}`)?.value) || 1);
+  const unitPay = Math.max(0, Number(document.getElementById(`assign-unit-${subtaskId}`)?.value) || 0);
+  const commInp = document.getElementById(`assign-comm-${subtaskId}`);
+  if (commInp) {
+    commInp.value = Number((qty * unitPay).toFixed(2));
+  }
+  updateLiveAssignmentTotals(orderId);
+}
+
+function captureCurrentAssignmentModalEdits(orderId) {
+  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  subtasks.forEach((s) => {
+    const descInp = document.getElementById(`assign-desc-${s.id_subtarea}`);
+    const qtyInp = document.getElementById(`assign-qty-${s.id_subtarea}`);
+    const unitInp = document.getElementById(`assign-unit-${s.id_subtarea}`);
+    const commInp = document.getElementById(`assign-comm-${s.id_subtarea}`);
+    const sel = document.getElementById(`assign-tech-${s.id_subtarea}`);
+    if (descInp && descInp.value.trim()) s.descripcion_servicio = descInp.value.trim();
+    if (qtyInp) {
+      s.cantidad = Math.max(1, Number(qtyInp.value) || 1);
+      if (s.cantidad > 1) s.por_unidad = true;
+    }
+    if (unitInp) s.pago_unitario = Math.max(0, Number(unitInp.value) || 0);
+    if (commInp) s.comision_base_tecnico = Math.max(0, Number(commInp.value) || 0);
+    if (sel) {
+      if (sel.value) {
+        const tech = db.usuarios.find((u) => u.id_usuario === sel.value);
+        s.tecnico_id = sel.value;
+        s.nombre_tecnico = tech ? tech.nombre : "Asignado";
+      } else {
+        s.tecnico_id = null;
+        s.nombre_tecnico = "Sin asignar";
+      }
+    }
+  });
+}
+
+function filterDestajoWorksForOrder(orderId, query) {
+  const dropdown = document.getElementById("destajo-works-live-dropdown");
+  if (!dropdown) return;
+  const q = (query || "").trim().toLowerCase();
+  const works = (db.catalogo_destajo || []).filter((w) => w.activo !== false);
+  const filtered = q
+    ? works.filter((w) => (w.nombre || "").toLowerCase().includes(q) || (w.categoria || "").toLowerCase().includes(q))
+    : works.slice(0, 15);
+
+  if (!filtered.length) {
+    dropdown.innerHTML = `
+      <div style="padding:10px; text-align:center; font-size:12px; color:var(--text-muted);">
+        Sin coincidencias para "<strong>${escapeHtml(query)}</strong>".
+        <div style="margin-top:6px;">
+          <button type="button" class="btn btn--gold btn--xs" onclick="addSubtaskDirectInAssignmentModal('${orderId}', '${escapeHtml(query).replace(/'/g, "")}')">
+            + Agregar "${escapeHtml(query)}" como Trabajo Libre
+          </button>
+        </div>
+      </div>
+    `;
+    dropdown.classList.remove("hidden");
+    return;
+  }
+
+  dropdown.innerHTML = filtered
+    .map(
+      (w) => `
+      <div class="budget-service-item-pick" onclick="pickDestajoWorkForOrder('${orderId}', '${w.id_destajo}')">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <strong style="color:var(--text-main); font-size:12.5px;">
+            <i class="fas ${w.es_outsourcing ? "fa-handshake" : "fa-hammer"}" style="color:${w.es_outsourcing ? "#38bdf8" : "#22c55e"}; margin-right:6px;"></i>
+            ${escapeHtml(w.nombre)}
+            ${w.por_unidad ? `<span class="unit-mode-pill" style="margin-left:4px;"><i class="fas fa-hashtag"></i> Por ${escapeHtml(w.unidad_label || "unidad")}</span>` : ""}
+          </strong>
+          <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:${w.es_outsourcing ? "#38bdf8" : "#22c55e"}; font-size:13.5px;">
+            $${Number(w.pago_destajo || 0).toFixed(2)}${w.por_unidad ? ` <small style="font-size:10px; opacity:0.8;">c/u</small>` : ""}
+          </span>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--text-muted); margin-top:2px;">
+          <span>${escapeHtml(w.categoria || "Rectificación General")}</span>
+          <span>${w.es_outsourcing ? "Outsourcing / Solteca" : "Destajo Interno"}${w.por_unidad ? " · Multiplicable en 1 tarea" : ""}</span>
+        </div>
+      </div>
+    `
+    )
+    .join("");
+  dropdown.classList.remove("hidden");
+}
+
+function pickDestajoWorkForOrder(orderId, destajoId) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  const work = (db.catalogo_destajo || []).find((w) => w.id_destajo === destajoId);
+  if (!order || !work) return;
+  captureCurrentAssignmentModalEdits(orderId);
+
+  // Si es outsourcing y existe un taller aliado registrado, pre-seleccionarlo automáticamente
+  let defaultTechId = null;
+  let defaultTechName = "Sin asignar";
+  if (work.es_outsourcing) {
+    const ext = (db.usuarios || []).find((u) => (u.rol === "outsourcing" || u.es_externo) && u.activo !== false);
+    if (ext) {
+      defaultTechId = ext.id_usuario;
+      defaultTechName = ext.nombre;
+    }
+  }
+
+  const unitPay = Number(work.pago_destajo) || 0;
+  db.subtareas.push({
+    id_subtarea: "SUB-" + Date.now().toString().slice(-6) + "-" + Math.floor(Math.random() * 99),
+    orden_id: order.id_orden,
+    codigo_troquel: order.codigo_troquel,
+    descripcion_servicio: work.nombre,
+    tecnico_id: defaultTechId,
+    nombre_tecnico: defaultTechName,
+    monto_servicio: 0,
+    por_unidad: Boolean(work.por_unidad),
+    unidad_label: work.unidad_label || "",
+    cantidad: 1,
+    pago_unitario: unitPay,
+    comision_base_tecnico: unitPay,
+    es_outsourcing: Boolean(work.es_outsourcing),
+    estado_subtarea: "pendiente",
+    inicio_activo_ts: null,
+    minutos_acumulados: 0,
+    foto_terminado_url: "",
+    fecha_terminado: null,
+    comision_pagada: false
+  });
+
+  openSubtaskAssignmentModal(orderId);
+  showToast(`Trabajo "${work.nombre}" ($${unitPay.toFixed(2)}${work.por_unidad ? " c/u — ajusta la cantidad en la fila" : ""}) agregado a la matriz.`);
+}
+
 function unassignSubtaskInModalDirect(subtaskId, orderId) {
+  captureCurrentAssignmentModalEdits(orderId);
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (sub) {
     sub.tecnico_id = null;
     sub.nombre_tecnico = "Sin asignar";
     sub.estado_subtarea = "pendiente";
   }
-  saveDatabase();
+  saveDatabase("Técnico desasignado");
   openSubtaskAssignmentModal(orderId);
-  showToast("Técnico desasignado de la subtarea.");
+  showToast("Técnico desasignado del trabajo.");
 }
 
-function addSubtaskDirectInAssignmentModal(orderId) {
+function addSubtaskDirectInAssignmentModal(orderId, customName = "") {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
+  captureCurrentAssignmentModalEdits(orderId);
   db.subtareas.push({
-    id_subtarea: "SUB-" + Date.now().toString().slice(-5),
+    id_subtarea: "SUB-" + Date.now().toString().slice(-6) + "-" + Math.floor(Math.random() * 99),
     orden_id: order.id_orden,
     codigo_troquel: order.codigo_troquel,
-    descripcion_servicio: "Servicio Adicional de Maquinado",
+    descripcion_servicio: customName || "Trabajo de Destajo Adicional",
     tecnico_id: null,
     nombre_tecnico: "Sin asignar",
-    monto_servicio: 25,
-    comision_base_tecnico: 8,
+    monto_servicio: 0,
+    comision_base_tecnico: 5,
     estado_subtarea: "pendiente",
     inicio_activo_ts: null,
     minutos_acumulados: 0,
@@ -8903,38 +9687,39 @@ function addSubtaskDirectInAssignmentModal(orderId) {
 function updateLiveAssignmentTotals(orderId) {
   const box = document.getElementById("live-assignment-totals-box");
   if (!box) return;
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
-  let totalOrderPrice = 0;
+  const totalOrderPrice = order ? (Number(order.monto_total) || 0) : 0;
   let totalOrderComm = 0;
   const byTech = {};
 
   subtasks.forEach((s) => {
-    const pVal = Math.max(0, Number(document.getElementById(`assign-price-${s.id_subtarea}`)?.value ?? s.monto_servicio) || 0);
     const cVal = Math.max(0, Number(document.getElementById(`assign-comm-${s.id_subtarea}`)?.value ?? s.comision_base_tecnico) || 0);
     const tId = document.getElementById(`assign-tech-${s.id_subtarea}`)?.value || "";
-    totalOrderPrice += pVal;
     totalOrderComm += cVal;
     if (tId) {
       const tech = db.usuarios.find((u) => u.id_usuario === tId);
       const tName = tech ? tech.nombre : "Técnico";
+      const isExt = Boolean(tech && (tech.rol === "outsourcing" || tech.es_externo));
       if (!byTech[tId]) {
         const weeklyPrev = db.subtareas
           .filter((other) => other.tecnico_id === tId && other.orden_id !== orderId && !other.comision_pagada)
           .reduce((acc, other) => acc + (Number(other.comision_base_tecnico) || 0), 0);
-        byTech[tId] = { nombre: tName, enEstaOrden: 0, tareasCount: 0, acumuladoPrevio: weeklyPrev };
+        byTech[tId] = { nombre: tName, isExt, enEstaOrden: 0, tareasCount: 0, acumuladoPrevio: weeklyPrev };
       }
       byTech[tId].enEstaOrden += cVal;
       byTech[tId].tareasCount += 1;
     }
   });
 
+  const margenOrden = totalOrderPrice - totalOrderComm;
   const techPills = Object.values(byTech)
     .map(
       (info) => `
-      <div style="background:var(--bg-card); border:1px solid rgba(22,163,74,0.4); border-radius:10px; padding:8px 12px; font-size:12px;">
-        <strong>[Interno] ${info.nombre}</strong> (${info.tareasCount} tarea/s)<br/>
-        <span>En esta orden: <strong style="color:#16a34a;">+$${info.enEstaOrden.toFixed(2)}</strong></span> ·
-        <span style="color:var(--text-muted);">Acumulado semanal proyectado: <strong>$${(info.acumuladoPrevio + info.enEstaOrden).toFixed(2)}</strong></span>
+      <div style="background:var(--bg-card); border:1px solid ${info.isExt ? "rgba(56,189,248,0.45)" : "rgba(22,163,74,0.4)"}; border-radius:10px; padding:8px 12px; font-size:12px;">
+        <strong>[${info.isExt ? "Externo" : "Interno"}] ${info.nombre}</strong> (${info.tareasCount} trabajo/s)<br/>
+        <span>Destajo en esta orden: <strong style="color:${info.isExt ? "#38bdf8" : "#16a34a"};">+$${info.enEstaOrden.toFixed(2)}</strong></span> ·
+        <span style="color:var(--text-muted);">Acumulado semanal: <strong>$${(info.acumuladoPrevio + info.enEstaOrden).toFixed(2)}</strong></span>
       </div>
     `
     )
@@ -8944,17 +9729,18 @@ function updateLiveAssignmentTotals(orderId) {
     <div style="background:var(--bg-input); border:1px solid var(--border-color); border-radius:12px; padding:12px 14px;">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:${techPills ? "10px" : "0"};">
         <span style="font-size:12px; font-weight:800; color:var(--text-muted);">
-          TOTALIZACIÓN AUTOMÁTICA DE LA ORDEN Y DESTAJO:
+          RESUMEN DE ORDEN (${subtasks.length} trabajo/s de destajo):
         </span>
-        <div style="display:flex; gap:16px; font-family:'JetBrains Mono',monospace; font-size:13.5px; font-weight:900;">
-          <span>Total Factura Cliente: <strong>$${totalOrderPrice.toFixed(2)}</strong></span>
-          <span style="color:#16a34a;">Total Comisiones Técnicos: <strong>$${totalOrderComm.toFixed(2)}</strong></span>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:900;">
+          <span>Facturado Cliente: <strong style="color:var(--renacer-gold);">$${totalOrderPrice.toFixed(2)}</strong></span>
+          <span style="color:#22c55e;">Total Destajo: <strong>$${totalOrderComm.toFixed(2)}</strong></span>
+          <span style="color:#38bdf8;">Saldo Taller: <strong>$${margenOrden.toFixed(2)}</strong></span>
         </div>
       </div>
       ${
         techPills
           ? `<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:8px;">${techPills}</div>`
-          : `<div style="font-size:12px; color:#d97706; font-weight:700;">Selecciona al menos un técnico arriba para calcular su producción acumulada.</div>`
+          : `<div style="font-size:12px; color:#d97706; font-weight:700;">Agrega trabajos de la Lista B y asigna técnicos arriba para calcular su destajo.</div>`
       }
     </div>
   `;
@@ -8972,33 +9758,46 @@ function confirmSubtaskAssignments(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
+  // Asegurar que ordenes antiguas preserven su presupuesto cliente separado al guardar matriz de destajo
+  if (!Array.isArray(order.servicios_cliente)) {
+    order.servicios_cliente = getOrderClientServices(order).map((it) => ({
+      id_item: it.id_item,
+      descripcion: it.descripcion,
+      monto: Number(it.monto) || 0,
+      es_item_extra: Boolean(it.es_item_extra)
+    }));
+  }
+
   const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
   let assignedCount = 0;
-  let nuevoMontoTotal = 0;
 
   subtasks.forEach((s) => {
     const descInp = document.getElementById(`assign-desc-${s.id_subtarea}`);
-    const priceInp = document.getElementById(`assign-price-${s.id_subtarea}`);
+    const qtyInp = document.getElementById(`assign-qty-${s.id_subtarea}`);
+    const unitInp = document.getElementById(`assign-unit-${s.id_subtarea}`);
     const commInp = document.getElementById(`assign-comm-${s.id_subtarea}`);
     const sel = document.getElementById(`assign-tech-${s.id_subtarea}`);
 
     if (descInp && descInp.value.trim()) {
       s.descripcion_servicio = descInp.value.trim();
     }
-    if (priceInp) {
-      s.monto_servicio = Math.max(0, Number(priceInp.value) || 0);
+    if (qtyInp) {
+      s.cantidad = Math.max(1, Number(qtyInp.value) || 1);
+      if (s.cantidad > 1) s.por_unidad = true;
+    }
+    if (unitInp) {
+      s.pago_unitario = Math.max(0, Number(unitInp.value) || 0);
     }
     if (commInp) {
       s.comision_base_tecnico = Math.max(0, Number(commInp.value) || 0);
     }
-    nuevoMontoTotal += Number(s.monto_servicio) || 0;
 
     if (sel && sel.value) {
       const tech = db.usuarios.find((u) => u.id_usuario === sel.value);
       s.tecnico_id = sel.value;
       s.nombre_tecnico = tech ? tech.nombre : "Asignado";
       s.es_outsourcing = Boolean(tech && (tech.rol === "outsourcing" || tech.tipo === "taller_externo" || tech.es_externo));
-      if (!s.estado_subtarea) s.estado_subtarea = "pendiente"; // Por Hacer / Pendiente por defecto
+      if (!s.estado_subtarea) s.estado_subtarea = "pendiente";
       assignedCount++;
     } else {
       s.tecnico_id = null;
@@ -9008,12 +9807,12 @@ function confirmSubtaskAssignments(orderId) {
   });
 
   if (assignedCount === 0) {
-    showToast("Asigna al menos una subtarea a un técnico antes de pasar a Ejecución.", "error");
+    showToast("Agrega al menos un trabajo de destajo y asígnalo a un técnico antes de confirmar.", "error");
     return;
   }
 
-  order.monto_total = nuevoMontoTotal;
-  order.saldo_pendiente = Math.max(0, nuevoMontoTotal - (Number(order.monto_abonado) || 0));
+  // PRESERVAR intacto el total facturado al cliente (solo recalculado desde Lista A + repuestos)
+  recalcOrderTotalsFromClientServices(order);
 
   // PRESERVAR ESTADO: Si la orden ya avanzó a calidad o entrega (ej. #1548), no retroceder a servicio
   const lateStages = ["calidad", "control_calidad", "entrega", "entregado", "archivado"];
@@ -9138,26 +9937,45 @@ function saveQuickExtraItem(orderId) {
 
   const techObj = techId ? db.usuarios.find((u) => u.id_usuario === techId) : null;
 
-  db.subtareas.push({
-    id_subtarea: "SUB-" + Date.now(),
-    orden_id: order.id_orden,
-    descripcion_servicio: desc + " (Ítem Extra)",
-    tecnico_id: techObj ? techObj.id_usuario : null,
-    nombre_tecnico: techObj ? techObj.nombre : "Sin asignar",
-    monto_servicio: price,
-    comision_base_tecnico: comm,
-    estado_subtarea: "pendiente",
-    inicio_activo_ts: null,
-    minutos_acumulados: 0,
-    foto_terminado_url: "",
-    fecha_terminado: null,
-    comision_pagada: false
+  // Asegurar lista independiente de servicios facturados al cliente
+  if (!Array.isArray(order.servicios_cliente)) {
+    order.servicios_cliente = getOrderClientServices(order).map((it) => ({
+      id_item: it.id_item,
+      descripcion: it.descripcion,
+      monto: Number(it.monto) || 0,
+      es_item_extra: Boolean(it.es_item_extra)
+    }));
+  }
+
+  order.servicios_cliente.push({
+    id_item: "SRV-" + Date.now(),
+    descripcion: desc + " (Ítem Extra)",
+    monto: price,
+    es_item_extra: true
   });
 
-  // Recalcular Total_Factura y Saldo_Pendiente automáticamente
-  const subtasks = db.subtareas.filter((s) => s.orden_id === order.id_orden);
-  order.monto_total = subtasks.reduce((acc, s) => acc + (Number(s.monto_servicio) || 0), 0);
-  order.saldo_pendiente = Math.max(0, order.monto_total - (Number(order.monto_abonado) || 0));
+  // Si se asignó un técnico o destajo opcional al ítem extra, crear también su trabajo de destajo independiente
+  if (techObj || comm > 0) {
+    db.subtareas.push({
+      id_subtarea: "SUB-" + Date.now(),
+      orden_id: order.id_orden,
+      codigo_troquel: order.codigo_troquel,
+      descripcion_servicio: desc + " (Extra)",
+      tecnico_id: techObj ? techObj.id_usuario : null,
+      nombre_tecnico: techObj ? techObj.nombre : "Sin asignar",
+      monto_servicio: 0,
+      comision_base_tecnico: comm,
+      estado_subtarea: "pendiente",
+      inicio_activo_ts: null,
+      minutos_acumulados: 0,
+      foto_terminado_url: "",
+      fecha_terminado: null,
+      comision_pagada: false
+    });
+  }
+
+  // Recalcular Total_Factura y Saldo_Pendiente automáticamente desde Servicios al Cliente + Repuestos
+  recalcOrderTotalsFromClientServices(order);
 
   const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
   db.bitacora.push({
@@ -9188,43 +10006,54 @@ function openEditBudgetModal(orderId) {
     return;
   }
 
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
-  const isRecep = currentUser && currentUser.rol === "recepcion";
+  if (!Array.isArray(order.servicios_cliente)) {
+    order.servicios_cliente = getOrderClientServices(order).map((it) => ({
+      id_item: it.id_item,
+      descripcion: it.descripcion,
+      monto: Number(it.monto) || 0,
+      es_item_extra: Boolean(it.es_item_extra)
+    }));
+  }
+  const clientServices = order.servicios_cliente;
 
-  const itemsHtml = subtasks
+  const itemsHtml = clientServices
     .map(
-      (s) => `
-      <div style="display:grid; grid-template-columns: ${isRecep ? "1fr 140px 42px" : "1fr 110px 110px 42px"}; gap:8px; align-items:center; margin-bottom:8px;">
-        <input type="text" id="edit-sub-desc-${s.id_subtarea}" value="${s.descripcion_servicio}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;" />
-        <input type="number" step="0.5" id="edit-sub-price-${s.id_subtarea}" value="${s.monto_servicio}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:900;" />
-        ${isRecep ? `<input type="hidden" id="edit-sub-comm-${s.id_subtarea}" value="${s.comision_base_tecnico}" />` : `
-          <input type="number" step="0.5" id="edit-sub-comm-${s.id_subtarea}" value="${s.comision_base_tecnico}" style="padding:8px; border-radius:8px; border:1px solid rgba(22,163,74,0.4); font-weight:900; color:#15803d;" />
-        `}
-        <button type="button" class="btn btn--danger" style="padding:8px; border-radius:8px; justify-content:center;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar este ítem del presupuesto">
+      (s) => {
+        const qty = Math.max(1, Number(s.cantidad) || 1);
+        const unitPrice = Number(s.precio_unitario !== undefined ? s.precio_unitario : (Number(s.monto) || 0) / qty);
+        return `
+      <div style="display:grid; grid-template-columns: 1fr 72px 110px 100px 40px; gap:8px; align-items:center; margin-bottom:8px;">
+        <input type="text" id="edit-srv-desc-${s.id_item}" value="${escapeHtml(s.descripcion)}" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:700;" />
+        <input type="number" step="1" min="1" id="edit-srv-qty-${s.id_item}" value="${qty}" oninput="const q=Math.max(1,Number(this.value)||1); const u=Math.max(0,Number(document.getElementById('edit-srv-unit-${s.id_item}')?.value)||0); const p=document.getElementById('edit-srv-price-${s.id_item}'); if(p) p.value=(q*u).toFixed(2);" style="padding:8px 6px; border-radius:8px; border:1px solid ${s.por_unidad || qty > 1 ? "#38bdf8" : "var(--border-color)"}; font-weight:900; text-align:center;" />
+        <input type="number" step="0.5" min="0" id="edit-srv-unit-${s.id_item}" value="${Number(unitPrice.toFixed(2))}" oninput="const u=Math.max(0,Number(this.value)||0); const q=Math.max(1,Number(document.getElementById('edit-srv-qty-${s.id_item}')?.value)||1); const p=document.getElementById('edit-srv-price-${s.id_item}'); if(p) p.value=(q*u).toFixed(2);" style="padding:8px; border-radius:8px; border:1px solid var(--border-color); font-weight:800;" />
+        <input type="number" step="0.5" min="0" id="edit-srv-price-${s.id_item}" value="${Number(s.monto || 0)}" style="padding:8px; border-radius:8px; border:1px solid var(--renacer-gold); font-weight:900; color:var(--renacer-gold);" />
+        <button type="button" class="btn btn--danger" style="padding:8px; border-radius:8px; justify-content:center;" onclick="removeClientServiceFromOrder('${s.id_item}', '${order.id_orden}')" title="Eliminar este servicio del presupuesto al cliente">
           <i class="fas fa-trash-alt"></i>
         </button>
       </div>
-    `
+    `;
+      }
     )
     .join("");
 
   openModal({
-    title: `Presupuesto / Factura Abierta — ${order.id_orden} (Troquel #${order.codigo_troquel})`,
+    title: `Presupuesto / Factura Abierta al Cliente — ${order.id_orden} (Troquel #${order.codigo_troquel})`,
     icon: "fa-edit",
     wide: true,
     body: `
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Edita los montos de los servicios, agrega ítems extras o elimina renglones que no se realizarán. El total y resto se recalculan en tiempo real.
+        Edita los <strong>servicios facturados al cliente (Lista A)</strong>. Los trabajos de destajo asignados a técnicos se gestionan aparte en la <strong>Matriz de Asignación</strong> y no se pierden al modificar el presupuesto.
       </p>
-      <div style="display:grid; grid-template-columns: ${isRecep ? "1fr 140px 42px" : "1fr 110px 110px 42px"}; gap:8px; font-size:11px; font-weight:900; color:var(--text-muted); margin-bottom:6px;">
-        <span>SERVICIO / SUBTAREA</span>
-        <span>MONTO CLIENTE ($)</span>
-        ${isRecep ? "" : `<span>COMISIÓN TÉCNICO ($)</span>`}
+      <div style="display:grid; grid-template-columns: 1fr 72px 110px 100px 40px; gap:8px; font-size:11px; font-weight:900; color:var(--text-muted); margin-bottom:6px;">
+        <span>SERVICIO FACTURADO AL CLIENTE</span>
+        <span style="text-align:center;">CANT.</span>
+        <span>P. UNIT ($)</span>
+        <span>SUBTOTAL ($)</span>
         <span></span>
       </div>
-      <div id="edit-subtasks-list">${itemsHtml}</div>
+      <div id="edit-subtasks-list">${itemsHtml || '<div style="font-size:12px; color:var(--text-muted); padding:8px 0;">Sin servicios cargados. Añade una fila abajo.</div>'}</div>
       <button type="button" class="btn btn--ghost" style="margin-top:6px;" onclick="addExtraSubtaskToExistingOrder('${order.id_orden}')">
-        <i class="fas fa-plus"></i> + Añadir Fila Extra
+        <i class="fas fa-plus"></i> + Añadir Servicio al Presupuesto
       </button>
 
       <div class="form-section-box" style="margin-top:16px;">
@@ -9236,7 +10065,7 @@ function openEditBudgetModal(orderId) {
           </div>
           <div class="form-field">
             <label>Observaciones de la Pieza / Motor</label>
-            <input type="text" id="edit-order-obs" value="${order.datos_motor.observaciones}" />
+            <input type="text" id="edit-order-obs" value="${escapeHtml(order.datos_motor.observaciones || "")}" />
           </div>
         </div>
       </div>
@@ -9244,29 +10073,29 @@ function openEditBudgetModal(orderId) {
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--gold btn--lg" onclick="saveEditedBudget('${order.id_orden}')">
-        <i class="fas fa-save"></i> Guardar Cambios en Factura Abierta
+        <i class="fas fa-save"></i> Guardar Cambios en Presupuesto Cliente
       </button>
     `
   });
 }
 
 function addExtraSubtaskToExistingOrder(orderId) {
-  const newSub = {
-    id_subtarea: "SUB-" + Date.now(),
-    orden_id: orderId,
-    descripcion_servicio: "Servicio Adicional de Rectificación",
-    tecnico_id: null,
-    nombre_tecnico: "Sin asignar",
-    monto_servicio: 20,
-    comision_base_tecnico: 6,
-    estado_subtarea: "pendiente",
-    inicio_activo_ts: null,
-    minutos_acumulados: 0,
-    foto_terminado_url: "",
-    fecha_terminado: null,
-    comision_pagada: false
-  };
-  db.subtareas.push(newSub);
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return;
+  if (!Array.isArray(order.servicios_cliente)) {
+    order.servicios_cliente = getOrderClientServices(order).map((it) => ({
+      id_item: it.id_item,
+      descripcion: it.descripcion,
+      monto: Number(it.monto) || 0,
+      es_item_extra: Boolean(it.es_item_extra)
+    }));
+  }
+  order.servicios_cliente.push({
+    id_item: "SRV-" + Date.now(),
+    descripcion: "Servicio Adicional de Rectificación",
+    monto: 20,
+    es_item_extra: true
+  });
   openEditBudgetModal(orderId);
 }
 
@@ -9274,27 +10103,37 @@ function saveEditedBudget(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
-  let nuevoTotal = 0;
+  if (!Array.isArray(order.servicios_cliente)) {
+    order.servicios_cliente = getOrderClientServices(order).map((it) => ({
+      id_item: it.id_item,
+      descripcion: it.descripcion,
+      monto: Number(it.monto) || 0,
+      es_item_extra: Boolean(it.es_item_extra)
+    }));
+  }
 
-  subtasks.forEach((s) => {
-    const dEl = document.getElementById(`edit-sub-desc-${s.id_subtarea}`);
-    const pEl = document.getElementById(`edit-sub-price-${s.id_subtarea}`);
-    const cEl = document.getElementById(`edit-sub-comm-${s.id_subtarea}`);
-    if (dEl) s.descripcion_servicio = dEl.value.trim() || s.descripcion_servicio;
-    if (pEl) s.monto_servicio = Math.max(0, Number(pEl.value) || 0);
-    if (cEl) s.comision_base_tecnico = Math.max(0, Number(cEl.value) || 0);
-    nuevoTotal += s.monto_servicio;
+  order.servicios_cliente.forEach((s) => {
+    const dEl = document.getElementById(`edit-srv-desc-${s.id_item}`);
+    const qEl = document.getElementById(`edit-srv-qty-${s.id_item}`);
+    const uEl = document.getElementById(`edit-srv-unit-${s.id_item}`);
+    const pEl = document.getElementById(`edit-srv-price-${s.id_item}`);
+    if (dEl) s.descripcion = dEl.value.trim() || s.descripcion;
+    if (qEl) {
+      s.cantidad = Math.max(1, Number(qEl.value) || 1);
+      if (s.cantidad > 1) s.por_unidad = true;
+    }
+    if (uEl) s.precio_unitario = Math.max(0, Number(uEl.value) || 0);
+    if (pEl) s.monto = Math.max(0, Number(pEl.value) || 0);
   });
 
   const prevAbono = Number(order.monto_abonado) || 0;
   const nuevoAbono = Math.max(0, Number(document.getElementById("edit-order-abonado")?.value) || 0);
   const obsVal = document.getElementById("edit-order-obs")?.value || order.datos_motor.observaciones;
 
-  order.monto_total = nuevoTotal;
   order.monto_abonado = nuevoAbono;
-  order.saldo_pendiente = Math.max(0, nuevoTotal - nuevoAbono);
   order.datos_motor.observaciones = obsVal;
+  recalcOrderTotalsFromClientServices(order);
+  const nuevoTotal = order.monto_total;
 
   if (nuevoAbono > prevAbono) {
     const diff = nuevoAbono - prevAbono;
@@ -9430,6 +10269,10 @@ function toggleQcStandbyMode(enabled) {
 
 /* ---------- OPCIÓN B DE FASE 2: [ Rechazar y Devolver al Técnico ] ---------- */
 function promptRejectQualityControl(orderId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    showToast("Solo Gerencia y Control de Calidad pueden rechazar o devolver órdenes.", "warning");
+    return;
+  }
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
@@ -9512,6 +10355,10 @@ function rejectQualityControlAndReturn(orderId) {
 
 /* ---------- OPCIÓN A DE FASE 2: [ Aprobar y Pasar a Entregado ] ---------- */
 function openQualityAndDeliveryModal(orderId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    showToast("Solo Gerencia y Control de Calidad pueden aprobar y entregar órdenes.", "warning");
+    return;
+  }
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
@@ -9563,7 +10410,7 @@ function openQualityAndDeliveryModal(orderId) {
               <div class="form-field">
                 <label>Cuenta / Caja Destino</label>
                 <select id="qc-collect-account" style="font-weight:800;">
-                  ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+                  ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
                 </select>
               </div>
             </div>
@@ -9705,9 +10552,9 @@ function formatWhatsAppPhone(rawPhone) {
 }
 
 function buildWhatsAppBudgetPlainText(order) {
-  const subtasks = db.subtareas.filter((s) => s.orden_id === order.id_orden);
-  const itemsLines = subtasks
-    .map((s, i) => `  ${i + 1}. ${s.descripcion_servicio}: *$${Number(s.monto_servicio).toFixed(2)}*`)
+  const clientServices = getOrderClientServices(order);
+  const itemsLines = clientServices
+    .map((s, i) => `  ${i + 1}. ${formatServiceDisplayLabel(s)}: *$${Number(s.monto).toFixed(2)}*`)
     .join("\n");
 
   const stateNames = {
@@ -9821,45 +10668,6 @@ function openWhatsAppTermsOnlyModal(orderId) {
 
 function buildWhatsAppPdfApprovalMessage(order) {
   const troquel = order.codigo_troquel;
-  const motor = `${order.datos_motor?.tipo_pieza || "Pieza"} — ${order.datos_motor?.marca || ""} ${order.datos_motor?.modelo || ""}`.trim();
-  const total = Number(order.monto_total || 0).toFixed(2);
-
-  return (
-    `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
-    `*ENVÍO DE PRESUPUESTO — ORDEN #${troquel}*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `Estimado(a) *${order.nombre_cliente}*, adjunto le enviamos el presupuesto formal detallado en PDF correspondiente a su pieza (*${motor}*).\n\n` +
-    `*Total Presupuestado:* $${total}\n` +
-    `*Estado Actual:* ⏳ Esperando su aprobación\n\n` +
-    `Por favor, revise el documento PDF adjunto y confírmenos su aprobación por esta vía para iniciar los trabajos en el taller de inmediato.\n\n` +
-    `_Recuerde que dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller._\n` +
-    `¡Quedamos atentos a su respuesta!`
-  );
-}
-
-let activeWaBudgetMode = "pdf_approval";
-
-function switchWhatsAppBudgetMode(orderId, mode) {
-  const order = db.ordenes.find((o) => o.id_orden === orderId);
-  if (!order) return;
-  activeWaBudgetMode = mode;
-
-  let textMsg = "";
-  if (mode === "pdf_approval") {
-    textMsg = buildWhatsAppPdfApprovalMessage(order);
-  } else if (mode === "terms_only") {
-    textMsg = buildWhatsAppTermsOnlyPlainText(order);
-  } else {
-    textMsg = buildWhatsAppBudgetPlainText(order);
-  }
-
-  const ta = document.getElementById("wa-budget-textarea");
-  if (ta) ta.value = textMsg;
-
-  document.querySelectorAll(".wa-mode-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.getAttribute("data-wa-mode") === mode);
-  });
-
   syncWhatsAppBudgetLink(order.telefono_cliente);
 }
 
@@ -9872,6 +10680,10 @@ function syncWhatsAppBudgetLink(rawPhone) {
 }
 
 function openWhatsAppBudgetTextModal(orderId, initialMode) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    showToast("Acceso restringido: Los presupuestos y datos de clientes son exclusivos de Gerencia/Recepción.", "warning");
+    return;
+  }
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
@@ -9955,16 +10767,20 @@ function openWhatsAppBudgetTextModal(orderId, initialMode) {
    (Diseñado para impresoras térmicas de 80mm o formato carta industrial)
    ============================================================================ */
 function printOrderReceptionTicket(orderId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    showToast("Acceso restringido a Gerencia y Recepción.", "warning");
+    return;
+  }
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  const subtasks = db.subtareas.filter((s) => s.orden_id === order.id_orden);
-  const itemsRows = subtasks
+  const clientServices = getOrderClientServices(order);
+  const itemsRows = clientServices
     .map(
       (s, idx) => `
       <tr>
-        <td style="padding:4px 0; border-bottom:1px dashed #ddd;">${idx + 1}. ${s.descripcion_servicio}</td>
-        <td style="padding:4px 0; text-align:right; font-weight:bold; border-bottom:1px dashed #ddd;">$${Number(s.monto_servicio).toFixed(2)}</td>
+        <td style="padding:4px 0; border-bottom:1px dashed #ddd;">${idx + 1}. ${escapeHtml(formatServiceDisplayLabel(s))}</td>
+        <td style="padding:4px 0; text-align:right; font-weight:bold; border-bottom:1px dashed #ddd;">$${Number(s.monto).toFixed(2)}</td>
       </tr>
     `
     )
@@ -10439,13 +11255,27 @@ function resetArFilters() {
   renderScreen();
 }
 
+let tempArCollectPhoto = "";
+
+async function handleArCollectPhotoUpload(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  tempArCollectPhoto = await compressImageForSheets(file, 700, 34000);
+  const prev = document.getElementById("ar-collect-photo-preview");
+  if (prev) {
+    prev.innerHTML = `<img src="${tempArCollectPhoto}" style="max-height:84px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
+  }
+  showToast("Foto de comprobante de cobro cargada.");
+}
+
 function openCollectReceivableModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
+  tempArCollectPhoto = "";
 
-  const bankOptions = BANCOS_RENACER.map(
-    (b) => `<option value="${b.id}">${b.nombre} (${b.moneda})</option>`
-  ).join("");
+  const bankOptions = getConfiguredBankAccounts()
+    .map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`)
+    .join("");
 
   openModal({
     title: `Registrar Abono o Liquidar Resto — Troquel #${order.codigo_troquel}`,
@@ -10453,8 +11283,8 @@ function openCollectReceivableModal(orderId) {
     body: `
       <div style="background:var(--bg-input); padding:12px 14px; border-radius:12px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <div style="font-weight:900; font-size:15px;">${order.nombre_cliente}</div>
-          <div style="font-size:12px; color:var(--text-muted);">Orden ${order.id_orden} · ${order.datos_motor.marca} ${order.datos_motor.modelo}</div>
+          <div style="font-weight:900; font-size:15px;">${escapeHtml(order.nombre_cliente)}</div>
+          <div style="font-size:12px; color:var(--text-muted);">Orden ${order.id_orden} · ${escapeHtml(order.datos_motor.marca)} ${escapeHtml(order.datos_motor.modelo)}</div>
         </div>
         <div style="text-align:right;">
           <span style="font-size:10.5px; font-weight:800; color:var(--text-muted);">RESTO PENDIENTE</span>
@@ -10484,6 +11314,23 @@ function openCollectReceivableModal(orderId) {
           </select>
         </div>
       </div>
+
+      <div style="margin-top:12px; background:var(--bg-card); padding:12px; border-radius:12px; border:1.5px dashed var(--border-color);">
+        <div style="font-size:12.5px; font-weight:900; margin-bottom:6px;">
+          <i class="fas fa-camera"></i> Comprobante Fotográfico (Capture de Pago Móvil / Billetes)
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <label class="btn btn--primary btn--sm" style="cursor:pointer; background:#0284c7;">
+            <i class="fas fa-camera"></i> Tomar Foto
+            <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handleArCollectPhotoUpload(event)" />
+          </label>
+          <label class="btn btn--ghost btn--sm" style="cursor:pointer; border-color:rgba(56,189,248,0.5); color:#38bdf8;">
+            <i class="fas fa-images"></i> Galería / Capture
+            <input type="file" accept="image/*" style="display:none;" onchange="handleArCollectPhotoUpload(event)" />
+          </label>
+        </div>
+        <div id="ar-collect-photo-preview" style="margin-top:8px;"></div>
+      </div>
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
@@ -10497,9 +11344,10 @@ function openCollectReceivableModal(orderId) {
 function suggestAccountForArMethod(metodo) {
   const accSel = document.getElementById("ar-collect-account");
   if (!accSel) return;
-  if (metodo === "efectivo") accSel.value = "efectivo";
-  else if (metodo === "pago_movil") accSel.value = "mercantil";
-  else if (metodo === "transferencia") accSel.value = "zelle_otro";
+  const accounts = getConfiguredBankAccounts();
+  if (metodo === "efectivo" && accounts.some((a) => a.id === "efectivo")) accSel.value = "efectivo";
+  else if (metodo === "pago_movil" && accounts.some((a) => a.id === "mercantil")) accSel.value = "mercantil";
+  else if (metodo === "transferencia" && accounts.some((a) => a.id === "zelle_otro")) accSel.value = "zelle_otro";
 }
 
 function confirmCollectReceivable(orderId) {
@@ -10508,7 +11356,7 @@ function confirmCollectReceivable(orderId) {
 
   const amount = Math.max(0, Number(document.getElementById("ar-collect-amount")?.value) || 0);
   const method = document.getElementById("ar-collect-method")?.value || "pago_movil";
-  const cuenta = document.getElementById("ar-collect-account")?.value || (method === "efectivo" ? "efectivo" : "mercantil");
+  const cuenta = document.getElementById("ar-collect-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
 
   if (amount <= 0) {
     showToast("Ingresa un monto válido.", "error");
@@ -10517,6 +11365,9 @@ function confirmCollectReceivable(orderId) {
 
   order.monto_abonado = Number(order.monto_abonado) + amount;
   order.saldo_pendiente = Math.max(0, Number(order.monto_total) - order.monto_abonado);
+  if (tempArCollectPhoto) {
+    order.comprobante_pago_foto = tempArCollectPhoto;
+  }
   if (order.saldo_pendiente === 0) {
     order.tipo_condicion_pago = "pago_total";
   }
@@ -10536,10 +11387,13 @@ function confirmCollectReceivable(orderId) {
     monto: amount,
     metodo: method,
     cuenta: cuenta,
-    orden_id: order.id_orden
+    comprobante_foto: tempArCollectPhoto || "",
+    orden_id: order.id_orden,
+    codigo_troquel: order.codigo_troquel,
+    registrado_por: currentUser ? currentUser.nombre : "Sistema"
   });
 
-  const bObj = BANCOS_RENACER.find((b) => b.id === cuenta);
+  const bObj = findBankAccountById(cuenta);
   const nombreCuenta = bObj ? bObj.nombre : cuenta;
 
   db.bitacora.push({
@@ -10551,11 +11405,12 @@ function confirmCollectReceivable(orderId) {
     autor_rol: currentUser.rol_label,
     tipo_evento: "cobro_resto",
     mensaje: `Pago recibido por $${amount.toFixed(2)} (${method} - ${nombreCuenta}). Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
-    foto_adjunta_url: "",
+    foto_adjunta_url: tempArCollectPhoto || "",
     fecha_hora: nowStr
   });
 
-  saveDatabase();
+  tempArCollectPhoto = "";
+  saveDatabase(`Cobro de resto orden #${order.codigo_troquel}`);
   closeModal();
   renderApp();
   showToast(`Pago de $${amount.toFixed(2)} registrado en ${nombreCuenta}. Resto actual: $${order.saldo_pendiente.toFixed(2)}.`);
@@ -10726,7 +11581,10 @@ function renderWorkerPanelScreen() {
                     ${isTerminado ? "✓" : `#${idx + 1}`}
                   </span>
                   <div class="checklist-desc-wrap">
-                    <div class="checklist-subtask-name">${sub.descripcion_servicio}</div>
+                    <div class="checklist-subtask-name">
+                      ${escapeHtml(formatSubtaskDisplayLabel(sub))}
+                      ${Number(sub.cantidad) > 1 ? `<span class="unit-mode-pill" style="margin-left:5px;"><i class="fas fa-layer-group"></i> x${Number(sub.cantidad)} · 1 foto</span>` : ""}
+                    </div>
                     <div class="checklist-subtask-meta">
                       <span class="checklist-comm-tag">+$${Number(sub.comision_base_tecnico).toFixed(2)}</span>
                       <span class="checklist-substate-pill substate--${sub.estado_subtarea}">
@@ -10821,17 +11679,21 @@ function renderWorkerPanelScreen() {
               <!-- CABECERA PRINCIPAL DE LA PIEZA / TROQUEL -->
               <div class="worker-tapa-header">
                 <div class="worker-tapa-brand">
-                  <button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${ord.id_orden}')" title="Inspeccionar ficha técnica">
-                    <i class="fas fa-barcode"></i> TROQUEL #${ord.codigo_troquel}
-                  </button>
+                  ${
+                    currentUser && currentUser.rol === "tecnico"
+                      ? `<span class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px; cursor:default; pointer-events:none;" title="Troquel asignado">
+                           <i class="fas fa-barcode"></i> TROQUEL #${escapeHtml(ord.codigo_troquel)}
+                         </span>`
+                      : `<button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${ord.id_orden}')" title="Inspeccionar ficha técnica">
+                           <i class="fas fa-barcode"></i> TROQUEL #${escapeHtml(ord.codigo_troquel)}
+                         </button>`
+                  }
                   <div>
                     <div class="worker-tapa-title">${ord.datos_motor.tipo_pieza || "Cámara / Culata"} · ${ord.datos_motor.marca} ${ord.datos_motor.modelo}</div>
                     <div class="worker-tapa-meta">
                       <span><i class="fas fa-barcode"></i> Serial: <strong>${ord.datos_motor.serial || "S/N"}</strong></span>
                       <span>·</span>
                       <span><i class="fas fa-calendar-alt"></i> Ingreso: ${formatDateHuman(ord.fecha_ingreso, false)}</span>
-                      <span>·</span>
-                      <span><i class="fas fa-user"></i> Cliente: ${ord.cliente_nombre || "Taller Aliado"}</span>
                     </div>
                   </div>
                 </div>
@@ -11405,12 +12267,10 @@ function renderWorkerEarningsScreen() {
               return `
                 <tr>
                   <td>
-                    <button type="button" class="btn-troquel-clickable" onclick="quickViewOrderDetails('${ord ? ord.id_orden : s.orden_id}')" title="Inspeccionar ficha técnica">
-                      <i class="fas fa-barcode"></i> TROQUEL #${ord ? ord.codigo_troquel : s.orden_id}
-                    </button>
+                    ${renderClickableTroquelBadge(ord ? ord.id_orden : s.orden_id, "TROQUEL #")}
                     <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${ord ? `${ord.datos_motor.marca} ${ord.datos_motor.modelo}` : ""}</div>
                   </td>
-                  <td>${s.descripcion_servicio}</td>
+                  <td>${escapeHtml(formatSubtaskDisplayLabel(s))}</td>
                   <td>${formatDateHuman(s.fecha_terminado || (ord && ord.fecha_ingreso), false)}</td>
                   <td><span data-live-subtask-id="${s.id_subtarea}">${formatLiveSubtaskTimer(s)}</span></td>
                   <td><span class="state-badge ${s.estado_subtarea === "terminado" ? "state-badge--done" : "state-badge--wait"}">${s.estado_subtarea.toUpperCase()}</span></td>
@@ -11871,7 +12731,10 @@ function renderCommissionsAndStaffScreen() {
       return `
         <tr>
           <td>
-            <div style="font-weight:900; font-size:14.5px;">${t.nombre}</div>
+            <div style="font-weight:900; font-size:14.5px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              ${t.nombre}
+              ${isPartnerInManagementPayroll(t) && isPartnerPayrollActive(t) ? `<span style="font-size:10px; font-weight:800; padding:2px 7px; border-radius:99px; background:rgba(245,223,0,0.16); color:var(--renacer-gold); border:1px solid rgba(245,223,0,0.4);"><i class="fas fa-user-tie"></i> Nómina Unificada Abajo</span>` : ""}
+            </div>
             <div style="font-size:11.5px; color:var(--text-muted);">${t.especialidad} · <i class="fas fa-phone"></i> ${t.telefono} · PIN: <code>${t.pin || "1234"}</code></div>
           </td>
           <td>
@@ -12134,6 +12997,69 @@ function renderCommissionsAndStaffScreen() {
         };
       });
 
+      const activePartners = partnersRemunData.filter((p) => p.payrollActive);
+      const inactivePartners = partnersRemunData.filter((p) => !p.payrollActive);
+
+      const renderPartnerCardHtml = (p) => `
+        <div class="${p.payrollActive ? "" : "partner-card--inactive"}" style="background:rgba(255,255,255,0.02); border:1px solid var(--border-color); border-radius:14px; padding:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:12px;">
+            <div>
+              <h4 style="font-size:16px; font-weight:900; margin-bottom:4px;">${escapeHtml(p.user.nombre)}</h4>
+              <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                <span class="state-badge state-badge--exec">${escapeHtml(p.user.rol_label || "Gerencia")}</span>
+                <span class="state-badge ${p.payrollActive ? "state-badge--done" : "state-badge--wait"}" style="font-size:10px;">
+                  ${p.payrollActive ? "PAGOS ACTIVOS" : "INACTIVO / INERTE"}
+                </span>
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <span style="font-size:10px; font-weight:800; color:#94a3b8; display:block;">A PERCIBIR</span>
+              <span style="font-size:22px; font-weight:900; color:${p.payrollActive || p.totalExtras > 0 ? "#22c55e" : "#94a3b8"}; font-family:'JetBrains Mono',monospace;">
+                $${p.netoSemanal.toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; background:rgba(0,0,0,0.2); padding:10px 12px; border-radius:10px; margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span><i class="fas fa-briefcase" style="color:#94a3b8; margin-right:4px;"></i> Sueldo Base Semanal:</span>
+              <strong style="color:#cbd5e1;">
+                ${p.payrollActive ? `+$${p.salarioBase.toFixed(2)}` : `$0.00 <span style="font-size:10.5px; color:#94a3b8;">(Inerte · Base cfg: $${p.configuredSalary.toFixed(2)})</span>`}
+              </strong>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:4px;"></i> Trabajos Extras / Comisiones (${p.extraSubsCount}):</span>
+              <strong style="color:var(--renacer-gold);">+$${p.totalExtras.toFixed(2)}</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span><i class="fas fa-arrow-down" style="color:#f87171; margin-right:4px;"></i> Adelantos Tomados (${p.adelantosCount}):</span>
+              <strong style="color:#f87171;">-$${p.totalAdelantos.toFixed(2)}</strong>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openEditPartnerSalaryModal('${p.user.id_usuario}')" title="Modificar sueldo semanal o estado en nómina">
+              <i class="fas fa-pen-to-square"></i> Sueldo
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="togglePartnerPayrollStatus('${p.user.id_usuario}')" title="Activar o pausar en nómina de pagos">
+              <i class="fas ${p.payrollActive ? "fa-pause-circle" : "fa-play-circle"}"></i> ${p.payrollActive ? "Inactivar" : "Activar"}
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openRegisterPartnerAdvanceModal('${p.user.id_usuario}')">
+              <i class="fas fa-minus-circle"></i> Retiro
+            </button>
+            ${
+              p.payrollActive || p.totalExtras > 0
+                ? `<button type="button" class="btn btn--gold btn--xs" style="width:100%; justify-content:center; font-weight:900; margin-top:2px;" onclick="openLiquidatePartnerWeeklyModal('${p.user.id_usuario}')">
+                     <i class="fas fa-hand-holding-usd"></i> Liquidar Semana ($${p.netoSemanal.toFixed(2)})
+                   </button>`
+                : `<div style="width:100%; font-size:11px; color:var(--text-muted); text-align:center; padding:4px 0;">
+                     <i class="fas fa-user-shield"></i> Perfil Gerencia activo · Pulsa <strong>Activar</strong> o <strong>Sueldo</strong> cuando comience a cobrar.
+                   </div>`
+            }
+          </div>
+        </div>
+      `;
+
       return `
       <div class="partner-remun-card" style="margin-top:6px;">
         <div class="partner-remun-header">
@@ -12142,10 +13068,10 @@ function renderCommissionsAndStaffScreen() {
               ADMINISTRACIÓN Y PAGOS DE GERENCIA / SOCIOS
             </span>
             <h3 style="font-size:18px; font-weight:900; margin-top:2px;">
-              <i class="fas fa-user-tie" style="color:var(--renacer-gold);"></i> Sueldos Editables, Comisiones y Adelantos de Dirección (Jesús, Sr. Enrique y Javier)
+              <i class="fas fa-user-tie" style="color:var(--renacer-gold);"></i> Sueldos Editables, Comisiones y Adelantos de Dirección (${activePartners.length} Activo${activePartners.length === 1 ? "" : "s"})
             </h3>
             <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
-              Cada perfil de Gerencia permite ajustar su sueldo semanal en cualquier momento, contabilizar trabajos extras/comisiones, registrar retiros o mantenerlo <strong>Inactivo / Inerte</strong> en pagos mientras conserva su acceso completo a Gerencia.
+              Se muestran arriba únicamente los perfiles <strong>Activos en Pagos</strong>. Los perfiles <strong>Inactivos / Inertes</strong> quedan agrupados abajo en un bloque desplegable sin estorbar la vista diaria.
             </p>
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -12156,70 +13082,33 @@ function renderCommissionsAndStaffScreen() {
         </div>
 
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
-          ${partnersRemunData
-            .map(
-              (p) => `
-            <div class="${p.payrollActive ? "" : "partner-card--inactive"}" style="background:rgba(255,255,255,0.02); border:1px solid var(--border-color); border-radius:14px; padding:16px;">
-              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:12px;">
-                <div>
-                  <h4 style="font-size:16px; font-weight:900; margin-bottom:4px;">${p.user.nombre}</h4>
-                  <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-                    <span class="state-badge state-badge--exec">${p.user.rol_label || "Gerencia"}</span>
-                    <span class="state-badge ${p.payrollActive ? "state-badge--done" : "state-badge--wait"}" style="font-size:10px;">
-                      ${p.payrollActive ? "PAGOS ACTIVOS" : "INACTIVO / INERTE"}
-                    </span>
-                  </div>
-                </div>
-                <div style="text-align:right;">
-                  <span style="font-size:10px; font-weight:800; color:#94a3b8; display:block;">A PERCIBIR</span>
-                  <span style="font-size:22px; font-weight:900; color:${p.payrollActive || p.totalExtras > 0 ? "#22c55e" : "#94a3b8"}; font-family:'JetBrains Mono',monospace;">
-                    $${p.netoSemanal.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; background:rgba(0,0,0,0.2); padding:10px 12px; border-radius:10px; margin-bottom:12px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span><i class="fas fa-briefcase" style="color:#94a3b8; margin-right:4px;"></i> Sueldo Base Semanal:</span>
-                  <strong style="color:#cbd5e1;">
-                    ${p.payrollActive ? `+$${p.salarioBase.toFixed(2)}` : `$0.00 <span style="font-size:10.5px; color:#94a3b8;">(Inerte · Base cfg: $${p.configuredSalary.toFixed(2)})</span>`}
-                  </strong>
-                </div>
-                <div style="display:flex; justify-content:space-between;">
-                  <span><i class="fas fa-wrench" style="color:var(--renacer-gold); margin-right:4px;"></i> Trabajos Extras / Comisiones (${p.extraSubsCount}):</span>
-                  <strong style="color:var(--renacer-gold);">+$${p.totalExtras.toFixed(2)}</strong>
-                </div>
-                <div style="display:flex; justify-content:space-between;">
-                  <span><i class="fas fa-arrow-down" style="color:#f87171; margin-right:4px;"></i> Adelantos Tomados (${p.adelantosCount}):</span>
-                  <strong style="color:#f87171;">-$${p.totalAdelantos.toFixed(2)}</strong>
-                </div>
-              </div>
-
-              <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openEditPartnerSalaryModal('${p.user.id_usuario}')" title="Modificar sueldo semanal o estado en nómina">
-                  <i class="fas fa-pen-to-square"></i> Sueldo
-                </button>
-                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="togglePartnerPayrollStatus('${p.user.id_usuario}')" title="Activar o pausar en nómina de pagos">
-                  <i class="fas ${p.payrollActive ? "fa-pause-circle" : "fa-play-circle"}"></i> ${p.payrollActive ? "Inactivar" : "Activar"}
-                </button>
-                <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openRegisterPartnerAdvanceModal('${p.user.id_usuario}')">
-                  <i class="fas fa-minus-circle"></i> Retiro
-                </button>
-                ${
-                  p.payrollActive || p.totalExtras > 0
-                    ? `<button type="button" class="btn btn--gold btn--xs" style="width:100%; justify-content:center; font-weight:900; margin-top:2px;" onclick="openLiquidatePartnerWeeklyModal('${p.user.id_usuario}')">
-                         <i class="fas fa-hand-holding-usd"></i> Liquidar Semana ($${p.netoSemanal.toFixed(2)})
-                       </button>`
-                    : `<div style="width:100%; font-size:11px; color:var(--text-muted); text-align:center; padding:4px 0;">
-                         <i class="fas fa-user-shield"></i> Perfil Gerencia activo · Pulsa <strong>Activar</strong> o <strong>Sueldo</strong> cuando comience a cobrar.
-                       </div>`
-                }
-              </div>
-            </div>
-          `
-            )
-            .join("")}
+          ${
+            activePartners.length
+              ? activePartners.map(renderPartnerCardHtml).join("")
+              : `<div style="grid-column:1/-1; text-align:center; padding:18px; color:var(--text-muted); font-size:12.5px;">No hay perfiles activos en pagos ahora mismo. Despliega los perfiles inactivos debajo para activar alguno.</div>`
+          }
         </div>
+
+        ${
+          inactivePartners.length
+            ? `
+          <details class="inactive-partners-collapse">
+            <summary>
+              <span>
+                <i class="fas fa-folder-closed" style="color:#94a3b8; margin-right:6px;"></i>
+                Perfiles Inactivos / Inertes en Nómina (${inactivePartners.length}: ${inactivePartners.map((x) => escapeHtml(x.user.nombre)).join(", ")})
+              </span>
+              <span style="font-size:11px; color:var(--renacer-gold); font-weight:800;">
+                <i class="fas fa-chevron-down"></i> Clic para desplegar / ocultar
+              </span>
+            </summary>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
+              ${inactivePartners.map(renderPartnerCardHtml).join("")}
+            </div>
+          </details>
+        `
+            : ""
+        }
       </div>`;
     })()}
   `;
@@ -12686,7 +13575,7 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
         <div class="form-field">
           <label>Cuenta / Caja Origen *</label>
           <select id="liq-worker-account" style="font-weight:800;">
-            ${BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre}</option>`).join("")}
+            ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
           </select>
         </div>
         <div class="form-field">
@@ -13212,10 +14101,11 @@ function deleteWorker(userId) {
   });
 }
 
-/* ---------- DÍAS ACTIVOS Y PROYECTOS TRABAJADOS (SIN HORARIO FIJO DE ENTRADA/SALIDA) ---------- */
-function renderAttendanceScreen() {
+/* ---------- MONITOREO DE HORARIOS, ENTRADA, ALMUERZO Y SALIDA (9:00 AM – 6:00 PM · 1H ALMUERZO) ---------- */
+function renderAttendanceMonitorWidget(options = {}) {
+  const embedded = Boolean(options && options.embeddedInDashboard);
   const todayIso = new Date().toISOString().slice(0, 10);
-  const isTechnician = currentUser.rol === "tecnico";
+  const isTechnician = currentUser && currentUser.rol === "tecnico";
 
   // PRIVACIDAD POR ROL: Los técnicos de taller solo ven su propio registro de presencia e historial
   const activeWorkers = isTechnician
@@ -13227,7 +14117,6 @@ function renderAttendanceScreen() {
     .map((w) => {
       const pres = getWorkerCurrentPresence(w.id_usuario);
       let borderClr = "var(--border-subtle)";
-      let badgeCls = "state-badge--recep";
       let dotIcon = "fa-circle";
       let badgeBg = "rgba(148, 163, 184, 0.15)";
       let badgeTxtClr = "#94a3b8";
@@ -13250,11 +14139,11 @@ function renderAttendanceScreen() {
       }
 
       return `
-        <div style="background:var(--bg-card); border:1.5px solid ${borderClr}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; justify-content:space-between; min-width:210px; flex:1;">
+        <div style="background:var(--bg-input); border:1.5px solid ${borderClr}; border-radius:14px; padding:12px 14px; display:flex; flex-direction:column; justify-content:space-between; min-width:210px; flex:1;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
             <div>
-              <strong style="font-size:13.5px; color:var(--text-main);">${w.nombre}</strong>
-              <div style="font-size:11px; color:var(--text-muted);">${w.rol_label || w.rol}</div>
+              <strong style="font-size:13.5px; color:var(--text-main);">${escapeHtml(w.nombre)}</strong>
+              <div style="font-size:11px; color:var(--text-muted);">${escapeHtml(w.rol_label || w.rol)}</div>
             </div>
             <span style="font-size:11px; font-weight:800; background:${badgeBg}; color:${badgeTxtClr}; padding:3px 8px; border-radius:6px; display:inline-flex; align-items:center; gap:4px;">
               <i class="fas ${dotIcon}"></i> ${pres.label}
@@ -13284,13 +14173,13 @@ function renderAttendanceScreen() {
     });
   }
 
-  const rowsHtml = filteredAttendanceList.length
-    ? filteredAttendanceList
+  const displayList = embedded ? filteredAttendanceList.slice(0, 12) : filteredAttendanceList;
+  const rowsHtml = displayList.length
+    ? displayList
         .map((a) => {
           const workerSubs = db.subtareas.filter(
             (s) => s.tecnico_id === a.usuario_id || s.nombre_tecnico === a.nombre
           );
-          const totalWorkerMins = workerSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
           const troquelesBadges = Array.from(
             new Set(
               workerSubs.map((s) => {
@@ -13301,7 +14190,10 @@ function renderAttendanceScreen() {
           ).map((ordId) => {
             const ord = db.ordenes.find((o) => o.id_orden === ordId);
             const label = ord ? `#${ord.codigo_troquel} (${ord.datos_motor.marca})` : ordId;
-            return `<button type="button" class="btn-troquel-clickable" onclick="quickViewOrderDetails('${ordId}')" title="Ver ficha técnica">${label}</button>`;
+            if (isTechnician) {
+              return `<span class="btn-troquel-clickable" style="cursor:default; pointer-events:none;">${escapeHtml(label)}</span>`;
+            }
+            return `<button type="button" class="btn-troquel-clickable" onclick="quickViewOrderDetails('${ordId}')" title="Ver ficha técnica">${escapeHtml(label)}</button>`;
           }).join(" ");
 
           const isLate = a.estado === "Tardanza" || (a.observacion && a.observacion.includes("Tardanza"));
@@ -13324,7 +14216,7 @@ function renderAttendanceScreen() {
           return `
             <tr>
               <td><strong><i class="far fa-calendar-alt"></i> ${formatDateHuman(a.fecha, false)}</strong></td>
-              <td><strong>${a.nombre}</strong></td>
+              <td><strong>${escapeHtml(a.nombre)}</strong></td>
               <td style="font-family:'JetBrains Mono',monospace; font-weight:800; color:var(--text-main);">
                 ${a.hora_entrada || a.hora_registro || "--"}
               </td>
@@ -13337,7 +14229,7 @@ function renderAttendanceScreen() {
               <td>${statusBadge}</td>
               <td>
                 <div style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:2px;">${troquelesBadges || '<span style="font-weight:700; color:var(--text-main); font-size:11.5px;">Planta General</span>'}</div>
-                <div style="font-size:10.5px; color:var(--text-muted);">${a.observacion || "Marcación presencial"}</div>
+                <div style="font-size:10.5px; color:var(--text-muted);">${escapeHtml(a.observacion || "Marcación presencial")}</div>
               </td>
               <td style="text-align:right;">
                 ${actionBtn}
@@ -13356,33 +14248,33 @@ function renderAttendanceScreen() {
       </button>
     `
     : `
-      <button type="button" class="btn btn--gold" onclick="openAttendanceKioskModal()">
+      <button type="button" class="btn btn--gold btn--sm" onclick="openAttendanceKioskModal()">
         <i class="fas fa-qrcode"></i> Abrir Kiosco QR (Recepción)
       </button>
-      <button type="button" class="btn btn--primary" onclick="openTechnicianQrScanModal()">
+      <button type="button" class="btn btn--primary btn--sm" onclick="openTechnicianQrScanModal()">
         <i class="fas fa-camera"></i> Marcar Asistencia
       </button>
-      <button type="button" class="btn btn--ghost" onclick="openAddActiveDayModal()">
+      <button type="button" class="btn btn--ghost btn--sm" onclick="openAddActiveDayModal()">
         <i class="fas fa-calendar-plus"></i> + Registro Manual
       </button>
     `;
 
   const now = new Date();
-  const isPast9AM = now.getHours() >= 9;
+  const isPastGraceLimit = now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() >= 15);
   let lateAlertBannerHtml = "";
-  if (isPast9AM && !isTechnician) {
+  if (isPastGraceLimit && !isTechnician) {
     const unCheckedTechnicians = (db.usuarios || [])
       .filter((u) => u.activo && u.rol === "tecnico")
       .filter((t) => !(db.asistencias || []).some((a) => a.fecha === todayIso && a.usuario_id === t.id_usuario));
     if (unCheckedTechnicians.length > 0) {
       const names = unCheckedTechnicians.map((t) => t.nombre).join(", ");
       lateAlertBannerHtml = `
-        <div style="background:rgba(245, 158, 11, 0.15); border:1.5px solid #f59e0b; border-radius:14px; padding:12px 18px; margin-bottom:16px; display:flex; align-items:center; gap:14px;">
+        <div style="background:rgba(245, 158, 11, 0.15); border:1.5px solid #f59e0b; border-radius:14px; padding:12px 18px; margin-bottom:14px; display:flex; align-items:center; gap:14px;">
           <i class="fas fa-bell" style="font-size:22px; color:#f59e0b;"></i>
           <div>
-            <div style="color:#f59e0b; font-size:13px; font-weight:900;">ALERTA DE ASISTENCIA 9:00 AM (LÍMITE PUNTUALIDAD: 8:15 AM)</div>
+            <div style="color:#f59e0b; font-size:13px; font-weight:900;">ALERTA DE ASISTENCIA · HORARIO 9:00 AM – 6:00 PM (LÍMITE PUNTUALIDAD: 9:15 AM)</div>
             <div style="font-size:12px; color:var(--text-main); margin-top:2px;">
-              Los siguientes técnicos aún no han registrado su entrada el día de hoy: <strong>${names}</strong>.
+              Los siguientes técnicos aún no han registrado su entrada el día de hoy: <strong>${escapeHtml(names)}</strong>.
             </div>
           </div>
         </div>
@@ -13392,13 +14284,13 @@ function renderAttendanceScreen() {
 
   return `
     <!-- ENCABEZADO Y ACCIONES PRINCIPALES DE ASISTENCIA -->
-    <div style="background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div style="${embedded ? "margin-bottom:14px;" : "background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px;"} display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
         <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase; letter-spacing:0.5px;">
-          <i class="fas fa-shield-alt"></i> CONTROL DE ASISTENCIA Y PRESENCIA FÍSICA · RECTIFICADORA RENACER
+          <i class="fas fa-shield-alt"></i> CONTROL DE ASISTENCIA Y PRESENCIA FÍSICA · 9:00 AM – 6:00 PM (1H ALMUERZO)
         </span>
-        <h2 style="font-size:20px; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> ${isTechnician ? 'Mi Asistencia y Horario de Trabajo' : 'Monitoreo de Horarios, Entrada, Almuerzo y Salida'}</h2>
-        <p id="attendance-screen-notice" data-custom-text-key="attendance_notice" style="font-size:12.5px; color:var(--text-muted); margin:0;">
+        <h2 style="font-size:${embedded ? "18px" : "20px"}; font-weight:900; margin:3px 0;"><i class="fas fa-user-clock" style="color:var(--renacer-gold);"></i> ${isTechnician ? 'Mi Asistencia y Horario de Trabajo' : 'Monitoreo de Horarios, Entrada, Almuerzo y Salida'}</h2>
+        <p id="attendance-screen-notice" data-custom-text-key="attendance_notice" style="font-size:12px; color:var(--text-muted); margin:0;">
           ${escapeHtml(getCustomText("attendance_notice", DEFAULT_TEXT_CUSTOMIZATIONS.attendance_notice))}
         </p>
       </div>
@@ -13410,9 +14302,10 @@ function renderAttendanceScreen() {
     ${lateAlertBannerHtml}
 
     <!-- TABLERO EN VIVO DE PRESENCIA FÍSICA HOY -->
-    <div style="margin-bottom:18px;">
-      <div style="font-size:12px; font-weight:800; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; display:flex; align-items:center; gap:6px;">
-        <i class="fas fa-users-viewfinder" style="color:#38bdf8;"></i> ${isTechnician ? 'Mi Estatus de Presencia Hoy' : 'Presencia Física en Taller Hoy'} (${formatDateHuman(todayIso, false)}):
+    <div style="margin-bottom:16px;">
+      <div style="font-size:12px; font-weight:800; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+        <span><i class="fas fa-users-viewfinder" style="color:#38bdf8;"></i> ${isTechnician ? 'Mi Estatus de Presencia Hoy' : 'Presencia Física en Taller Hoy'} (${formatDateHuman(todayIso, false)}):</span>
+        ${embedded && filteredAttendanceList.length > 12 ? `<button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('attendance')">Ver Historial Completo (${filteredAttendanceList.length}) <i class="fas fa-arrow-right"></i></button>` : ""}
       </div>
       <div style="display:flex; gap:12px; flex-wrap:wrap;">
         ${presenceCardsHtml}
@@ -13440,6 +14333,10 @@ function renderAttendanceScreen() {
       </table>
     </div>
   `;
+}
+
+function renderAttendanceScreen() {
+  return renderAttendanceMonitorWidget({ embeddedInDashboard: false });
 }
 
 
@@ -13584,10 +14481,11 @@ function renderFinancesLedgerScreen() {
       .map((cat) => `<option value="${cat}" ${ledgerCategoryFilter === cat ? "selected" : ""}>${cat}</option>`)
       .join("");
 
+  const configuredBanks = getConfiguredBankAccounts();
   const accountFilterOptions =
-    `<option value="all">Todas las Cuentas / Bancos (${BANCOS_RENACER.length})</option>` +
-    BANCOS_RENACER.map(
-      (b) => `<option value="${b.id}" ${ledgerAccountFilter === b.id ? "selected" : ""}>${b.nombre} ($${(balances[b.id] || 0).toFixed(2)})</option>`
+    `<option value="all">Todas las Cuentas / Bancos (${configuredBanks.length})</option>` +
+    configuredBanks.map(
+      (b) => `<option value="${b.id}" ${ledgerAccountFilter === b.id ? "selected" : ""}>${escapeHtml(b.nombre)} ($${(balances[b.id] || 0).toFixed(2)})</option>`
     ).join("");
 
   const clientFilterOptions =
@@ -13606,7 +14504,7 @@ function renderFinancesLedgerScreen() {
           if (!cId) {
             cId = (m.metodo === "pago_movil" || m.metodo === "transferencia") ? "mercantil" : "efectivo";
           }
-          const bObj = BANCOS_RENACER.find((b) => b.id === cId) || BANCOS_RENACER[0];
+          const bObj = findBankAccountById(cId);
           const isIngreso = m.tipo === "ingreso";
 
           return `
@@ -13687,22 +14585,33 @@ function renderFinancesLedgerScreen() {
 
     <!-- Tira de Cuentas y Bancos en Tiempo Real -->
     <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:12px 18px; margin-bottom:16px;">
-      <div style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
-        <i class="fas fa-building-columns" style="color:var(--renacer-gold);"></i> SALDOS LÍQUIDOS DISPONIBLES POR CUENTA Y CAJA
+      <div style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <span><i class="fas fa-building-columns" style="color:var(--renacer-gold);"></i> SALDOS LÍQUIDOS DISPONIBLES POR CUENTA Y CAJA (BALANCE CON CUENTAS POSITIVAS)</span>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--ghost btn--xs" onclick="openManageBankAccountsModal()" style="border-color:rgba(56,189,248,0.45); color:#38bdf8;">
+            <i class="fas fa-sliders"></i> Gestionar Cuentas / Sumar o Restar
+          </button>
+          <button type="button" class="btn btn--ghost btn--xs" onclick="openPdfArchiveAndExportModal()" style="border-color:rgba(245,223,0,0.45); color:#fde047;">
+            <i class="fas fa-file-pdf"></i> Archivo PDF por Fecha
+          </button>
+        </div>
       </div>
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
-        ${BANCOS_RENACER.map(
-          (b) => `
+        ${configuredBanks.map(
+          (b) => {
+            const val = Number(balances[b.id] || 0);
+            return `
           <div style="background:var(--bg-input); padding:8px 12px; border-radius:10px; border-left:4px solid ${b.color}; display:flex; justify-content:space-between; align-items:center;">
             <div>
-              <div style="font-size:11px; font-weight:800; color:var(--text-muted);"><i class="fas ${b.icono}"></i> ${b.nombre}</div>
-              <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:${b.color}; margin-top:2px;">
-                $${(balances[b.id] || 0).toFixed(2)}
+              <div style="font-size:11px; font-weight:800; color:var(--text-muted);"><i class="fas ${b.icono || "fa-building-columns"}"></i> ${escapeHtml(b.nombre)}</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:${val < 0 ? "#ef4444" : b.color}; margin-top:2px;">
+                $${val.toFixed(2)}
               </div>
             </div>
             <span style="font-size:10px; font-weight:800; padding:2px 6px; border-radius:6px; background:rgba(255,255,255,0.06); color:var(--text-muted);">${b.moneda}</span>
           </div>
-        `
+        `;
+          }
         ).join("")}
       </div>
     </div>
@@ -13915,7 +14824,7 @@ function openNewFinanceMovementModal(tipo) {
   tempMovementPhoto = "";
   const cats = tipo === "ingreso" ? (db.finanzas_categorias?.ingresos || []) : (db.finanzas_categorias?.egresos || []);
   const catOptions = cats.map((c) => `<option value="${c}">${c}</option>`).join("");
-  const bankOptions = BANCOS_RENACER.map((b) => `<option value="${b.id}">${b.nombre} (${b.moneda})</option>`).join("");
+  const bankOptions = getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`).join("");
 
   openModal({
     title: tipo === "ingreso" ? "Registrar Nuevo Ingreso en Caja / Bancos" : "Registrar Gasto / Egreso Operativo",
@@ -14351,37 +15260,48 @@ function filterCatalogLive(query) {
 }
 
 function renderCatalogManagerScreen() {
-  const services = db.catalogo_servicios || [];
-  const totalServices = services.length;
-  const avgPrice = totalServices ? services.reduce((acc, s) => acc + (Number(s.precio_sugerido) || 0), 0) / totalServices : 0;
-  const avgCommission = totalServices ? services.reduce((acc, s) => acc + (Number(s.comision_sugerida) || 0), 0) / totalServices : 0;
-  const avgMargin = avgPrice > 0 ? ((avgPrice - avgCommission) / avgPrice) * 100 : 0;
+  const clientServices = db.catalogo_servicios || [];
+  const destajoWorks = db.catalogo_destajo || [];
 
-  // LISTA A: PRECIOS AL CLIENTE (PRESUPUESTO BASE)
-  const clientRowsHtml = services.length
-    ? services
+  const totalClientServices = clientServices.length;
+  const avgClientPrice = totalClientServices
+    ? clientServices.reduce((acc, s) => acc + (Number(s.precio_sugerido) || 0), 0) / totalClientServices
+    : 0;
+  const totalDestajoWorks = destajoWorks.length;
+  const avgDestajoPay = totalDestajoWorks
+    ? destajoWorks.reduce((acc, w) => acc + (Number(w.pago_destajo) || 0), 0) / totalDestajoWorks
+    : 0;
+
+  // LISTA A INDEPENDIENTE: SERVICIOS Y PRECIOS AL CLIENTE
+  const clientRowsHtml = clientServices.length
+    ? clientServices
         .map((s) => {
           const precio = Number(s.precio_sugerido) || 0;
-          const searchBlob = `${s.nombre} ${s.categoria || ""}`.toLowerCase();
+          const isPerUnit = Boolean(s.por_unidad);
+          const uLabel = s.unidad_label || "unidad";
+          const searchBlob = `${s.nombre} ${s.categoria || ""} ${isPerUnit ? "por unidad " + uLabel : "fijo"}`.toLowerCase();
           return `
-            <div class="catalog-item-card catalog-service-row" data-search="${searchBlob}">
+            <div class="catalog-item-card catalog-service-row" data-search="${escapeHtml(searchBlob)}">
               <div style="flex:1;">
-                <div style="font-weight:900; font-size:13.5px; color:var(--text-main);">${s.nombre}</div>
+                <div style="font-weight:900; font-size:13.5px; color:var(--text-main); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  ${escapeHtml(s.nombre)}
+                  ${isPerUnit ? `<span class="unit-mode-pill"><i class="fas fa-hashtag"></i> Por ${escapeHtml(uLabel)}</span>` : ""}
+                </div>
                 <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
-                  <i class="fas fa-tag" style="color:var(--renacer-gold);"></i> ${s.categoria || "Rectificación General"}
+                  <i class="fas fa-tag" style="color:var(--renacer-gold);"></i> ${escapeHtml(s.categoria || "Rectificación General")}
                 </div>
               </div>
               <div style="text-align:right; margin: 0 10px;">
-                <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Precio Cliente</div>
+                <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">${isPerUnit ? "Precio c/u" : "Precio Cliente"}</div>
                 <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:var(--renacer-gold);">
-                  $${precio.toFixed(2)}
+                  $${precio.toFixed(2)}${isPerUnit ? `<span style="font-size:10px; font-weight:700; opacity:0.85;">/${escapeHtml(uLabel)}</span>` : ""}
                 </div>
               </div>
               <div style="display:flex; gap:4px;">
-                <button type="button" class="btn btn--ghost btn--xs" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar precio al cliente">
+                <button type="button" class="btn btn--ghost btn--xs" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Editar servicio al cliente">
                   <i class="fas fa-edit"></i>
                 </button>
-                <button type="button" class="btn btn--ghost btn--xs" style="color:#f87171;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio del catálogo">
+                <button type="button" class="btn btn--ghost btn--xs" style="color:#f87171;" onclick="deleteCatalogService('${s.id_cat}')" title="Eliminar servicio al cliente">
                   <i class="fas fa-trash-alt"></i>
                 </button>
               </div>
@@ -14389,99 +15309,103 @@ function renderCatalogManagerScreen() {
           `;
         })
         .join("")
-    : `<div style="text-align:center; padding:24px; color:var(--text-muted);">Sin servicios en catálogo.</div>`;
+    : `<div style="text-align:center; padding:24px; color:var(--text-muted);">Sin servicios al cliente registrados. Pulsa <strong>+ Añadir Servicio</strong>.</div>`;
 
-  // LISTA B: COMISIONES POR DESTAJO Y SERVICIOS EXTERNOS (OUTSOURCING SOLTECA)
-  const workshopRowsHtml = services.length
-    ? services
-        .map((s) => {
-          const precio = Number(s.precio_sugerido) || 0;
-          const comision = Number(s.comision_sugerida) || 0;
-          const margen = precio - comision;
-          const margenPct = precio > 0 ? (margen / precio) * 100 : 0;
-          const isOutsource = Boolean(s.es_outsourcing);
-          const searchBlob = `${s.nombre} ${s.categoria || ""}`.toLowerCase();
+  // LISTA B INDEPENDIENTE: TRABAJOS DE DESTAJO & OUTSOURCING (PAGO POR TRABAJO REALIZADO)
+  const workshopRowsHtml = destajoWorks.length
+    ? destajoWorks
+        .map((w) => {
+          const pago = Number(w.pago_destajo) || 0;
+          const isOutsource = Boolean(w.es_outsourcing);
+          const isPerUnit = Boolean(w.por_unidad);
+          const uLabel = w.unidad_label || "unidad";
+          const searchBlob = `${w.nombre} ${w.categoria || ""} ${isOutsource ? "externo outsourcing solteca" : "interno destajo"} ${isPerUnit ? "por unidad " + uLabel : ""}`.toLowerCase();
 
           return `
-            <div class="catalog-item-card catalog-service-row" data-search="${searchBlob}">
+            <div class="catalog-item-card catalog-service-row" data-search="${escapeHtml(searchBlob)}">
               <div style="flex:1;">
                 <div style="font-weight:900; font-size:13.5px; color:var(--text-main); display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                  ${s.nombre}
-                  ${isOutsource ? '<span class="badge-external"><i class="fas fa-handshake"></i> Solteca / Externo</span>' : '<span style="font-size:9.5px; font-weight:800; background:rgba(245,223,0,0.15); color:var(--renacer-gold); padding:2px 6px; border-radius:5px; border:1px solid rgba(245,223,0,0.3);"><i class="fas fa-wrench"></i> Destajo Interno</span>'}
+                  ${escapeHtml(w.nombre)}
+                  ${isOutsource ? '<span class="badge-external"><i class="fas fa-handshake"></i> Externo / Aliado</span>' : '<span style="font-size:9.5px; font-weight:800; background:rgba(34,197,94,0.14); color:#22c55e; padding:2px 6px; border-radius:5px; border:1px solid rgba(34,197,94,0.35);"><i class="fas fa-hammer"></i> Destajo Interno</span>'}
+                  ${isPerUnit ? `<span class="unit-mode-pill"><i class="fas fa-hashtag"></i> Por ${escapeHtml(uLabel)} (1 tarea)</span>` : ""}
                 </div>
-                <div style="font-size:11px; margin-top:3px; display:flex; gap:10px; align-items:center;">
-                  <span style="color:#0284c7; font-weight:800; font-family:'JetBrains Mono',monospace;">
-                    Margen Taller: $${margen.toFixed(2)} (${margenPct.toFixed(0)}%)
-                  </span>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:3px;">
+                  <i class="fas fa-layer-group" style="color:${isOutsource ? "#38bdf8" : "#22c55e"};"></i> ${escapeHtml(w.categoria || "Rectificación General")}${isOutsource && w.taller_externo_nombre ? ` · ${escapeHtml(w.taller_externo_nombre)}` : ""}
                 </div>
               </div>
               <div style="text-align:right; margin: 0 10px;">
                 <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">
-                  ${isOutsource ? 'Costo Tercero' : 'Comisión Técnico'}
+                  ${isOutsource ? (isPerUnit ? "Costo c/u" : "Costo Tercero") : (isPerUnit ? "Destajo c/u" : "Pago Destajo")}
                 </div>
-                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:${isOutsource ? '#38bdf8' : '#22c55e'};">
-                  $${comision.toFixed(2)}
+                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:15px; color:${isOutsource ? "#38bdf8" : "#22c55e"};">
+                  $${pago.toFixed(2)}${isPerUnit ? `<span style="font-size:10px; font-weight:700; opacity:0.85;">/${escapeHtml(uLabel)}</span>` : ""}
                 </div>
               </div>
-              <div>
-                <button type="button" class="btn btn--ghost btn--xs" onclick="openEditCatalogServiceModal('${s.id_cat}')" title="Ajustar destajo o costo externo">
+              <div style="display:flex; gap:4px;">
+                <button type="button" class="btn btn--ghost btn--xs" onclick="openEditDestajoWorkModal('${w.id_destajo}')" title="Editar trabajo de destajo">
                   <i class="fas fa-sliders-h"></i>
+                </button>
+                <button type="button" class="btn btn--ghost btn--xs" style="color:#f87171;" onclick="deleteDestajoWork('${w.id_destajo}')" title="Eliminar trabajo de destajo">
+                  <i class="fas fa-trash-alt"></i>
                 </button>
               </div>
             </div>
           `;
         })
         .join("")
-    : `<div style="text-align:center; padding:24px; color:var(--text-muted);">Sin servicios en catálogo.</div>`;
+    : `<div style="text-align:center; padding:24px; color:var(--text-muted);">Sin trabajos de destajo registrados. Pulsa <strong>+ Añadir Trabajo</strong>.</div>`;
 
   return `
     <div style="display:flex; flex-direction:column; gap:16px;">
-      <!-- Header del Catálogo con KPIs -->
+      <!-- Header del Catálogo Doble Independiente -->
       <div style="background:var(--bg-card); border:1.5px solid rgba(245,223,0,0.35); border-radius:18px; padding:18px 22px; box-shadow:var(--shadow-sm);">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
           <div>
             <span style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
-              <i class="fas fa-columns" style="color:var(--renacer-gold);"></i> MATRIZ DOBLE EN PARALELO
+              <i class="fas fa-columns" style="color:var(--renacer-gold);"></i> DOS CATÁLOGOS INDEPENDIENTES
             </span>
             <h2 style="font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
-              Catálogo Doble: Precios al Cliente y Destajo / Outsourcing
+              Servicios al Cliente (Lista A) y Trabajos por Destajo (Lista B)
             </h2>
             <p style="font-size:12.5px; color:var(--text-muted); margin-top:2px;">
-              Visualización paralela con cálculo de margen operativo en tiempo real: Ganancia = Cobro Cliente − Costo Comisión/Externo.
+              Ambas listas se administran de forma independiente: en <strong>Lista A</strong> defines los servicios y tarifas cobrados al cliente, y en <strong>Lista B</strong> defines los trabajos operativos por los que cobran destajo los técnicos o talleres aliados.
             </p>
           </div>
 
-          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <button type="button" class="btn btn--gold" style="padding:9px 16px; font-size:13px; font-weight:800;" onclick="openAddCatalogServiceModal()">
-              <i class="fas fa-plus-circle"></i> + Nuevo Servicio
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button type="button" class="btn btn--gold" style="padding:9px 14px; font-size:12.5px; font-weight:800;" onclick="openAddCatalogServiceModal()">
+              <i class="fas fa-plus-circle"></i> + Servicio Cliente
+            </button>
+            <button type="button" class="btn btn--success" style="padding:9px 14px; font-size:12.5px; font-weight:800;" onclick="openAddDestajoWorkModal()">
+              <i class="fas fa-hammer"></i> + Trabajo Destajo
             </button>
           </div>
         </div>
 
-        <!-- KPI Strip de Precios y Margen -->
+        <!-- KPI Strip Independiente -->
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border-subtle);">
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">SERVICIOS EN CARTERA</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">SERVICIOS CLIENTE (LISTA A)</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--text-main); margin-top:2px;">
-              ${totalServices}
+              ${totalClientServices}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">COBRO PROMEDIO CLIENTE</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">TARIFA PROMEDIO CLIENTE</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:var(--renacer-gold); margin-top:2px;">
-              $${avgPrice.toFixed(2)}
+              $${avgClientPrice.toFixed(2)}
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">COSTO PROMEDIO TRABAJO</div>
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">TRABAJOS DESTAJO (LISTA B)</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#38bdf8; margin-top:2px;">
+              ${totalDestajoWorks}
+            </div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
+            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">DESTAJO PROMEDIO TRABAJO</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#22c55e; margin-top:2px;">
-              $${avgCommission.toFixed(2)}
-            </div>
-          </div>
-          <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; border:1px solid var(--border-subtle);">
-            <div style="font-size:11px; font-weight:800; color:var(--text-muted);">MARGEN PROMEDIO TALLER</div>
-            <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#0284c7; margin-top:2px;">
-              ${avgMargin.toFixed(0)}%
+              $${avgDestajoPay.toFixed(2)}
             </div>
           </div>
         </div>
@@ -14495,21 +15419,21 @@ function renderCatalogManagerScreen() {
         </div>
       </div>
 
-      <!-- CONTENEDOR PARALELO DE DOS COLUMNAS RESPONSIVO -->
+      <!-- CONTENEDOR PARALELO DE DOS COLUMNAS INDEPENDIENTES -->
       <div class="catalog-dual-container">
-        <!-- COLUMNA 1: PRECIOS AL CLIENTE -->
+        <!-- COLUMNA 1: LISTA A · SERVICIOS AL CLIENTE -->
         <div class="catalog-column-card">
           <div class="catalog-column-header">
             <div>
               <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
-                LISTA A · CLIENTE
+                LISTA A · CLIENTE (INDEPENDIENTE)
               </span>
               <h3 style="font-size:16px; font-weight:900; margin-top:2px;">
                 <i class="fas fa-receipt" style="color:var(--renacer-gold);"></i> Catálogo de Precios al Cliente
               </h3>
             </div>
             <button type="button" class="btn btn--gold btn--xs" onclick="openAddCatalogServiceModal()">
-              <i class="fas fa-plus"></i> Añadir
+              <i class="fas fa-plus"></i> Añadir Servicio
             </button>
           </div>
           <div style="display:flex; flex-direction:column; gap:8px;">
@@ -14517,18 +15441,20 @@ function renderCatalogManagerScreen() {
           </div>
         </div>
 
-        <!-- COLUMNA 2: DESTAJO Y OUTSOURCING -->
+        <!-- COLUMNA 2: LISTA B · TRABAJOS DE DESTAJO & OUTSOURCING -->
         <div class="catalog-column-card">
           <div class="catalog-column-header">
             <div>
-              <span style="font-size:11px; font-weight:900; color:#38bdf8; text-transform:uppercase;">
-                LISTA B · COSTO & MARGEN
+              <span style="font-size:11px; font-weight:900; color:#22c55e; text-transform:uppercase;">
+                LISTA B · TRABAJADORES & ALIADOS (INDEPENDIENTE)
               </span>
               <h3 style="font-size:16px; font-weight:900; margin-top:2px;">
-                <i class="fas fa-hand-holding-dollar" style="color:#22c55e;"></i> Comisiones Destajo & Outsourcing
+                <i class="fas fa-hand-holding-dollar" style="color:#22c55e;"></i> Trabajos de Destajo & Outsourcing
               </h3>
             </div>
-            <span style="font-size:11px; color:var(--text-muted); font-weight:700;">Margen Operativo</span>
+            <button type="button" class="btn btn--success btn--xs" onclick="openAddDestajoWorkModal()">
+              <i class="fas fa-plus"></i> Añadir Trabajo
+            </button>
           </div>
           <div style="display:flex; flex-direction:column; gap:8px;">
             ${workshopRowsHtml}
@@ -14835,15 +15761,18 @@ function deleteClient(clientId) {
   });
 }
 
-/* ---------- CRUD COMPLETO DEL CATÁLOGO DE SERVICIOS Y COMISIONES ---------- */
+/* ---------- CRUD COMPLETO DE LISTA A (SERVICIOS AL CLIENTE) Y LISTA B (TRABAJOS DE DESTAJO) ---------- */
 function openAddCatalogServiceModal() {
   openModal({
-    title: "Añadir Servicio al Catálogo del Taller",
-    icon: "fa-tools",
+    title: "Añadir Servicio al Cliente (Lista A)",
+    icon: "fa-receipt",
     body: `
+      <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+        Este servicio aparecerá únicamente en el <strong>Catálogo de Precios al Cliente (Lista A)</strong> para presupuestos y facturación.
+      </p>
       <div class="form-field" style="margin-bottom:10px;">
-        <label>Nombre del Servicio *</label>
-        <input type="text" id="cat-srv-name" placeholder="Ej: Rectificación de Cigüeñal 4 Cilindros" required />
+        <label>Nombre del Servicio al Cliente *</label>
+        <input type="text" id="cat-srv-name" placeholder="Ej: Cambio de guías / Servicio completo de cámara 4C" required />
       </div>
       <div class="form-grid-2" style="margin-bottom:10px;">
         <div class="form-field">
@@ -14858,27 +15787,27 @@ function openAddCatalogServiceModal() {
           </select>
         </div>
         <div class="form-field">
-          <label>Modalidad de Ejecución *</label>
-          <select id="cat-srv-type">
-            <option value="interno">Destajo Interno (Técnicos Renacer)</option>
-            <option value="outsourcing">Tercerizado / Outsourcing (Rectificadora Solteca)</option>
-          </select>
+          <label>Precio Sugerido al Cliente ($) *</label>
+          <input type="number" step="0.5" min="0" id="cat-srv-price" value="40" required />
         </div>
       </div>
       <div class="form-grid-2">
         <div class="form-field">
-          <label>Precio Sugerido al Cliente ($) *</label>
-          <input type="number" step="0.5" id="cat-srv-price" value="40" required />
+          <label>Tipo de Cobro *</label>
+          <select id="cat-srv-unit-mode" onchange="const el=document.getElementById('cat-srv-unit-label-wrap'); if(el) el.style.display=this.value==='unidad'?'block':'none';">
+            <option value="fijo">Trabajo Completo (Precio Fijo)</option>
+            <option value="unidad">Por Unidad (Cantidad Variable · Ej: guías, camisas, pistones)</option>
+          </select>
         </div>
-        <div class="form-field">
-          <label>Comisión Técnico / Costo Externo ($) *</label>
-          <input type="number" step="0.5" id="cat-srv-comm" value="12" required />
+        <div class="form-field" id="cat-srv-unit-label-wrap" style="display:none;">
+          <label>Nombre de la Unidad</label>
+          <input type="text" id="cat-srv-unit-label" placeholder="Ej: guía, camisa, pistón, unidad" value="unidad" />
         </div>
       </div>
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
-      <button type="button" class="btn btn--gold" onclick="saveNewCatalogService()">Guardar en Catálogo</button>
+      <button type="button" class="btn btn--gold" onclick="saveNewCatalogService()">Guardar Servicio Cliente</button>
     `
   });
 }
@@ -14886,11 +15815,11 @@ function openAddCatalogServiceModal() {
 function saveNewCatalogService() {
   const name = (document.getElementById("cat-srv-name")?.value || "").trim();
   const category = document.getElementById("cat-srv-category")?.value || "Rectificación General";
-  const type = document.getElementById("cat-srv-type")?.value || "interno";
   const price = Math.max(0, Number(document.getElementById("cat-srv-price")?.value) || 0);
-  const comm = Math.max(0, Number(document.getElementById("cat-srv-comm")?.value) || 0);
+  const porUnidad = document.getElementById("cat-srv-unit-mode")?.value === "unidad";
+  const unitLabel = (document.getElementById("cat-srv-unit-label")?.value || "").trim() || "unidad";
   if (!name) {
-    showToast("Indica el nombre del servicio.", "error");
+    showToast("Indica el nombre del servicio al cliente.", "error");
     return;
   }
 
@@ -14898,29 +15827,31 @@ function saveNewCatalogService() {
     id_cat: "CAT-" + Date.now(),
     nombre: name,
     categoria: category,
-    es_outsourcing: type === "outsourcing",
-    taller_externo_nombre: type === "outsourcing" ? "Rectificadora Solteca" : "",
     precio_sugerido: price,
-    comision_sugerida: comm
+    comision_sugerida: 0,
+    por_unidad: porUnidad,
+    unidad_label: porUnidad ? unitLabel : "",
+    activo: true
   });
 
-  saveDatabase();
+  saveDatabase(`Nuevo servicio cliente: ${name}`);
   closeModal();
   renderApp();
-  showToast(`Servicio "${name}" agregado al catálogo.`);
+  showToast(`Servicio al cliente "${name}" ($${price.toFixed(2)}${porUnidad ? ` / ${unitLabel}` : ""}) agregado a Lista A.`);
 }
 
 function openEditCatalogServiceModal(catId) {
   const s = db.catalogo_servicios.find((x) => x.id_cat === catId);
   if (!s) return;
+  const isPerUnit = Boolean(s.por_unidad);
 
   openModal({
-    title: `Editar Servicio del Catálogo`,
+    title: `Editar Servicio al Cliente (Lista A)`,
     icon: "fa-edit",
     body: `
       <div class="form-field" style="margin-bottom:10px;">
-        <label>Nombre del Servicio *</label>
-        <input type="text" id="edit-cat-name" value="${s.nombre}" required />
+        <label>Nombre del Servicio al Cliente *</label>
+        <input type="text" id="edit-cat-name" value="${escapeHtml(s.nombre)}" required />
       </div>
       <div class="form-grid-2" style="margin-bottom:10px;">
         <div class="form-field">
@@ -14935,21 +15866,21 @@ function openEditCatalogServiceModal(catId) {
           </select>
         </div>
         <div class="form-field">
-          <label>Modalidad de Ejecución *</label>
-          <select id="edit-cat-type">
-            <option value="interno" ${!s.es_outsourcing ? "selected" : ""}>Destajo Interno (Técnicos Renacer)</option>
-            <option value="outsourcing" ${s.es_outsourcing ? "selected" : ""}>Tercerizado / Outsourcing (Rectificadora Solteca)</option>
-          </select>
+          <label>Precio Sugerido al Cliente ($) *</label>
+          <input type="number" step="0.5" min="0" id="edit-cat-price" value="${Number(s.precio_sugerido) || 0}" required />
         </div>
       </div>
       <div class="form-grid-2">
         <div class="form-field">
-          <label>Precio Sugerido al Cliente ($) *</label>
-          <input type="number" step="0.5" id="edit-cat-price" value="${Number(s.precio_sugerido) || 0}" required />
+          <label>Tipo de Cobro *</label>
+          <select id="edit-cat-unit-mode" onchange="const el=document.getElementById('edit-cat-unit-label-wrap'); if(el) el.style.display=this.value==='unidad'?'block':'none';">
+            <option value="fijo" ${!isPerUnit ? "selected" : ""}>Trabajo Completo (Precio Fijo)</option>
+            <option value="unidad" ${isPerUnit ? "selected" : ""}>Por Unidad (Cantidad Variable)</option>
+          </select>
         </div>
-        <div class="form-field">
-          <label>Comisión Técnico / Costo Externo ($) *</label>
-          <input type="number" step="0.5" id="edit-cat-comm" value="${Number(s.comision_sugerida) || 0}" required />
+        <div class="form-field" id="edit-cat-unit-label-wrap" style="display:${isPerUnit ? "block" : "none"};">
+          <label>Nombre de la Unidad</label>
+          <input type="text" id="edit-cat-unit-label" value="${escapeHtml(s.unidad_label || "unidad")}" placeholder="Ej: guía, camisa, pistón" />
         </div>
       </div>
     `,
@@ -14966,9 +15897,9 @@ function saveEditedCatalogService(catId) {
 
   const name = (document.getElementById("edit-cat-name")?.value || "").trim();
   const category = document.getElementById("edit-cat-category")?.value || "Rectificación General";
-  const type = document.getElementById("edit-cat-type")?.value || "interno";
   const price = Math.max(0, Number(document.getElementById("edit-cat-price")?.value) || 0);
-  const comm = Math.max(0, Number(document.getElementById("edit-cat-comm")?.value) || 0);
+  const porUnidad = document.getElementById("edit-cat-unit-mode")?.value === "unidad";
+  const unitLabel = (document.getElementById("edit-cat-unit-label")?.value || "").trim() || "unidad";
   if (!name) {
     showToast("El nombre del servicio no puede estar vacío.", "error");
     return;
@@ -14976,24 +15907,22 @@ function saveEditedCatalogService(catId) {
 
   s.nombre = name;
   s.categoria = category;
-  s.es_outsourcing = type === "outsourcing";
-  s.taller_externo_nombre = type === "outsourcing" ? "Rectificadora Solteca" : "";
   s.precio_sugerido = price;
-  s.comision_sugerida = comm;
-  s.comision_sugerida = comm;
+  s.por_unidad = porUnidad;
+  s.unidad_label = porUnidad ? unitLabel : "";
 
-  saveDatabase();
+  saveDatabase(`Servicio cliente editado: ${name}`);
   closeModal();
   renderApp();
-  showToast(`Servicio "${name}" actualizado ($${price.toFixed(2)} / Com: $${comm.toFixed(2)}).`);
+  showToast(`Servicio al cliente "${name}" actualizado ($${price.toFixed(2)}${porUnidad ? ` / ${unitLabel}` : ""}).`);
 }
 
 function deleteCatalogService(catId) {
   const s = db.catalogo_servicios.find((x) => x.id_cat === catId);
   if (!s) return;
   Swal.fire({
-    title: `¿Eliminar "${s.nombre}" del catálogo?`,
-    text: "Se eliminará permanentemente del catálogo aquí y en Google Sheets.",
+    title: `¿Eliminar "${s.nombre}" de Lista A?`,
+    text: "Se eliminará del catálogo de precios al cliente aquí y en Google Sheets (no afecta la Lista B de trabajos de destajo).",
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#dc2626",
@@ -15003,10 +15932,208 @@ function deleteCatalogService(catId) {
   }).then(async (res) => {
     if (!res.isConfirmed) return;
     db.catalogo_servicios = db.catalogo_servicios.filter((x) => x.id_cat !== catId);
-    saveDatabase();
+    saveDatabase(`Servicio cliente eliminado: ${s.nombre}`);
     renderApp();
     await flushCloudPush(true);
-    showToast(`Servicio "${s.nombre}" eliminado del catálogo permanentemente.`);
+    showToast(`Servicio "${s.nombre}" eliminado de Lista A.`);
+  });
+}
+
+/* ---------- CRUD INDEPENDIENTE DE LISTA B: TRABAJOS DE DESTAJO & OUTSOURCING ---------- */
+function openAddDestajoWorkModal() {
+  openModal({
+    title: "Añadir Trabajo de Destajo / Outsourcing (Lista B)",
+    icon: "fa-hammer",
+    body: `
+      <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+        Este trabajo es independiente de los precios al cliente y sirve para asignar tareas a los técnicos o talleres aliados y calcular su pago por destajo.
+      </p>
+      <div class="form-field" style="margin-bottom:10px;">
+        <label>Nombre del Trabajo / Operación *</label>
+        <input type="text" id="des-work-name" placeholder="Ej: Cambio de guías / Desarme de cámara / Cepillado" required />
+      </div>
+      <div class="form-grid-2" style="margin-bottom:10px;">
+        <div class="form-field">
+          <label>Categoría *</label>
+          <select id="des-work-category">
+            <option value="Cámara / Culata">Cámara / Culata</option>
+            <option value="Bloque / Cigüeñal">Bloque / Cigüeñal</option>
+            <option value="Lavado y Químico">Lavado y Químico</option>
+            <option value="Calibración y Asientos">Calibración y Asientos</option>
+            <option value="Soldadura Especial">Soldadura Especial</option>
+            <option value="Rectificación General">Rectificación General</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Modalidad de Ejecución *</label>
+          <select id="des-work-type">
+            <option value="interno">Destajo Interno (Técnicos Renacer)</option>
+            <option value="outsourcing">Tercerizado / Outsourcing (Taller Aliado)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid-2" style="margin-bottom:10px;">
+        <div class="form-field">
+          <label>Pago Destajo / Costo Tercero ($) *</label>
+          <input type="number" step="0.25" min="0" id="des-work-pay" value="5" required />
+        </div>
+        <div class="form-field">
+          <label>Forma de Cálculo *</label>
+          <select id="des-work-unit-mode" onchange="const el=document.getElementById('des-work-unit-label-wrap'); if(el) el.style.display=this.value==='unidad'?'block':'none';">
+            <option value="fijo">Trabajo Completo (Monto Fijo)</option>
+            <option value="unidad">Por Unidad (Se multiplica por cantidad en 1 sola tarea)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field" id="des-work-unit-label-wrap" style="display:none;">
+        <label>Nombre de la Unidad (Ej: guía, camisa, pistón)</label>
+        <input type="text" id="des-work-unit-label" value="unidad" placeholder="Ej: guía, camisa, pistón" />
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--success" onclick="saveNewDestajoWork()">Guardar Trabajo Destajo</button>
+    `
+  });
+}
+
+function saveNewDestajoWork() {
+  const name = (document.getElementById("des-work-name")?.value || "").trim();
+  const category = document.getElementById("des-work-category")?.value || "Rectificación General";
+  const type = document.getElementById("des-work-type")?.value || "interno";
+  const pay = Math.max(0, Number(document.getElementById("des-work-pay")?.value) || 0);
+  const porUnidad = document.getElementById("des-work-unit-mode")?.value === "unidad";
+  const unitLabel = (document.getElementById("des-work-unit-label")?.value || "").trim() || "unidad";
+  if (!name) {
+    showToast("Indica el nombre del trabajo de destajo.", "error");
+    return;
+  }
+
+  if (!Array.isArray(db.catalogo_destajo)) db.catalogo_destajo = [];
+  db.catalogo_destajo.push({
+    id_destajo: "DES-" + Date.now(),
+    nombre: name,
+    categoria: category,
+    es_outsourcing: type === "outsourcing",
+    taller_externo_nombre: type === "outsourcing" ? "Taller Aliado / Solteca" : "",
+    pago_destajo: pay,
+    por_unidad: porUnidad,
+    unidad_label: porUnidad ? unitLabel : "",
+    activo: true
+  });
+
+  saveDatabase(`Nuevo trabajo destajo: ${name}`);
+  closeModal();
+  renderApp();
+  showToast(`Trabajo "${name}" ($${pay.toFixed(2)}${porUnidad ? ` / ${unitLabel}` : ""}) agregado a Lista B (Destajo).`);
+}
+
+function openEditDestajoWorkModal(destajoId) {
+  const w = (db.catalogo_destajo || []).find((x) => x.id_destajo === destajoId);
+  if (!w) return;
+  const isPerUnit = Boolean(w.por_unidad);
+
+  openModal({
+    title: "Editar Trabajo de Destajo / Outsourcing (Lista B)",
+    icon: "fa-sliders-h",
+    body: `
+      <div class="form-field" style="margin-bottom:10px;">
+        <label>Nombre del Trabajo / Operación *</label>
+        <input type="text" id="edit-des-name" value="${escapeHtml(w.nombre)}" required />
+      </div>
+      <div class="form-grid-2" style="margin-bottom:10px;">
+        <div class="form-field">
+          <label>Categoría *</label>
+          <select id="edit-des-category">
+            <option value="Cámara / Culata" ${w.categoria === "Cámara / Culata" ? "selected" : ""}>Cámara / Culata</option>
+            <option value="Bloque / Cigüeñal" ${w.categoria === "Bloque / Cigüeñal" ? "selected" : ""}>Bloque / Cigüeñal</option>
+            <option value="Lavado y Químico" ${w.categoria === "Lavado y Químico" ? "selected" : ""}>Lavado y Químico</option>
+            <option value="Calibración y Asientos" ${w.categoria === "Calibración y Asientos" ? "selected" : ""}>Calibración y Asientos</option>
+            <option value="Soldadura Especial" ${w.categoria === "Soldadura Especial" ? "selected" : ""}>Soldadura Especial</option>
+            <option value="Rectificación General" ${w.categoria === "Rectificación General" ? "selected" : ""}>Rectificación General</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Modalidad de Ejecución *</label>
+          <select id="edit-des-type">
+            <option value="interno" ${!w.es_outsourcing ? "selected" : ""}>Destajo Interno (Técnicos Renacer)</option>
+            <option value="outsourcing" ${w.es_outsourcing ? "selected" : ""}>Tercerizado / Outsourcing (Taller Aliado)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid-2" style="margin-bottom:10px;">
+        <div class="form-field">
+          <label>Pago Destajo / Costo Tercero ($) *</label>
+          <input type="number" step="0.25" min="0" id="edit-des-pay" value="${Number(w.pago_destajo) || 0}" required />
+        </div>
+        <div class="form-field">
+          <label>Forma de Cálculo *</label>
+          <select id="edit-des-unit-mode" onchange="const el=document.getElementById('edit-des-unit-label-wrap'); if(el) el.style.display=this.value==='unidad'?'block':'none';">
+            <option value="fijo" ${!isPerUnit ? "selected" : ""}>Trabajo Completo (Monto Fijo)</option>
+            <option value="unidad" ${isPerUnit ? "selected" : ""}>Por Unidad (Cantidad Variable en 1 tarea)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-field" id="edit-des-unit-label-wrap" style="display:${isPerUnit ? "block" : "none"};">
+        <label>Nombre de la Unidad</label>
+        <input type="text" id="edit-des-unit-label" value="${escapeHtml(w.unidad_label || "unidad")}" placeholder="Ej: guía, camisa, pistón" />
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--success" onclick="saveEditedDestajoWork('${w.id_destajo}')">Guardar Cambios</button>
+    `
+  });
+}
+
+function saveEditedDestajoWork(destajoId) {
+  const w = (db.catalogo_destajo || []).find((x) => x.id_destajo === destajoId);
+  if (!w) return;
+
+  const name = (document.getElementById("edit-des-name")?.value || "").trim();
+  const category = document.getElementById("edit-des-category")?.value || "Rectificación General";
+  const type = document.getElementById("edit-des-type")?.value || "interno";
+  const pay = Math.max(0, Number(document.getElementById("edit-des-pay")?.value) || 0);
+  const porUnidad = document.getElementById("edit-des-unit-mode")?.value === "unidad";
+  const unitLabel = (document.getElementById("edit-des-unit-label")?.value || "").trim() || "unidad";
+  if (!name) {
+    showToast("El nombre del trabajo no puede estar vacío.", "error");
+    return;
+  }
+
+  w.nombre = name;
+  w.categoria = category;
+  w.es_outsourcing = type === "outsourcing";
+  w.taller_externo_nombre = type === "outsourcing" ? "Taller Aliado / Solteca" : "";
+  w.pago_destajo = pay;
+  w.por_unidad = porUnidad;
+  w.unidad_label = porUnidad ? unitLabel : "";
+
+  saveDatabase(`Trabajo destajo editado: ${name}`);
+  closeModal();
+  renderApp();
+  showToast(`Trabajo de destajo "${name}" actualizado ($${pay.toFixed(2)}${porUnidad ? ` / ${unitLabel}` : ""}).`);
+}
+
+function deleteDestajoWork(destajoId) {
+  const w = (db.catalogo_destajo || []).find((x) => x.id_destajo === destajoId);
+  if (!w) return;
+  Swal.fire({
+    title: `¿Eliminar "${w.nombre}" de Lista B?`,
+    text: "Se eliminará del catálogo de trabajos de destajo aquí y en la nube (no afecta la Lista A de precios al cliente).",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar trabajo"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    db.catalogo_destajo = (db.catalogo_destajo || []).filter((x) => x.id_destajo !== destajoId);
+    saveDatabase(`Trabajo destajo eliminado: ${w.nombre}`);
+    renderApp();
+    await flushCloudPush(true);
+    showToast(`Trabajo "${w.nombre}" eliminado de Lista B.`);
   });
 }
 
@@ -15028,25 +16155,29 @@ function openEditCompleteOrderModal(orderId) {
     return;
   }
 
-  const existingSubs = db.subtareas.filter((s) => s.orden_id === orderId);
+  const existingClientServices = getOrderClientServices(order);
   tempEditOrderState = {
     orderId: order.id_orden,
-    services: existingSubs.map((s) => ({
-      id_subtarea: s.id_subtarea,
-      descripcion_servicio: s.descripcion_servicio || "",
-      monto_servicio: Number(s.monto_servicio) || 0,
-      comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
-      tecnico_id: s.tecnico_id || "",
-      nombre_tecnico: s.nombre_tecnico || "Sin asignar",
-      estado_subtarea: s.estado_subtarea || "pendiente",
-      minutos_acumulados: s.minutos_acumulados || 0
-    })),
+    services: existingClientServices.map((s) => {
+      const qty = Math.max(1, Number(s.cantidad) || 1);
+      const monto = Number(s.monto) || 0;
+      return {
+        id_item: s.id_item || ("SRV-" + Date.now() + "-" + Math.floor(Math.random() * 999)),
+        descripcion: s.descripcion || "",
+        por_unidad: Boolean(s.por_unidad || qty > 1),
+        unidad_label: s.unidad_label || "",
+        cantidad: qty,
+        precio_unitario: Number(s.precio_unitario !== undefined ? s.precio_unitario : monto / qty) || 0,
+        monto,
+        es_item_extra: Boolean(s.es_item_extra)
+      };
+    }),
     repuestos: Array.isArray(order.items_repuestos) ? JSON.parse(JSON.stringify(order.items_repuestos)) : [],
     comproRepuestosTaller: Boolean(order.repuestos_comprados_taller)
   };
 
   const catalogOptions = (db.catalogo_servicios || [])
-    .map((c) => `<option value="${c.id_cat}">${c.nombre} — $${c.precio_sugerido} (Comisión: $${c.comision_sugerida})</option>`)
+    .map((c) => `<option value="${c.id_cat}">${c.nombre} — $${c.precio_sugerido}</option>`)
     .join("");
 
   const inventoryOptions = (db.inventario_repuestos || [])
@@ -15157,11 +16288,14 @@ function openEditCompleteOrderModal(orderId) {
           </div>
         </div>
 
-        <!-- 3. SERVICIOS Y PRESUPUESTO EDITABLE -->
+        <!-- 3. SERVICIOS FACTURADOS AL CLIENTE (LISTA A) -->
         <div class="form-section-box">
           <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-            <span><i class="fas fa-tools"></i> 3. Desglose de Servicios y Comisiones de Técnicos</span>
-            <div style="display:flex; gap:6px;">
+            <span><i class="fas fa-receipt"></i> 3. Servicios Facturados al Cliente (Lista A)</span>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--ghost btn--xs" onclick="closeModal(); openSubtaskAssignmentModal('${order.id_orden}');" title="Abrir Matriz independiente de trabajos de destajo">
+                <i class="fas fa-hammer"></i> Matriz de Destajo
+              </button>
               <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder()">
                 <i class="fas fa-plus"></i> + Servicio Adicional
               </button>
@@ -15272,50 +16406,52 @@ function renderEditServicesTable() {
   if (!wrapper) return;
 
   if (tempEditOrderState.services.length === 0) {
-    wrapper.innerHTML = `<div style="text-align:center; padding:16px; color:var(--text-muted); font-size:12px;">No hay servicios agregados. Selecciona del catálogo o añade fila libre.</div>`;
+    wrapper.innerHTML = `<div style="text-align:center; padding:16px; color:var(--text-muted); font-size:12px;">No hay servicios al cliente agregados. Selecciona de la Lista A o añade fila libre.</div>`;
     recalcEditTotals();
     return;
   }
 
   const rows = tempEditOrderState.services
-    .map((s, idx) => `
+    .map((s, idx) => {
+      const qty = Math.max(1, Number(s.cantidad) || 1);
+      const uPrice = Number(s.precio_unitario !== undefined ? s.precio_unitario : (Number(s.monto) || 0) / qty);
+      const sub = Number((qty * uPrice).toFixed(2));
+      s.cantidad = qty;
+      s.precio_unitario = uPrice;
+      s.monto = sub;
+      return `
       <tr style="border-bottom:1px solid var(--border-subtle);">
-        <td style="padding:6px 8px; width:40%;">
-          <input type="text" value="${s.descripcion_servicio}" onchange="updateEditServiceField(${idx}, 'descripcion_servicio', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:700;" placeholder="Descripción" />
+        <td style="padding:6px 8px; width:48%;">
+          <input type="text" value="${escapeHtml(s.descripcion)}" onchange="updateEditServiceField(${idx}, 'descripcion', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:700;" placeholder="Descripción del servicio al cliente" />
         </td>
-        <td style="padding:6px 8px; width:25%;">
-          <select onchange="updateEditServiceTech(${idx}, this.value)" style="width:100%; padding:6px; border-radius:6px; font-size:12px; font-weight:700;">
-            <option value="">-- Sin asignar --</option>
-            ${(db.usuarios || [])
-              .filter((u) => u.rol === "tecnico" || u.rol === "outsourcing" || u.es_externo)
-              .map((u) => `<option value="${u.id_usuario}" ${s.tecnico_id === u.id_usuario ? "selected" : ""}>${u.nombre}</option>`)
-              .join("")}
-          </select>
+        <td style="padding:6px 6px; width:12%;">
+          <input type="number" step="1" min="1" value="${qty}" oninput="updateEditServiceField(${idx}, 'cantidad', this.value)" style="width:100%; padding:6px 4px; border-radius:6px; font-weight:900; text-align:center; border:1px solid ${s.por_unidad || qty > 1 ? "#38bdf8" : "var(--border-color)"};" />
         </td>
-        <td style="padding:6px 8px; width:15%;">
-          <input type="number" step="0.5" min="0" value="${s.monto_servicio}" oninput="updateEditServiceField(${idx}, 'monto_servicio', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:900;" placeholder="Precio $" />
+        <td style="padding:6px 6px; width:18%;">
+          <input type="number" step="0.5" min="0" value="${Number(uPrice.toFixed(2))}" oninput="updateEditServiceField(${idx}, 'precio_unitario', this.value)" style="width:100%; padding:6px 6px; border-radius:6px; font-weight:800;" placeholder="P. Unit" />
         </td>
-        <td style="padding:6px 8px; width:15%;">
-          <input type="number" step="0.5" min="0" value="${s.comision_base_tecnico}" oninput="updateEditServiceField(${idx}, 'comision_base_tecnico', this.value)" style="width:100%; padding:6px 8px; border-radius:6px; font-weight:800; color:var(--renacer-gold);" placeholder="Comisión $" />
+        <td style="padding:6px 6px; width:15%; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold);" id="edit-srv-sub-${idx}">
+          $${sub.toFixed(2)}
         </td>
-        <td style="padding:6px 8px; text-align:center;">
+        <td style="padding:6px 6px; text-align:center;">
           <button type="button" class="btn btn--danger btn--xs" onclick="removeServiceFromEditOrder(${idx})" title="Eliminar fila" style="padding:5px 8px;">
             <i class="fas fa-trash-alt"></i>
           </button>
         </td>
       </tr>
-    `)
+    `;
+    })
     .join("");
 
   wrapper.innerHTML = `
     <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
       <thead>
         <tr style="background:var(--bg-subtle); color:var(--text-muted); font-size:11px; text-transform:uppercase;">
-          <th style="padding:6px 8px; text-align:left;">Servicio / Trabajo</th>
-          <th style="padding:6px 8px; text-align:left;">Técnico Asignado</th>
-          <th style="padding:6px 8px; text-align:left;">Monto ($)</th>
-          <th style="padding:6px 8px; text-align:left;">Comisión ($)</th>
-          <th style="padding:6px 8px; text-align:center;">Quitar</th>
+          <th style="padding:6px 8px; text-align:left;">Servicio al Cliente (Lista A)</th>
+          <th style="padding:6px 6px; text-align:center;">Cant.</th>
+          <th style="padding:6px 6px; text-align:left;">P. Unit ($)</th>
+          <th style="padding:6px 6px; text-align:right;">Subtotal ($)</th>
+          <th style="padding:6px 6px; text-align:center;">Quitar</th>
         </tr>
       </thead>
       <tbody>
@@ -15328,40 +16464,50 @@ function renderEditServicesTable() {
 }
 
 function updateEditServiceField(idx, field, val) {
-  if (!tempEditOrderState.services[idx]) return;
-  if (field === "monto_servicio" || field === "comision_base_tecnico") {
-    tempEditOrderState.services[idx][field] = Number(val) || 0;
+  const item = tempEditOrderState.services[idx];
+  if (!item) return;
+  if (field === "cantidad") {
+    const qty = Math.max(1, Number(val) || 1);
+    item.cantidad = qty;
+    if (qty > 1) item.por_unidad = true;
+    const uPrice = Number(item.precio_unitario ?? item.monto) || 0;
+    item.monto = Number((qty * uPrice).toFixed(2));
+    const subEl = document.getElementById(`edit-srv-sub-${idx}`);
+    if (subEl) subEl.textContent = "$" + item.monto.toFixed(2);
+  } else if (field === "precio_unitario" || field === "monto" || field === "monto_servicio") {
+    const uPrice = Math.max(0, Number(val) || 0);
+    item.precio_unitario = uPrice;
+    const qty = Math.max(1, Number(item.cantidad) || 1);
+    item.monto = Number((qty * uPrice).toFixed(2));
+    const subEl = document.getElementById(`edit-srv-sub-${idx}`);
+    if (subEl) subEl.textContent = "$" + item.monto.toFixed(2);
   } else {
-    tempEditOrderState.services[idx][field] = val;
+    item[field] = val;
   }
   recalcEditTotals();
 }
 
-function updateEditServiceTech(idx, techId) {
-  if (!tempEditOrderState.services[idx]) return;
-  tempEditOrderState.services[idx].tecnico_id = techId;
-  const u = (db.usuarios || []).find((x) => x.id_usuario === techId);
-  tempEditOrderState.services[idx].nombre_tecnico = u ? u.nombre : "Sin asignar";
-}
+function updateEditServiceTech() {}
 
 function addServiceToEditOrder() {
   const sel = document.getElementById("edit-select-cat-service");
   if (!sel || !sel.value) {
-    showToast("Selecciona un servicio del catálogo.", "info");
+    showToast("Selecciona un servicio de la Lista A.", "info");
     return;
   }
   const cat = (db.catalogo_servicios || []).find((c) => c.id_cat === sel.value);
   if (!cat) return;
 
+  const uPrice = Number(cat.precio_sugerido) || 0;
   tempEditOrderState.services.push({
-    id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
-    descripcion_servicio: cat.nombre,
-    monto_servicio: Number(cat.precio_sugerido) || 25,
-    comision_base_tecnico: Number(cat.comision_sugerida) || 8,
-    tecnico_id: "",
-    nombre_tecnico: "Sin asignar",
-    estado_subtarea: "pendiente",
-    minutos_acumulados: 0
+    id_item: "SRV-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+    descripcion: cat.nombre,
+    por_unidad: Boolean(cat.por_unidad),
+    unidad_label: cat.unidad_label || "",
+    cantidad: 1,
+    precio_unitario: uPrice,
+    monto: uPrice,
+    es_item_extra: false
   });
 
   sel.value = "";
@@ -15381,9 +16527,9 @@ function filterEditServicesLive(query) {
   if (filtered.length === 0) {
     dropdown.innerHTML = `
       <div style="padding:12px; text-align:center; font-size:12px; color:var(--text-muted);">
-        No se encontró ningún servicio que coincida con "<strong>${query}</strong>".
+        No se encontró ningún servicio que coincida con "<strong>${escapeHtml(query)}</strong>".
         <div style="margin-top:8px;">
-          <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder('${query.replace(/'/g, "\\'")}')">
+          <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder('${escapeHtml(query).replace(/'/g, "")}')">
             <i class="fas fa-plus"></i> Agregar como Servicio Adicional
           </button>
         </div>
@@ -15398,11 +16544,12 @@ function filterEditServicesLive(query) {
       (s) => `
       <div class="budget-service-item-pick" onclick="pickEditServiceFromDropdown('${s.id_cat}')">
         <div>
-          <strong>${s.nombre}</strong>
-          <div style="font-size:10.5px; color:var(--text-muted);">${s.categoria || "Mecanizado"} · Comisión técnico: $${Number(s.comision_sugerida).toFixed(2)}</div>
+          <strong>${escapeHtml(s.nombre)}</strong>
+          ${s.por_unidad ? `<span class="unit-mode-pill" style="margin-left:4px;">Por ${escapeHtml(s.unidad_label || "unidad")}</span>` : ""}
+          <div style="font-size:10.5px; color:var(--text-muted);">${escapeHtml(s.categoria || "Rectificación General")} · Lista A (Cliente)</div>
         </div>
         <div style="text-align:right;">
-          <strong style="color:var(--renacer-gold); font-size:13.5px;">$${Number(s.precio_sugerido).toFixed(2)}</strong>
+          <strong style="color:var(--renacer-gold); font-size:13.5px;">$${Number(s.precio_sugerido).toFixed(2)}${s.por_unidad ? " c/u" : ""}</strong>
           <span style="font-size:10px; color:#22c55e; display:block;"><i class="fas fa-plus-circle"></i> Agregar 1-Click</span>
         </div>
       </div>
@@ -15421,15 +16568,16 @@ function pickEditServiceFromDropdown(catId) {
   if (input) input.value = "";
   if (!cat) return;
 
+  const uPrice = Number(cat.precio_sugerido) || 0;
   tempEditOrderState.services.push({
-    id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
-    descripcion_servicio: cat.nombre,
-    monto_servicio: Number(cat.precio_sugerido) || 0,
-    comision_base_tecnico: Number(cat.comision_sugerida) || 0,
-    tecnico_id: "",
-    nombre_tecnico: "Sin asignar",
-    estado_subtarea: "pendiente",
-    minutos_acumulados: 0
+    id_item: "SRV-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+    descripcion: cat.nombre,
+    por_unidad: Boolean(cat.por_unidad),
+    unidad_label: cat.unidad_label || "",
+    cantidad: 1,
+    precio_unitario: uPrice,
+    monto: uPrice,
+    es_item_extra: false
   });
 
   renderEditServicesTable();
@@ -15438,14 +16586,14 @@ function pickEditServiceFromDropdown(catId) {
 
 function addCustomServiceToEditOrder(initialName = "") {
   tempEditOrderState.services.push({
-    id_subtarea: "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
-    descripcion_servicio: typeof initialName === "string" && initialName ? initialName : "Servicio Adicional",
-    monto_servicio: 10,
-    comision_base_tecnico: 3,
-    tecnico_id: "",
-    nombre_tecnico: "Sin asignar",
-    estado_subtarea: "pendiente",
-    minutos_acumulados: 0
+    id_item: "SRV-" + Date.now() + "-" + Math.floor(Math.random() * 999),
+    descripcion: typeof initialName === "string" && initialName ? initialName : "Servicio Adicional",
+    por_unidad: false,
+    unidad_label: "",
+    cantidad: 1,
+    precio_unitario: 10,
+    monto: 10,
+    es_item_extra: true
   });
   const dropdown = document.getElementById("edit-services-live-dropdown");
   const input = document.getElementById("search-edit-service-input");
@@ -15525,7 +16673,7 @@ function removeSpareFromEditOrder(idx) {
 }
 
 function recalcEditTotals() {
-  const servTotal = tempEditOrderState.services.reduce((acc, s) => acc + (Number(s.monto_servicio) || 0), 0);
+  const servTotal = tempEditOrderState.services.reduce((acc, s) => acc + (Number(s.monto ?? s.monto_servicio) || 0), 0);
   const repTotal = tempEditOrderState.comproRepuestosTaller
     ? tempEditOrderState.repuestos.reduce((acc, r) => acc + (Number(r.subtotal) || (Number(r.precio_unitario) * Number(r.cantidad)) || 0), 0)
     : 0;
@@ -15591,30 +16739,30 @@ function saveEditedCompleteOrder(orderId) {
   order.repuestos_comprados_taller = tempEditOrderState.comproRepuestosTaller;
   order.items_repuestos = tempEditOrderState.repuestos;
 
-  // Reemplazar subtareas de esta orden
-  db.subtareas = db.subtareas.filter((s) => s.orden_id !== orderId);
-  tempEditOrderState.services.forEach((s) => {
-    db.subtareas.push({
-      id_subtarea: s.id_subtarea || "SUB-" + Date.now() + "-" + Math.floor(Math.random() * 999),
-      orden_id: orderId,
-      codigo_troquel: troquel,
-      descripcion_servicio: s.descripcion_servicio,
-      tecnico_id: s.tecnico_id || "",
-      nombre_tecnico: s.nombre_tecnico || "Sin asignar",
-      monto_servicio: Number(s.monto_servicio) || 0,
-      comision_base_tecnico: Number(s.comision_base_tecnico) || 0,
-      estado_subtarea: s.estado_subtarea || "pendiente",
-      minutos_acumulados: s.minutos_acumulados || 0
-    });
+  // Guardar Servicios al Cliente (Lista A) SIN tocar ni borrar los trabajos de destajo asignados a técnicos en db.subtareas
+  order.servicios_cliente = tempEditOrderState.services.map((s, idx) => {
+    const qty = Math.max(1, Number(s.cantidad) || 1);
+    const monto = Math.max(0, Number(s.monto ?? s.monto_servicio) || 0);
+    const uPrice = Number(s.precio_unitario !== undefined ? s.precio_unitario : monto / qty) || 0;
+    return {
+      id_item: s.id_item || ("SRV-" + Date.now() + "-" + idx),
+      descripcion: s.descripcion || s.descripcion_servicio || "Servicio",
+      por_unidad: Boolean(s.por_unidad || qty > 1),
+      unidad_label: s.unidad_label || "",
+      cantidad: qty,
+      precio_unitario: uPrice,
+      monto,
+      es_item_extra: Boolean(s.es_item_extra)
+    };
   });
 
-  // Calcular totales actualizados
-  const servTotal = tempEditOrderState.services.reduce((acc, s) => acc + (Number(s.monto_servicio) || 0), 0);
-  const repTotal = tempEditOrderState.comproRepuestosTaller
-    ? tempEditOrderState.repuestos.reduce((acc, r) => acc + (Number(r.subtotal) || (Number(r.precio_unitario) * Number(r.cantidad)) || 0), 0)
-    : 0;
-  order.monto_total = servTotal + repTotal;
-  order.saldo_pendiente = Math.max(0, order.monto_total - (Number(order.monto_abonado) || 0));
+  // Actualizar troquel en los trabajos de destajo de esta orden (si cambió)
+  db.subtareas.forEach((sub) => {
+    if (sub.orden_id === orderId) sub.codigo_troquel = troquel;
+  });
+
+  // Calcular totales actualizados estrictamente desde Servicios al Cliente + Repuestos
+  recalcOrderTotalsFromClientServices(order);
 
   // Registrar en bitácora
   db.bitacora.push({
@@ -16154,7 +17302,7 @@ function executeAttendanceAction(user, action, method) {
   let existing = (db.asistencias || []).find((a) => a.fecha === todayIso && a.usuario_id === user.id_usuario);
 
   if (action === "entrada") {
-    const isLate = now.getHours() > 8 || (now.getHours() === 8 && now.getMinutes() > 15);
+    const isLate = now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() > 15);
     if (!existing) {
       existing = {
         id_asist: "ASI-" + Date.now(),
@@ -16170,8 +17318,8 @@ function executeAttendanceAction(user, action, method) {
         estado: isLate ? "Tardanza" : "Puntual",
         metodo: method,
         observacion: isLate
-          ? "Llegada después de las 8:15 AM (Tardanza registrada - Deducción aplicable)"
-          : "Asistencia presencial verificada puntual en taller",
+          ? "Llegada después de las 9:15 AM (Tardanza registrada - Horario oficial 9:00 AM – 6:00 PM)"
+          : "Asistencia presencial verificada puntual (Horario 9:00 AM – 6:00 PM)",
         dispositivo: navigator.userAgent.slice(0, 50)
       };
       if (!Array.isArray(db.asistencias)) db.asistencias = [];
@@ -16196,7 +17344,7 @@ function executeAttendanceAction(user, action, method) {
       usuario_id: user.id_usuario,
       nombre: user.nombre,
       hora_registro: timeStr,
-      hora_entrada: "08:00 AM",
+      hora_entrada: "09:00 AM",
       hora_salida_almuerzo: "",
       hora_regreso_almuerzo: "",
       hora_salida: "",
@@ -16248,15 +17396,10 @@ function markLunchReturnPrompt(asistId) {
 
 /* ============================================================================
    PLANILLA / HOJA DE SERVICIO Y PRESUPUESTO PDF (ACTUALIZABLE A FACTURA FÍSICA)
+   + ARCHIVO AUTOMÁTICO EN GOOGLE DRIVE Y EXPORTACIÓN POR RANGO DE FECHAS
    ============================================================================ */
-function printOrderExcelSheet(orderId) {
-  const order = db.ordenes.find((o) => o.id_orden === orderId);
-  if (!order) {
-    showToast("Orden no encontrada.", "error");
-    return;
-  }
-
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+function buildOrderPrintableBodySection(order) {
+  const clientServices = getOrderClientServices(order);
   const repuestos = Array.isArray(order.items_repuestos) ? order.items_repuestos : [];
   const docCfg = (db.config && db.config.doc_template) || {};
   const docTitle = docCfg.modo_factura_activa ? "FACTURA DE SERVICIO" : (docCfg.tipo_documento || "ORDEN Y PRESUPUESTO");
@@ -16268,24 +17411,23 @@ function printOrderExcelSheet(orderId) {
     order.estado_actual === "esperando_aprobacion_abono" ||
     order.estado_actual === "aprobacion";
 
-  const waApprovalMsg = buildWhatsAppPdfApprovalMessage(order);
-  const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
-  const waApprovalUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(waApprovalMsg)}` : "";
-  const safeClientTitle = String(order.nombre_cliente || "CLIENTE").toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ ]/gi, "").trim();
-
   let itemsHtml = "";
   let counter = 1;
 
-  subtasks.forEach((s) => {
+  clientServices.forEach((s) => {
+    const qty = Math.max(1, Number(s.cantidad) || 1);
+    const totalVal = Number(s.monto) || 0;
+    const unitVal = Number(s.precio_unitario !== undefined ? s.precio_unitario : totalVal / qty) || 0;
+    const unitDesc = s.unidad_label && qty > 1 ? ` ${escapeHtml(s.unidad_label)}` : "";
     itemsHtml += `
       <tr>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${counter++}</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${s.descripcion_servicio}</strong></td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${escapeHtml(s.descripcion)}</strong>${qty > 1 ? ` <span style="font-size:11px; color:#475569;">(${qty}${unitDesc})</span>` : ""}</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">Servicio Técnico</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px;">${s.nombre_tecnico || "Taller Renacer"}</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">1</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right;">$${Number(s.monto_servicio).toFixed(2)}</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right; font-weight:800;">$${Number(s.monto_servicio).toFixed(2)}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;">Taller Renacer</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${qty}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right;">$${unitVal.toFixed(2)}</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right; font-weight:800;">$${totalVal.toFixed(2)}</td>
       </tr>
     `;
   });
@@ -16295,7 +17437,7 @@ function printOrderExcelSheet(orderId) {
     itemsHtml += `
       <tr>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${counter++}</td>
-        <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${r.nombre}</strong> (Repuesto)</td>
+        <td style="border:1px solid #cbd5e1; padding:6px 10px;"><strong>${escapeHtml(r.nombre)}</strong> (Repuesto)</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">Repuesto Taller</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px;">Inventario / Gerencia</td>
         <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:center;">${r.cantidad}</td>
@@ -16305,154 +17447,8 @@ function printOrderExcelSheet(orderId) {
     `;
   });
 
-  const printWindow = window.open("", "_blank");
-  if (!printWindow) {
-    showToast("Por favor permite las ventanas emergentes para imprimir la planilla.", "warning");
-    return;
-  }
-
-  printWindow.document.write(`
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-      <meta charset="UTF-8">
-      <title>${safeClientTitle} Orden #${order.codigo_troquel}</title>
-      <style>
-        body {
-          font-family: 'Segoe UI', Arial, sans-serif;
-          color: #0f172a;
-          margin: 20px;
-          line-height: 1.4;
-          font-size: 13px;
-        }
-        .header-box {
-          border-bottom: 2px solid #0f1638;
-          padding-bottom: 12px;
-          margin-bottom: 16px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-        .title-company {
-          font-size: 22px;
-          font-weight: 900;
-          color: #0f1638;
-          letter-spacing: 0.5px;
-        }
-        .biblical-quote {
-          font-style: italic;
-          font-size: 11px;
-          color: #b45309;
-          font-weight: bold;
-        }
-        .order-badge-box {
-          text-align: right;
-          background: #f8fafc;
-          border: 2px solid #cbd5e1;
-          border-radius: 8px;
-          padding: 8px 14px;
-        }
-        .approval-banner {
-          background: #fef9c3;
-          border: 1.5px solid #ca8a04;
-          color: #854d0e;
-          border-radius: 8px;
-          padding: 8px 14px;
-          margin-bottom: 14px;
-          font-size: 12px;
-          font-weight: 700;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-        .grid-info {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 12px;
-          margin-bottom: 16px;
-        }
-        .info-card {
-          background: #f8fafc;
-          border: 1px solid #e2e8f0;
-          border-radius: 8px;
-          padding: 10px 14px;
-        }
-        .info-card h4 {
-          margin: 0 0 6px 0;
-          font-size: 12px;
-          color: #0f1638;
-          text-transform: uppercase;
-          border-bottom: 1px solid #e2e8f0;
-          padding-bottom: 4px;
-        }
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-bottom: 16px;
-        }
-        th {
-          background: #0f1638;
-          color: #ffffff;
-          padding: 8px 10px;
-          font-size: 11px;
-          text-transform: uppercase;
-        }
-        .totals-table {
-          width: 320px;
-          margin-left: auto;
-          margin-bottom: 16px;
-        }
-        .policies-box {
-          background: #fffbeb;
-          border: 1px dashed #d97706;
-          border-radius: 8px;
-          padding: 10px 14px;
-          font-size: 11px;
-          margin-bottom: 24px;
-        }
-        .signatures-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-          gap: 20px;
-          margin-top: 40px;
-          text-align: center;
-        }
-        .sig-line {
-          border-top: 1px solid #475569;
-          padding-top: 6px;
-          font-size: 11.5px;
-          font-weight: bold;
-        }
-        .action-bar {
-          margin-top: 24px;
-          padding: 14px;
-          background: #f1f5f9;
-          border: 1px solid #cbd5e1;
-          border-radius: 10px;
-          display: flex;
-          gap: 10px;
-          justify-content: center;
-          flex-wrap: wrap;
-        }
-        .action-btn {
-          padding: 10px 16px;
-          font-size: 13px;
-          font-weight: bold;
-          border: none;
-          border-radius: 8px;
-          cursor: pointer;
-          text-decoration: none;
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-        }
-        @media print {
-          body { margin: 0; }
-          .no-print { display: none !important; }
-        }
-      </style>
-    </head>
-    <body>
+  return `
+    <div class="order-pdf-sheet">
       <div class="header-box">
         <div>
           <div class="title-company">${escapeHtml(companyName)}</div>
@@ -16463,7 +17459,7 @@ function printOrderExcelSheet(orderId) {
         </div>
         <div class="order-badge-box">
           <div style="font-size:11px; color:#64748b; font-weight:bold;">${escapeHtml(docTitle)}</div>
-          <div style="font-size:22px; font-weight:900; color:#0f1638; font-family:monospace;">ORDEN #${order.codigo_troquel}</div>
+          <div style="font-size:22px; font-weight:900; color:#0f1638; font-family:monospace;">ORDEN #${escapeHtml(order.codigo_troquel)}</div>
           <div style="font-size:11px; color:#0284c7; font-weight:bold;">Fecha: ${formatDateHuman(order.fecha_ingreso, false)}</div>
         </div>
       </div>
@@ -16480,18 +17476,18 @@ function printOrderExcelSheet(orderId) {
       <div class="grid-info">
         <div class="info-card">
           <h4>Datos del Cliente / Taller</h4>
-          <div><strong>Cliente:</strong> ${order.nombre_cliente}</div>
-          <div><strong>Cédula / RIF:</strong> ${order.documento_cliente}</div>
-          <div><strong>Teléfono:</strong> ${order.telefono_cliente}</div>
-          <div><strong>Dirección:</strong> ${order.direccion_cliente || "No especificada"}</div>
-          <div><strong>Tipo de Cliente:</strong> ${order.tipo_cliente || "Particular"}</div>
+          <div><strong>Cliente:</strong> ${escapeHtml(order.nombre_cliente)}</div>
+          <div><strong>Cédula / RIF:</strong> ${escapeHtml(order.documento_cliente)}</div>
+          <div><strong>Teléfono:</strong> ${escapeHtml(order.telefono_cliente)}</div>
+          <div><strong>Dirección:</strong> ${escapeHtml(order.direccion_cliente || "No especificada")}</div>
+          <div><strong>Tipo de Cliente:</strong> ${escapeHtml(order.tipo_cliente || "Particular")}</div>
         </div>
         <div class="info-card">
           <h4>Datos Técnicos de la Pieza / Motor</h4>
-          <div><strong>Pieza:</strong> ${order.datos_motor.tipo_pieza || "Cámara"}</div>
-          <div><strong>Vehículo / Marca:</strong> ${order.datos_motor.marca} ${order.datos_motor.modelo || ""}</div>
-          <div><strong>Serial Fundición:</strong> ${order.datos_motor.serial || "S/N"}</div>
-          <div><strong>Diagnóstico Inicial:</strong> ${order.datos_motor.observaciones || "Ingreso regular a taller"}</div>
+          <div><strong>Pieza:</strong> ${escapeHtml(order.datos_motor?.tipo_pieza || "Cámara")}</div>
+          <div><strong>Vehículo / Marca:</strong> ${escapeHtml(order.datos_motor?.marca || "")} ${escapeHtml(order.datos_motor?.modelo || "")}</div>
+          <div><strong>Serial Fundición:</strong> ${escapeHtml(order.datos_motor?.serial || "S/N")}</div>
+          <div><strong>Diagnóstico Inicial:</strong> ${escapeHtml(order.datos_motor?.observaciones || "Ingreso regular a taller")}</div>
         </div>
       </div>
 
@@ -16538,20 +17534,52 @@ function printOrderExcelSheet(orderId) {
       </div>
 
       <div class="signatures-grid">
-        <div class="sig-line">
-          Firma Técnico / Gerencia
-        </div>
-        <div class="sig-line">
-          Firma Control de Calidad
-        </div>
-        <div class="sig-line">
-          Firma y Cédula del Cliente
-        </div>
+        <div class="sig-line">Firma Técnico / Gerencia</div>
+        <div class="sig-line">Firma Control de Calidad</div>
+        <div class="sig-line">Firma y Cédula del Cliente</div>
       </div>
+    </div>
+  `;
+}
 
+const ORDER_PDF_SHARED_CSS = `
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; margin: 20px; line-height: 1.4; font-size: 13px; }
+  .header-box { border-bottom: 2px solid #0f1638; padding-bottom: 12px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .title-company { font-size: 22px; font-weight: 900; color: #0f1638; letter-spacing: 0.5px; }
+  .biblical-quote { font-style: italic; font-size: 11px; color: #b45309; font-weight: bold; }
+  .order-badge-box { text-align: right; background: #f8fafc; border: 2px solid #cbd5e1; border-radius: 8px; padding: 8px 14px; }
+  .approval-banner { background: #fef9c3; border: 1.5px solid #ca8a04; color: #854d0e; border-radius: 8px; padding: 8px 14px; margin-bottom: 14px; font-size: 12px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+  .grid-info { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .info-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; }
+  .info-card h4 { margin: 0 0 6px 0; font-size: 12px; color: #0f1638; text-transform: uppercase; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th { background: #0f1638; color: #ffffff; padding: 8px 10px; font-size: 11px; text-transform: uppercase; }
+  .totals-table { width: 320px; margin-left: auto; margin-bottom: 16px; }
+  .policies-box { background: #fffbeb; border: 1px dashed #d97706; border-radius: 8px; padding: 10px 14px; font-size: 11px; margin-bottom: 24px; }
+  .signatures-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 40px; text-align: center; }
+  .sig-line { border-top: 1px solid #475569; padding-top: 6px; font-size: 11.5px; font-weight: bold; }
+  .action-bar { margin-top: 24px; padding: 14px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .action-btn { padding: 10px 16px; font-size: 13px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  .page-break { page-break-after: always; break-after: page; }
+  @media print { body { margin: 0; } .no-print { display: none !important; } }
+`;
+
+function buildOrderPrintableDocumentHtml(order, options = {}) {
+  const includeActionBar = options.includeActionBar !== false;
+  const safeClientTitle = String(order.nombre_cliente || "CLIENTE").toUpperCase().replace(/[^A-Z0-9ÁÉÍÓÚÑ ]/gi, "").trim();
+  const waApprovalMsg = buildWhatsAppPdfApprovalMessage(order);
+  const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
+  const waApprovalUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(waApprovalMsg)}` : "";
+  const bodyHtml = buildOrderPrintableBodySection(order);
+
+  const actionBlock = includeActionBar
+    ? `
       <div class="no-print action-bar">
         <button type="button" class="action-btn" onclick="window.print()" style="background:#0f1638; color:#fff;">
           🖨️ Imprimir / Guardar PDF
+        </button>
+        <button type="button" class="action-btn" id="btn-drive-pdf" onclick="archiveThisPdfToDrive()" style="background:#0284c7; color:#fff;">
+          ☁️ Archivar PDF en Google Drive
         </button>
         <button type="button" class="action-btn" id="btn-copy-wa-msg" onclick="copyApprovalMsg()" style="background:#eab308; color:#0f172a;">
           📋 Copiar Mensaje "Esperando Aprobación"
@@ -16564,9 +17592,9 @@ function printOrderExcelSheet(orderId) {
             : ""
         }
       </div>
-
       <script>
         var APPROVAL_MSG = ${JSON.stringify(waApprovalMsg)};
+        var ORDER_ID_FOR_DRIVE = ${JSON.stringify(order.id_orden)};
         function copyApprovalMsg() {
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(APPROVAL_MSG).then(function() {
@@ -16577,14 +17605,364 @@ function printOrderExcelSheet(orderId) {
             window.prompt('Copia el mensaje para enviar junto al PDF:', APPROVAL_MSG);
           }
         }
+        function archiveThisPdfToDrive() {
+          var b = document.getElementById('btn-drive-pdf');
+          if (window.opener && typeof window.opener.archiveOrderPdfToDrive === 'function') {
+            if (b) { b.textContent = '⏳ Guardando PDF en Google Drive...'; b.disabled = true; }
+            window.opener.archiveOrderPdfToDrive(ORDER_ID_FOR_DRIVE).then(function(res) {
+              if (b) {
+                b.disabled = false;
+                b.textContent = res && res.ok ? '✅ PDF Guardado en Drive' : '⚠️ Reintentar Drive';
+              }
+            });
+          } else {
+            alert('Usa el botón "Archivo PDF / Exportar por Fecha" desde la ventana principal de la app.');
+          }
+        }
         window.onload = function() {
           setTimeout(function() { window.print(); }, 450);
         };
       </script>
+    `
+    : "";
+
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>${escapeHtml(safeClientTitle)} Orden #${escapeHtml(order.codigo_troquel)}</title><style>${ORDER_PDF_SHARED_CSS}</style></head><body>${bodyHtml}${actionBlock}</body></html>`;
+}
+
+function printOrderExcelSheet(orderId) {
+  if (currentUser && currentUser.rol === "tecnico") {
+    showToast("Acceso restringido: Las hojas de presupuesto y facturación son exclusivas de Gerencia y Recepción.", "warning");
+    return;
+  }
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) {
+    showToast("Orden no encontrada.", "error");
+    return;
+  }
+
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    showToast("Por favor permite las ventanas emergentes para imprimir la planilla.", "warning");
+    return;
+  }
+
+  printWindow.document.write(buildOrderPrintableDocumentHtml(order, { includeActionBar: true }));
+  printWindow.document.close();
+}
+
+async function archiveOrderPdfToDrive(orderId, silent = false) {
+  const order = db.ordenes.find((o) => o.id_orden === orderId);
+  if (!order) return { ok: false, error: "Orden no encontrada" };
+
+  const orderDate = cleanDateISO(order.fecha_ingreso, false) || new Date().toISOString().slice(0, 10);
+  const safeClient = String(order.nombre_cliente || "CLIENTE").toUpperCase().replace(/[^A-Z0-9]+/gi, "_").slice(0, 28);
+  const fileName = `${orderDate}_Orden_${order.codigo_troquel}_${safeClient}.pdf`;
+  const cleanHtml = buildOrderPrintableDocumentHtml(order, { includeActionBar: false });
+
+  if (!silent) showToast(`Generando y archivando PDF de Orden #${order.codigo_troquel} en Google Drive...`, "info");
+  try {
+    const res = await fetch(GAS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "save_order_pdf",
+        orderId: order.id_orden,
+        troquel: order.codigo_troquel,
+        orderDate,
+        fileName,
+        html: cleanHtml
+      })
+    });
+    const json = await res.json();
+    if (json && json.success && json.data && json.data.url) {
+      if (!silent) {
+        Swal.fire({
+          icon: "success",
+          title: `PDF Archivado en Google Drive`,
+          html: `Orden <strong>#${escapeHtml(order.codigo_troquel)}</strong> guardada en carpeta <code>Rectificadora_Renacer_Facturas_PDF/${escapeHtml(json.data.monthFolder || "")}</code>.<br/><br/><a href="${json.data.url}" target="_blank" rel="noopener" style="color:#0284c7; font-weight:800;">📄 Abrir PDF en Google Drive</a>`,
+          confirmButtonColor: "#182254"
+        });
+      }
+      return { ok: true, data: json.data };
+    }
+    throw new Error((json && json.error) || "Actualiza Code.gs a v40 para habilitar el archivado de PDFs en Drive.");
+  } catch (err) {
+    if (!silent) {
+      showToast(`No se pudo archivar el PDF en Drive: ${err.message || err}`, "error");
+    }
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
+
+function getFilteredOrdersForPdfExport(dateFrom, dateTo, statusFilter) {
+  return (db.ordenes || []).filter((o) => {
+    if (!o || o.estado_actual === "anulado") return false;
+    const d = cleanDateISO(o.fecha_ingreso, false);
+    if (dateFrom && d && d < dateFrom) return false;
+    if (dateTo && d && d > dateTo) return false;
+    if (statusFilter === "entregado" && o.estado_actual !== "entregado" && o.estado_actual !== "entrega" && o.estado_actual !== "archivado") return false;
+    if (statusFilter === "pagadas" && Number(o.saldo_pendiente) > 0) return false;
+    if (statusFilter === "pendientes" && Number(o.saldo_pendiente) <= 0) return false;
+    return true;
+  });
+}
+
+function updatePdfExportRangePreview() {
+  const fromVal = document.getElementById("pdf-exp-from")?.value || "";
+  const toVal = document.getElementById("pdf-exp-to")?.value || "";
+  const statusVal = document.getElementById("pdf-exp-status")?.value || "all";
+  const matched = getFilteredOrdersForPdfExport(fromVal, toVal, statusVal);
+  const totalFacturado = matched.reduce((a, o) => a + (Number(o.monto_total) || 0), 0);
+  const totalCobrado = matched.reduce((a, o) => a + (Number(o.monto_abonado) || 0), 0);
+  const el = document.getElementById("pdf-exp-summary");
+  if (el) {
+    el.innerHTML = `<strong>${matched.length} orden(es)</strong> en el rango seleccionado · Total Presupuestado/Facturado: <strong style="color:var(--renacer-gold);">$${totalFacturado.toFixed(2)}</strong> · Cobrado: <strong style="color:#22c55e;">$${totalCobrado.toFixed(2)}</strong>`;
+  }
+}
+
+function printBatchOrdersPdfByDate() {
+  const fromVal = document.getElementById("pdf-exp-from")?.value || "";
+  const toVal = document.getElementById("pdf-exp-to")?.value || "";
+  const statusVal = document.getElementById("pdf-exp-status")?.value || "all";
+  const matched = getFilteredOrdersForPdfExport(fromVal, toVal, statusVal);
+  if (!matched.length) {
+    showToast("No se encontraron órdenes en el rango de fechas seleccionado.", "warning");
+    return;
+  }
+
+  const totalMonto = matched.reduce((a, o) => a + (Number(o.monto_total) || 0), 0);
+  const totalAbono = matched.reduce((a, o) => a + (Number(o.monto_abonado) || 0), 0);
+  const totalSaldo = matched.reduce((a, o) => a + (Number(o.saldo_pendiente) || 0), 0);
+  const rangeLabel = `${fromVal ? formatDateHuman(fromVal, false) : "Inicio"} al ${toVal ? formatDateHuman(toVal, false) : "Hoy"}`;
+
+  const summaryRows = matched
+    .map(
+      (o, idx) => `
+      <tr>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px; text-align:center;">${idx + 1}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px; font-weight:800;">#${escapeHtml(o.codigo_troquel)}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px;">${formatDateHuman(o.fecha_ingreso, false)}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px;">${escapeHtml(o.nombre_cliente)}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px;">${escapeHtml(o.datos_motor?.marca || "")} ${escapeHtml(o.datos_motor?.modelo || "")}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px; text-align:right; font-weight:800;">$${Number(o.monto_total).toFixed(2)}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px; text-align:right; color:#16a34a;">$${Number(o.monto_abonado).toFixed(2)}</td>
+        <td style="border:1px solid #cbd5e1; padding:5px 8px; text-align:right; color:${o.saldo_pendiente > 0 ? "#dc2626" : "#16a34a"};">$${Number(o.saldo_pendiente).toFixed(2)}</td>
+      </tr>
+    `
+    )
+    .join("");
+
+  const sheetsHtml = matched
+    .map((o, idx) => `<div class="${idx < matched.length - 1 ? "page-break" : ""}">${buildOrderPrintableBodySection(o)}</div>`)
+    .join("");
+
+  const win = window.open("", "_blank");
+  if (!win) {
+    showToast("Permite ventanas emergentes para generar el dossier PDF.", "warning");
+    return;
+  }
+
+  win.document.write(`
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <title>Expediente de Órdenes y Facturas (${rangeLabel}) — Rectificadora Renacer</title>
+      <style>${ORDER_PDF_SHARED_CSS}</style>
+    </head>
+    <body>
+      <div class="page-break">
+        <div class="header-box">
+          <div>
+            <div class="title-company">RECTIFICADORA RENACER C.A.</div>
+            <div class="biblical-quote">EXPEDIENTE CONSOLIDADO DE ÓRDENES / FACTURAS POR FECHA</div>
+            <div style="font-size:12px; color:#475569; margin-top:4px;">Período: <strong>${escapeHtml(rangeLabel)}</strong> · Total documentos: <strong>${matched.length}</strong></div>
+          </div>
+          <div class="order-badge-box">
+            <div style="font-size:11px; color:#64748b; font-weight:bold;">TOTAL FACTURADO</div>
+            <div style="font-size:22px; font-weight:900; color:#0f1638;">$${totalMonto.toFixed(2)}</div>
+            <div style="font-size:11px; color:#16a34a; font-weight:bold;">Cobrado: $${totalAbono.toFixed(2)} · Resto: $${totalSaldo.toFixed(2)}</div>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Orden</th>
+              <th>Fecha</th>
+              <th style="text-align:left;">Cliente</th>
+              <th style="text-align:left;">Motor / Pieza</th>
+              <th style="text-align:right;">Total ($)</th>
+              <th style="text-align:right;">Abonado ($)</th>
+              <th style="text-align:right;">Saldo ($)</th>
+            </tr>
+          </thead>
+          <tbody>${summaryRows}</tbody>
+        </table>
+      </div>
+      ${sheetsHtml}
+      <div class="no-print action-bar">
+        <button type="button" class="action-btn" onclick="window.print()" style="background:#0f1638; color:#fff;">🖨️ Imprimir / Guardar Expediente Completo en PDF</button>
+      </div>
+      <script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script>
     </body>
     </html>
   `);
-  printWindow.document.close();
+  win.document.close();
+}
+
+async function archiveBatchOrdersToDrive() {
+  const fromVal = document.getElementById("pdf-exp-from")?.value || "";
+  const toVal = document.getElementById("pdf-exp-to")?.value || "";
+  const statusVal = document.getElementById("pdf-exp-status")?.value || "all";
+  const matched = getFilteredOrdersForPdfExport(fromVal, toVal, statusVal);
+  if (!matched.length) {
+    showToast("No hay órdenes en ese rango de fechas para archivar.", "warning");
+    return;
+  }
+
+  const progEl = document.getElementById("pdf-drive-batch-progress");
+  let savedCount = 0;
+  let lastError = "";
+  for (let i = 0; i < matched.length; i++) {
+    const o = matched[i];
+    if (progEl) {
+      progEl.innerHTML = `<i class="fas fa-spinner fa-spin" style="color:var(--renacer-gold);"></i> Archivando en Google Drive (${i + 1} de ${matched.length}): Orden #${escapeHtml(o.codigo_troquel)}...`;
+    }
+    const r = await archiveOrderPdfToDrive(o.id_orden, true);
+    if (r.ok) savedCount++;
+    else lastError = r.error || "Error de conexión";
+  }
+
+  if (progEl) {
+    progEl.innerHTML = savedCount > 0
+      ? `<span style="color:#22c55e; font-weight:800;"><i class="fas fa-check-circle"></i> ${savedCount} de ${matched.length} PDF(s) guardados en Google Drive.</span>`
+      : `<span style="color:#ef4444; font-weight:800;"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(lastError)}</span>`;
+  }
+  loadDriveArchivedPdfsList();
+}
+
+async function loadDriveArchivedPdfsList() {
+  const box = document.getElementById("pdf-drive-list-box");
+  if (!box) return;
+  const fromVal = document.getElementById("pdf-exp-from")?.value || "";
+  const toVal = document.getElementById("pdf-exp-to")?.value || "";
+  box.innerHTML = `<div style="text-align:center; padding:16px; color:var(--text-muted); font-size:12px;"><i class="fas fa-spinner fa-spin" style="color:var(--renacer-gold);"></i> Consultando carpeta <code>Rectificadora_Renacer_Facturas_PDF</code> en Google Drive...</div>`;
+
+  try {
+    const qs = `action=list_order_pdfs&dateFrom=${encodeURIComponent(fromVal)}&dateTo=${encodeURIComponent(toVal)}&t=${Date.now()}`;
+    const res = await fetch(`${GAS_API_URL}?${qs}`);
+    const json = await res.json();
+    if (!json || !json.success || !json.data || !Array.isArray(json.data.files)) {
+      box.innerHTML = `<div style="background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); border-radius:10px; padding:12px; font-size:12px;">Actualiza <code>Code.gs</code> a la versión <strong>v40</strong> en Google Apps Script para consultar y archivar PDFs directamente en Google Drive. Mientras tanto puedes usar <strong>"Imprimir / Guardar Expediente en PDF"</strong> arriba.</div>`;
+      return;
+    }
+
+    const files = json.data.files;
+    const folderBtn = json.data.rootFolderUrl
+      ? `<a href="${json.data.rootFolderUrl}" target="_blank" rel="noopener" class="btn btn--gold btn--xs" style="text-decoration:none;"><i class="fab fa-google-drive"></i> Abrir Carpeta Completa en Drive</a>`
+      : "";
+
+    if (!files.length) {
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <span style="font-size:12px; color:var(--text-muted);">No hay PDFs archivados en Google Drive para ese rango todavía.</span>
+          ${folderBtn}
+        </div>
+      `;
+      return;
+    }
+
+    box.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+        <span style="font-size:12px; font-weight:900; color:#38bdf8;"><i class="fab fa-google-drive"></i> ${files.length} PDF(s) archivados en Google Drive</span>
+        ${folderBtn}
+      </div>
+      <div style="max-height:220px; overflow-y:auto;">
+        ${files
+          .map(
+            (f) => `
+          <div class="backup-item-row">
+            <div>
+              <div style="font-weight:800; font-size:12px;"><i class="fas fa-file-pdf" style="color:#ef4444; margin-right:5px;"></i>${escapeHtml(f.name)}</div>
+              <div style="font-size:11px; color:var(--text-muted);">Carpeta: ${escapeHtml(f.monthFolder)} · Fecha: ${escapeHtml(f.orderDate)}</div>
+            </div>
+            <div style="display:flex; gap:6px;">
+              <a href="${f.url}" target="_blank" rel="noopener" class="btn btn--ghost btn--xs" style="text-decoration:none;"><i class="fas fa-eye"></i> Ver</a>
+              <a href="${f.downloadUrl}" target="_blank" rel="noopener" class="btn btn--gold btn--xs" style="text-decoration:none;"><i class="fas fa-download"></i> Descargar</a>
+            </div>
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    `;
+  } catch (err) {
+    box.innerHTML = `<div style="color:#f87171; font-size:12px;">No se pudo consultar Google Drive en este momento. Puedes generar el expediente PDF local arriba.</div>`;
+  }
+}
+
+function openPdfArchiveAndExportModal() {
+  const today = new Date().toISOString().slice(0, 10);
+  const firstOfMonth = today.slice(0, 8) + "01";
+  const defFrom = dateFilterFrom || firstOfMonth;
+  const defTo = dateFilterTo || today;
+
+  openModal({
+    title: "Archivo de Facturas / Órdenes PDF (Drive y Exportación por Fecha)",
+    icon: "fa-file-pdf",
+    wide: true,
+    body: `
+      <div class="form-section-box" style="border-color:rgba(245,223,0,0.45);">
+        <div class="form-section-title"><i class="fas fa-calendar-days"></i> 1. Filtrar y Extraer Órdenes / Facturas por Rango de Fechas</div>
+        <div class="form-grid-3" style="margin-bottom:10px;">
+          <div class="form-field">
+            <label>Desde *</label>
+            <input type="date" id="pdf-exp-from" value="${defFrom}" onchange="updatePdfExportRangePreview(); loadDriveArchivedPdfsList();" />
+          </div>
+          <div class="form-field">
+            <label>Hasta *</label>
+            <input type="date" id="pdf-exp-to" value="${defTo}" onchange="updatePdfExportRangePreview(); loadDriveArchivedPdfsList();" />
+          </div>
+          <div class="form-field">
+            <label>Estado de Órdenes</label>
+            <select id="pdf-exp-status" onchange="updatePdfExportRangePreview()">
+              <option value="all">Todas (Excepto Anuladas)</option>
+              <option value="entregado">Solo Entregadas / Archivadas</option>
+              <option value="pagadas">Solo 100% Pagadas</option>
+              <option value="pendientes">Solo con Saldo Pendiente</option>
+            </select>
+          </div>
+        </div>
+        <div id="pdf-exp-summary" style="font-size:12.5px; color:var(--text-main); margin-bottom:12px;"></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold" onclick="printBatchOrdersPdfByDate()">
+            <i class="fas fa-print"></i> Generar Expediente Consolidado en PDF (Imprimir / Descargar)
+          </button>
+          <button type="button" class="btn btn--primary" onclick="archiveBatchOrdersToDrive()">
+            <i class="fab fa-google-drive"></i> Archivar Lote Individual en Carpeta Google Drive
+          </button>
+        </div>
+        <div id="pdf-drive-batch-progress" style="font-size:12px; margin-top:8px;"></div>
+      </div>
+
+      <div class="form-section-box" style="margin-bottom:0; border-color:rgba(56,189,248,0.4);">
+        <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span><i class="fab fa-google-drive" style="color:#38bdf8;"></i> 2. PDFs Ya Archivados en Google Drive (Por Carpeta Mensual)</span>
+          <button type="button" class="btn btn--ghost btn--xs" onclick="loadDriveArchivedPdfsList()">
+            <i class="fas fa-rotate"></i> Actualizar Lista
+          </button>
+        </div>
+        <div id="pdf-drive-list-box"></div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>
+    `
+  });
+
+  updatePdfExportRangePreview();
+  loadDriveArchivedPdfsList();
 }
 /* ============================================================================
    INSTALACIÓN PWA Y ARRANQUE AUTOMÁTICO CON RELOJ EN TIEMPO REAL
