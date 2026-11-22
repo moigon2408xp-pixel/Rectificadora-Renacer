@@ -38,7 +38,7 @@ let lastLocalBackupSaveTs = 0;
 let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
 
-const CURRENT_APP_VERSION = "2026.11.22.v41";
+const CURRENT_APP_VERSION = "2026.11.22.v41.1";
 
 /* ---------- Helpers de Separación Real: Servicios Facturados al Cliente (Lista A) vs Trabajos de Destajo (Lista B) ---------- */
 function getOrderClientServices(order) {
@@ -6845,7 +6845,7 @@ function openModal({ title, icon = "fa-cogs", body, footer = "", wide = false })
   root.classList.remove("hidden");
   root.innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target === this) closeModal()">
-      <div class="modal-dialog" style="${wide ? "max-width: 960px;" : ""}">
+      <div class="modal-dialog" style="${wide ? "max-width: 1060px;" : ""}">
         <div class="modal-header">
           <div class="modal-header-title">
             <i class="fas ${icon}" style="color:var(--renacer-gold); font-size:20px;"></i>
@@ -9572,9 +9572,9 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     icon: "fa-user-check",
     wide: true,
     body: `
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:14px; margin-bottom:14px;">
-        <div class="form-section-box" style="margin-bottom:0;">
-          <div class="form-section-title"><i class="fas fa-cog"></i> A. Ficha Técnica del Motor y Troquel</div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:10px; margin-bottom:2px;">
+        <div class="form-section-box" style="margin-bottom:0; padding:12px 14px;">
+          <div class="form-section-title" style="margin-bottom:6px;"><i class="fas fa-cog"></i> A. Ficha Técnica del Motor y Troquel</div>
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
             <button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${order.id_orden}')" title="Inspeccionar ficha técnica">
               <i class="fas fa-barcode"></i> TROQUEL #${order.codigo_troquel}
@@ -9587,12 +9587,12 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
             Observaciones: ${escapeHtml(order.datos_motor.observaciones || "Sin observaciones")}
           </div>
         </div>
-        <div class="form-section-box" style="margin-bottom:0; border-color:rgba(245,223,0,0.35);">
-          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="form-section-box" style="margin-bottom:0; padding:12px 14px; border-color:rgba(245,223,0,0.35);">
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
             <span><i class="fas fa-receipt"></i> Servicios Facturados al Cliente (Lista A)</span>
             <strong style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">Total: $${clientServicesTotal.toFixed(2)}</strong>
           </div>
-          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
             ${clientServicesBadges}
           </div>
           <div style="font-size:11px; color:var(--text-muted);">
@@ -9602,7 +9602,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
       </div>
 
       <!-- SELECTOR RÁPIDO DESDE LISTA B (CATÁLOGO DE TRABAJOS DE DESTAJO & OUTSOURCING) -->
-      <div class="form-section-box" style="margin-bottom:12px; border-color:rgba(34,197,94,0.4); background:rgba(34,197,94,0.04);">
+      <div class="form-section-box" style="margin-bottom:2px; padding:12px 14px; border-color:rgba(34,197,94,0.4); background:rgba(34,197,94,0.04);">
         <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
           <span style="font-size:12px; font-weight:900; color:#22c55e;">
             <i class="fas fa-hammer"></i> B. Agregar Trabajos de Destajo (Lista B) para los Técnicos / Talleres Aliados:
@@ -9610,7 +9610,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
             ${quickAssignButtons}
             <button type="button" class="btn btn--gold btn--xs" onclick="addSubtaskDirectInAssignmentModal('${order.id_orden}')">
-              <i class="fas fa-plus"></i> + Trabajo Libre
+              <i class="fas fa-plus"></i> Trabajo Libre
             </button>
           </div>
         </div>
@@ -9628,7 +9628,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
         </div>
       </div>
 
-      <div class="data-table-wrapper">
+      <div class="data-table-wrapper" style="flex-shrink:0; overflow-x:auto; overflow-y:visible;">
         <table class="renacer-table">
           <thead>
             <tr>
@@ -9645,7 +9645,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
       </div>
 
       <!-- Totalización Automática en Tiempo Real por Técnico -->
-      <div id="live-assignment-totals-box" style="margin-top:14px;"></div>
+      <div id="live-assignment-totals-box" style="margin-top:2px;"></div>
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
