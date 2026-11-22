@@ -1349,11 +1349,16 @@ body {
 }
 
 .modal-body {
-  padding: 22px;
+  padding: 20px 22px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
+}
+
+/* Evitar que tablas (.data-table-wrapper) o secciones con overflow se aplasten verticalmente dentro de modales */
+.modal-body > * {
+  flex-shrink: 0;
 }
 
 .modal-footer {
@@ -2072,6 +2077,7 @@ body {
 /* Tablas Generales (.renacer-table) */
 .data-table-wrapper {
   width: 100%;
+  flex-shrink: 0;
   overflow-x: auto;
   border-radius: 16px;
   border: 1.5px solid var(--border-subtle);
@@ -5706,9 +5712,3 @@ body {
   border: 1px solid var(--border-color);
   background: var(--bg-input);
   margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-
-
-
