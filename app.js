@@ -38,7 +38,7 @@ let lastLocalBackupSaveTs = 0;
 let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
 
-const CURRENT_APP_VERSION = "2026.11.21.v40";
+const CURRENT_APP_VERSION = "2026.11.22.v41";
 
 /* ---------- Helpers de Separación Real: Servicios Facturados al Cliente (Lista A) vs Trabajos de Destajo (Lista B) ---------- */
 function getOrderClientServices(order) {
@@ -545,7 +545,8 @@ function getInitialDatabase() {
     cuentas_por_pagar: [],
     inventario_repuestos: [],
     movimientos_inventario: [],
-    asistencias: []
+    asistencias: [],
+    vouchers_nomina: []
   };
 }
 
@@ -588,6 +589,35 @@ function normalizeDatabaseSchema(d) {
   }
   if (!Array.isArray(d.cuentas_por_pagar)) {
     d.cuentas_por_pagar = getInitialDatabase().cuentas_por_pagar || [];
+  }
+  if (!Array.isArray(d.vouchers_nomina)) {
+    d.vouchers_nomina = [];
+  } else {
+    d.vouchers_nomina = d.vouchers_nomina
+      .filter((v) => v && String(v.id_voucher || "").trim() !== "")
+      .map((v) => ({
+        id_voucher: String(v.id_voucher),
+        usuario_id: String(v.usuario_id || ""),
+        nombre_usuario: String(v.nombre_usuario || ""),
+        tipo_perfil: String(v.tipo_perfil || "tecnico"),
+        fecha_liquidacion: String(v.fecha_liquidacion || ""),
+        periodo_label: String(v.periodo_label || ""),
+        sueldo_base: Number(v.sueldo_base) || 0,
+        total_comisiones: Number(v.total_comisiones) || 0,
+        total_adelantos: Number(v.total_adelantos) || 0,
+        monto_pagado: Number(v.monto_pagado) || 0,
+        tasa_bcv: Number(v.tasa_bcv) || Number(d.config?.tasaBcv) || 45.80,
+        metodo_pago: String(v.metodo_pago || "efectivo"),
+        cuenta: String(v.cuenta || ""),
+        referencia: String(v.referencia || ""),
+        comprobante_foto: String(v.comprobante_foto || ""),
+        movimiento_id: String(v.movimiento_id || ""),
+        emitido_por: String(v.emitido_por || "Gerencia"),
+        notas: String(v.notas || ""),
+        total_tareas: Number(v.total_tareas) || 0,
+        subtareas_ids: Array.isArray(v.subtareas_ids) ? v.subtareas_ids.map(String) : [],
+        ordenes_detalle: Array.isArray(v.ordenes_detalle) ? v.ordenes_detalle : []
+      }));
   }
 
   // Lista estricta de usuarios y trabajadores reales de Rectificadora Renacer
@@ -1183,6 +1213,13 @@ function prepareSheetsPayload(sourceDb) {
     usuarios_extras: usuariosExtras,
     catalogo_extras: catalogoExtras,
     catalogo_destajo: Array.isArray(d.catalogo_destajo) ? d.catalogo_destajo : [],
+    vouchers_nomina: Array.isArray(d.vouchers_nomina)
+      ? d.vouchers_nomina.slice(0, 120).map((v) => ({
+          ...v,
+          // La foto pesada ya se respalda en finanzas_movimientos (enlazada por movimiento_id)
+          comprobante_foto: (v.comprobante_foto && String(v.comprobante_foto).startsWith("data:")) ? "" : (v.comprobante_foto || "")
+        }))
+      : [],
     finanzas_extras: finanzasExtras,
     asistencia_extras: asistenciaExtras
   };
@@ -1194,6 +1231,7 @@ function prepareSheetsPayload(sourceDb) {
   }
   if (metaJson.length > 46000) {
     metaState.movimientos_inventario = [];
+    metaState.vouchers_nomina = metaState.vouchers_nomina.slice(0, 45);
     metaJson = JSON.stringify(metaState);
   }
 
@@ -1599,6 +1637,7 @@ function hydrateDatabaseFromSheets(cloudData) {
     bitacora,
     catalogo_servicios,
     catalogo_destajo: Array.isArray(meta.catalogo_destajo) ? meta.catalogo_destajo : undefined,
+    vouchers_nomina: Array.isArray(meta.vouchers_nomina) ? meta.vouchers_nomina : [],
     finanzas_movimientos,
     asistencias
   });
@@ -1715,7 +1754,8 @@ function mergeDatabasesNonDestructive(serverDb, localDb) {
     cuentas_por_pagar: mergeArrayByKey(s.cuentas_por_pagar, l.cuentas_por_pagar, (x) => x && x.id_cxp),
     inventario_repuestos: mergeArrayByKey(s.inventario_repuestos, l.inventario_repuestos, (x) => x && (x.id_repuesto || x.id)),
     movimientos_inventario: mergeArrayByKey(s.movimientos_inventario, l.movimientos_inventario, (x) => x && (x.id_mov || x.id)),
-    asistencias: mergeArrayByKey(s.asistencias, l.asistencias, (x) => x && (x.id_asist || x.id_asistencia))
+    asistencias: mergeArrayByKey(s.asistencias, l.asistencias, (x) => x && (x.id_asist || x.id_asistencia)),
+    vouchers_nomina: mergeArrayByKey(s.vouchers_nomina, l.vouchers_nomina, (x) => x && x.id_voucher)
   });
 }
 
@@ -1888,8 +1928,28 @@ async function pushToGoogleSheets(silent = true, opts = {}) {
   return await flushCloudPush(silent, opts);
 }
 
+function isAnyModalOpen() {
+  try {
+    const root = document.getElementById("modal-root");
+    if (root && !root.classList.contains("hidden") && String(root.innerHTML || "").trim() !== "") {
+      return true;
+    }
+    if (typeof document !== "undefined" && typeof document.querySelector === "function") {
+      if (document.querySelector(".swal2-container")) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 async function syncFromGoogleSheets(silent = false) {
   if (!GAS_API_URL) return false;
+
+  // BLINDAJE MODAL ACTIVO (v41): Si el usuario tiene un modal o formulario abierto (ej. Matriz de Destajo,
+  // Editar Factura, Nueva Orden o Liquidación), pausar la lectura silenciosa de fondo para jamás
+  // sobrescribir ni interrumpir lo que está cargando en pantalla.
+  if (silent && isAnyModalOpen()) {
+    return false;
+  }
 
   // BLINDAJE ANTI-PÉRDIDA: si hay cambios locales que aún NO han sido confirmados por Google Sheets,
   // JAMÁS bajar datos viejos encima del trabajo del usuario. Primero subir los cambios pendientes.
@@ -1918,8 +1978,8 @@ async function syncFromGoogleSheets(silent = false) {
     const res = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
     const json = await res.json();
     if (json && json.success && json.data) {
-      // PROTECCIÓN ANTI-SOBREESCRITURA: si el usuario hizo un cambio local mientras esta lectura viajaba, descartarla
-      if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || lastLocalMutationTs > pullStartTs) {
+      // PROTECCIÓN ANTI-SOBREESCRITURA: si el usuario hizo un cambio local o abrió un modal mientras esta lectura viajaba, descartarla
+      if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || lastLocalMutationTs > pullStartTs || (silent && isAnyModalOpen())) {
         updateCloudSyncBadge(hasUnsyncedLocalChanges ? "pending" : "online");
         return false;
       }
@@ -2497,15 +2557,17 @@ function resetDemoDatabase() {
   });
 }
 
-function showToast(msg) {
+function showToast(msg, type = "success") {
   const el = document.getElementById("toast");
   if (!el) return;
   el.textContent = msg;
-  el.classList.remove("hidden");
+  el.classList.remove("hidden", "renacer-toast--error", "renacer-toast--warning", "renacer-toast--info", "renacer-toast--success");
+  const safeType = ["error", "warning", "info", "success"].includes(type) ? type : "success";
+  el.classList.add(`renacer-toast--${safeType}`);
   clearTimeout(window.__toastTimer);
   window.__toastTimer = setTimeout(() => {
     el.classList.add("hidden");
-  }, 3600);
+  }, safeType === "error" || safeType === "warning" ? 4800 : 3600);
 }
 
 /* ---------- Manejo de Tema Claro / Oscuro ---------- */
@@ -4807,13 +4869,34 @@ function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
   const cuenta = document.getElementById("liq-partner-account")?.value || "efectivo";
   const nowStr = new Date().toISOString().slice(0, 10);
 
-  // Marcar subtareas extras como pagadas
-  db.subtareas.forEach((s) => {
-    if (s.tecnico_id === userId && s.estado_subtarea === "terminado" && !s.comision_pagada) {
-      s.comision_pagada = true;
-      s.fecha_comision_pagada = nowStr;
-      s.foto_recibo_liquidacion = photo;
-    }
+  // Recolectar subtareas extras a liquidar para el voucher real por orden
+  const paidPartnerSubs = db.subtareas.filter(
+    (s) => s.tecnico_id === userId && s.estado_subtarea === "terminado" && !s.comision_pagada
+  );
+  const movId = neto > 0 ? "MOV-LIQ-" + Date.now().toString().slice(-6) : "";
+
+  // Crear y guardar Voucher oficial de nómina semanal (con desglose por orden)
+  const voucher = createAndSavePayrollVoucher({
+    user: p,
+    subtasksPaid: paidPartnerSubs,
+    sueldoBase: baseUsed,
+    totalComisiones: Number(totalExtras || 0),
+    totalAdelantos: Number(totalAdelantos || 0),
+    montoPagado: Number(neto),
+    metodoPago: cuenta === "efectivo" ? "efectivo" : "pago_movil",
+    cuenta,
+    referencia: "Liquidación Semanal Gerencia",
+    comprobanteFoto: photo,
+    movimientoId: movId,
+    notas: `Base semanal: $${baseUsed.toFixed(2)}`
+  });
+
+  // Marcar subtareas extras como pagadas y vincular al voucher
+  paidPartnerSubs.forEach((s) => {
+    s.comision_pagada = true;
+    s.fecha_comision_pagada = nowStr;
+    s.foto_recibo_liquidacion = photo;
+    s.id_liquidacion = voucher.id_voucher;
   });
 
   // Marcar adelantos como liquidados
@@ -4830,11 +4913,11 @@ function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
   // Si hubo un neto positivo por pagar, registrarlo como egreso de nómina
   if (neto > 0) {
     db.finanzas_movimientos.unshift({
-      id_mov: "MOV-LIQ-" + Date.now().toString().slice(-6),
+      id_mov: movId,
       fecha: nowStr,
       tipo: "egreso",
       categoria: "Pago de Nómina / Comisiones",
-      concepto: `Liquidación Neta Semanal — ${p.nombre} (Base $${baseUsed.toFixed(2)})`,
+      concepto: `Liquidación Neta Semanal — ${p.nombre} (Base $${baseUsed.toFixed(2)}) · Voucher ${voucher.id_voucher}`,
       monto: Number(neto),
       metodo: cuenta === "efectivo" ? "efectivo" : "pago_movil",
       cuenta: cuenta,
@@ -6056,9 +6139,6 @@ function renderOrderCardTelegramStyle(order) {
   } else if (order.estado_actual === "diagnostico") {
     primaryActionBtn = `
       <div style="display:flex; gap:6px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--ghost" onclick="openEditBudgetModal('${order.id_orden}')" title="Ajustar o ampliar presupuesto">
-          <i class="fas fa-pen"></i> Ajustar Presupuesto
-        </button>
         <button type="button" class="btn btn--primary" onclick="advanceOrderStage('${order.id_orden}', 'aprobacion')">
           Enviar a 3. Aprobación <i class="fas fa-arrow-right"></i>
         </button>
@@ -6205,11 +6285,10 @@ function renderOrderCardTelegramStyle(order) {
         <div class="order-clean-block-title">
           <span>Servicios:</span>
           ${
-            !isEntregado && canManage
-              ? `<div style="display:flex; gap:5px;">
-                  <button type="button" class="btn btn--gold btn--xs" onclick="openQuickExtraItemModal('${order.id_orden}')" title="Añadir ítem extra">+ Ítem Extra</button>
-                  <button type="button" class="btn btn--ghost btn--xs" onclick="openEditBudgetModal('${order.id_orden}')" title="Editar presupuesto"><i class="fas fa-pen"></i></button>
-                </div>`
+            canManage && order.estado_actual !== "anulado"
+              ? `<button type="button" class="btn btn--gold btn--xs" onclick="openEditCompleteOrderModal('${order.id_orden}')" title="Modificar factura completa, servicios, cantidades, repuestos y datos de la orden">
+                   <i class="fas fa-file-pen"></i> Modificar Factura
+                 </button>`
               : ""
           }
         </div>
@@ -6381,6 +6460,11 @@ function unassignTechnicianFromOrderCard(subtaskId, orderId) {
 }
 
 function deleteSubtaskDirect(subtaskId, orderId) {
+  // Si estamos dentro del modal de Matriz de Destajo (v41), delegar al borrador en vivo sin perder filas
+  if (tempAssignmentState && tempAssignmentState.orderId === orderId && document.getElementById("assignment-modal-tbody")) {
+    removeSubtaskFromAssignmentDraft(subtaskId, orderId);
+    return;
+  }
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
   const order = db.ordenes.find((o) => o.id_orden === orderId);
@@ -6783,6 +6867,9 @@ function closeModal() {
   if (!root) return;
   root.classList.add("hidden");
   root.innerHTML = "";
+  if (typeof tempAssignmentState !== "undefined") {
+    tempAssignmentState = { orderId: null, subtasks: [] };
+  }
 }
 
 /* ==================== V31: INSPECTOR RÁPIDO DE ORDEN / TROQUEL ==================== */
@@ -9263,6 +9350,172 @@ function renderAssignmentCenterScreen() {
   `;
 }
 
+let tempAssignmentState = { orderId: null, subtasks: [] };
+let __subtaskIdSeq = 0;
+
+function generateUniqueSubtaskId() {
+  __subtaskIdSeq += 1;
+  return `SUB-${Date.now()}-${__subtaskIdSeq}-${Math.floor(Math.random() * 900 + 100)}`;
+}
+
+function getAssignmentModalWorkers() {
+  const assignableWorkers = (db.usuarios || []).filter(
+    (u) => (u.rol === "tecnico" || u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo) && u.activo
+  );
+  return {
+    internalTechs: assignableWorkers.filter((u) => u.rol === "tecnico"),
+    externalWorkshops: assignableWorkers.filter((u) => u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo)
+  };
+}
+
+function buildAssignmentTechOptionsHtml(selectedId) {
+  const { internalTechs, externalWorkshops } = getAssignmentModalWorkers();
+  let opts = `<option value="">-- Sin Asignar --</option>`;
+  if (internalTechs.length) {
+    opts += `<optgroup label="Técnicos Internos (Destajo Taller)">`;
+    internalTechs.forEach((t) => {
+      opts += `<option value="${t.id_usuario}" ${t.id_usuario === selectedId ? "selected" : ""}>[Interno] ${escapeHtml(t.nombre)}</option>`;
+    });
+    opts += `</optgroup>`;
+  }
+  if (externalWorkshops.length) {
+    opts += `<optgroup label="Talleres Externos (Outsourcing)">`;
+    externalWorkshops.forEach((w) => {
+      opts += `<option value="${w.id_usuario}" ${w.id_usuario === selectedId ? "selected" : ""}>[Externo] ${escapeHtml(w.nombre)}</option>`;
+    });
+    opts += `</optgroup>`;
+  }
+  return opts;
+}
+
+function renderAssignmentModalRows(orderId) {
+  const tbody = document.getElementById("assignment-modal-tbody");
+  if (!tbody) return;
+  const targetOrderId = orderId || tempAssignmentState.orderId;
+  const subtasks = tempAssignmentState.orderId === targetOrderId ? tempAssignmentState.subtasks : [];
+
+  const stateBadgeLabel = (st) => {
+    if (st === "terminado") return `<span class="state-badge state-badge--done"><i class="fas fa-check-circle"></i> Terminado</span>`;
+    if (st === "empezado") return `<span class="state-badge state-badge--exec"><i class="fas fa-wrench"></i> En Proceso</span>`;
+    if (st === "pausado") return `<span class="state-badge state-badge--wait"><i class="fas fa-pause-circle"></i> Pausado</span>`;
+    return `<span class="state-badge state-badge--diag"><i class="fas fa-clock"></i> Por Hacer</span>`;
+  };
+
+  tbody.innerHTML = subtasks.length
+    ? subtasks
+        .map((s, i) => {
+          const qty = Math.max(1, Number(s.cantidad) || 1);
+          const totalComm = Number(s.comision_base_tecnico || 0);
+          const unitPay = Number(s.pago_unitario !== undefined ? s.pago_unitario : totalComm / qty);
+          const isPerUnit = Boolean(s.por_unidad || qty > 1);
+          return `
+      <tr data-draft-sub-id="${s.id_subtarea}">
+        <td style="width:36px;"><strong>#${i + 1}</strong></td>
+        <td style="min-width:225px;">
+          <input
+            type="text"
+            id="assign-desc-${s.id_subtarea}"
+            value="${escapeHtml(s.descripcion_servicio)}"
+            oninput="syncSingleDraftSubtaskField('${s.id_subtarea}', 'descripcion_servicio', this.value)"
+            style="width:100%; padding:6px 8px; border-radius:8px; border:1px solid var(--border-color); font-weight:800; font-size:13px; margin-bottom:4px;"
+          />
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            ${stateBadgeLabel(s.estado_subtarea)}
+            ${isPerUnit ? `<span class="unit-mode-pill"><i class="fas fa-hashtag"></i> Por ${escapeHtml(s.unidad_label || "unidad")} · 1 sola tarea</span>` : ""}
+          </div>
+        </td>
+        <td style="white-space:nowrap;">
+          <div style="display:flex; align-items:center; gap:5px;">
+            <input
+              type="number"
+              min="1"
+              step="1"
+              id="assign-qty-${s.id_subtarea}"
+              value="${qty}"
+              title="Cantidad de unidades (1 sola tarea asignada)"
+              oninput="recalcSubtaskRowUnitTotal('${s.id_subtarea}', '${targetOrderId}')"
+              style="width:54px; padding:6px 4px; border-radius:8px; border:1.5px solid ${isPerUnit ? "#38bdf8" : "var(--border-color)"}; font-weight:900; text-align:center;"
+            />
+            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">×</span>
+            <input
+              type="number"
+              step="0.25"
+              min="0"
+              id="assign-unit-${s.id_subtarea}"
+              value="${Number(unitPay.toFixed(2))}"
+              title="Pago destajo por unidad ($)"
+              oninput="recalcSubtaskRowUnitTotal('${s.id_subtarea}', '${targetOrderId}')"
+              style="width:68px; padding:6px 5px; border-radius:8px; border:1px solid var(--border-color); font-weight:800; font-family:'JetBrains Mono',monospace;"
+            />
+          </div>
+        </td>
+        <td style="width:92px;">
+          <input
+            type="number"
+            step="0.25"
+            min="0"
+            id="assign-comm-${s.id_subtarea}"
+            value="${Number(totalComm.toFixed(2))}"
+            oninput="syncSingleDraftSubtaskField('${s.id_subtarea}', 'comision_base_tecnico', this.value); updateLiveAssignmentTotals('${targetOrderId}')"
+            style="width:82px; padding:6px 7px; border-radius:8px; border:1.5px solid rgba(22,163,74,0.5); font-weight:900; color:#16a34a; font-family:'JetBrains Mono',monospace;"
+          />
+        </td>
+        <td style="min-width:175px; max-width:220px;">
+          <select
+            id="assign-tech-${s.id_subtarea}"
+            onchange="syncSingleDraftSubtaskTech('${s.id_subtarea}', this.value, '${targetOrderId}')"
+            style="width:100%; max-width:215px; padding:7px 8px; border-radius:9px; border:1.5px solid ${s.tecnico_id ? "rgba(34,197,94,0.55)" : "rgba(245,158,11,0.55)"}; font-weight:800; font-size:12.5px;"
+          >
+            ${buildAssignmentTechOptionsHtml(s.tecnico_id)}
+          </select>
+        </td>
+        <td style="text-align:center; white-space:nowrap;">
+          <div style="display:flex; gap:4px; justify-content:center;">
+            ${s.tecnico_id ? `
+              <button type="button" class="btn btn--danger btn--xs" style="padding:4px 7px; font-size:10px; font-weight:800;" onclick="unassignSubtaskInModalDirect('${s.id_subtarea}', '${targetOrderId}')" title="Quitar técnico asignado">
+                <i class="fas fa-times"></i> Quitar
+              </button>
+            ` : ""}
+            <button type="button" class="btn btn--ghost btn--xs" style="padding:4px 6px; font-size:10.5px; color:#ef4444;" onclick="removeSubtaskFromAssignmentDraft('${s.id_subtarea}', '${targetOrderId}')" title="Eliminar trabajo de destajo">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+        })
+        .join("")
+    : `<tr><td colspan="6" style="text-align:center; padding:18px; color:var(--text-muted); font-size:12.5px;">Aún no has agregado trabajos de destajo a esta orden. Selecciona arriba los trabajos del <strong>Catálogo de Destajo (Lista B)</strong> que realizarán los técnicos para cumplir los servicios del cliente.</td></tr>`;
+
+  updateLiveAssignmentTotals(targetOrderId);
+}
+
+function syncSingleDraftSubtaskField(subtaskId, field, value) {
+  const sub = (tempAssignmentState.subtasks || []).find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+  if (field === "comision_base_tecnico") {
+    sub.comision_base_tecnico = Math.max(0, Number(value) || 0);
+  } else {
+    sub[field] = String(value || "").trim();
+  }
+}
+
+function syncSingleDraftSubtaskTech(subtaskId, techId, orderId) {
+  const sub = (tempAssignmentState.subtasks || []).find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+  if (techId) {
+    const tech = (db.usuarios || []).find((u) => u.id_usuario === techId);
+    sub.tecnico_id = techId;
+    sub.nombre_tecnico = tech ? tech.nombre : "Asignado";
+    sub.es_outsourcing = Boolean(tech && (tech.rol === "outsourcing" || tech.tipo === "taller_externo" || tech.es_externo));
+  } else {
+    sub.tecnico_id = null;
+    sub.nombre_tecnico = "Sin asignar";
+    sub.es_outsourcing = false;
+  }
+  renderAssignmentModalRows(orderId);
+}
+
 function openSubtaskAssignmentModal(orderId, directAdvance = false) {
   if (currentUser.rol !== "admin" && currentUser.rol !== "jefe_taller") {
     showToast("Solo el Jefe de Taller o Administración puede asignar subtareas a los técnicos.", "error");
@@ -9281,134 +9534,24 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     }
   }
 
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  // Inicializar borrador dedicado (aislado de db.subtareas hasta Confirmar, inmune a sincronización de fondo)
+  tempAssignmentState = {
+    orderId: order.id_orden,
+    subtasks: (db.subtareas || [])
+      .filter((s) => s.orden_id === orderId)
+      .map((s) => JSON.parse(JSON.stringify(s)))
+  };
+
   const clientServices = getOrderClientServices(order);
   const clientServicesTotal = Number(order.monto_total) || clientServices.reduce((a, c) => a + (Number(c.monto) || 0), 0);
-  const assignableWorkers = db.usuarios.filter(
-    (u) => (u.rol === "tecnico" || u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo) && u.activo
-  );
-  const internalTechs = assignableWorkers.filter((u) => u.rol === "tecnico");
-  const externalWorkshops = assignableWorkers.filter((u) => u.rol === "outsourcing" || u.tipo === "taller_externo" || u.es_externo);
-
-  const techOptionsHtml = (selectedId) => {
-    let opts = `<option value="">-- Sin Asignar / Quitar Técnico --</option>`;
-    if (internalTechs.length) {
-      opts += `<optgroup label="Técnicos Internos (Destajo Taller)">`;
-      internalTechs.forEach((t) => {
-        opts += `<option value="${t.id_usuario}" ${t.id_usuario === selectedId ? "selected" : ""}>[Interno] ${t.nombre} (${t.especialidad})</option>`;
-      });
-      opts += `</optgroup>`;
-    }
-    if (externalWorkshops.length) {
-      opts += `<optgroup label="Talleres Externos (Outsourcing)">`;
-      externalWorkshops.forEach((w) => {
-        opts += `<option value="${w.id_usuario}" ${w.id_usuario === selectedId ? "selected" : ""}>[Externo] ${w.nombre} (${w.especialidad})</option>`;
-      });
-      opts += `</optgroup>`;
-    }
-    return opts;
-  };
-
-  const stateBadgeLabel = (st) => {
-    if (st === "terminado") return `<span class="state-badge state-badge--done"><i class="fas fa-check-circle"></i> Terminado</span>`;
-    if (st === "empezado") return `<span class="state-badge state-badge--exec"><i class="fas fa-wrench"></i> En Proceso</span>`;
-    if (st === "pausado") return `<span class="state-badge state-badge--wait"><i class="fas fa-pause-circle"></i> Pausado</span>`;
-    return `<span class="state-badge state-badge--diag"><i class="fas fa-clock"></i> Por Hacer</span>`;
-  };
-
-  const rowsHtml = subtasks.length
-    ? subtasks
-        .map(
-          (s, i) => {
-            const qty = Math.max(1, Number(s.cantidad) || 1);
-            const totalComm = Number(s.comision_base_tecnico || 0);
-            const unitPay = Number(s.pago_unitario !== undefined ? s.pago_unitario : totalComm / qty);
-            const isPerUnit = Boolean(s.por_unidad || qty > 1);
-            return `
-      <tr>
-        <td><strong>#${i + 1}</strong></td>
-        <td>
-          <input
-            type="text"
-            id="assign-desc-${s.id_subtarea}"
-            value="${escapeHtml(s.descripcion_servicio)}"
-            style="width:100%; padding:6px 8px; border-radius:8px; border:1px solid var(--border-color); font-weight:800; font-size:13px; margin-bottom:4px;"
-          />
-          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            ${stateBadgeLabel(s.estado_subtarea)}
-            ${isPerUnit ? `<span class="unit-mode-pill"><i class="fas fa-hashtag"></i> Por ${escapeHtml(s.unidad_label || "unidad")} · 1 sola tarea</span>` : ""}
-          </div>
-        </td>
-        <td style="white-space:nowrap;">
-          <div style="display:flex; align-items:center; gap:5px;">
-            <input
-              type="number"
-              min="1"
-              step="1"
-              id="assign-qty-${s.id_subtarea}"
-              value="${qty}"
-              title="Cantidad de unidades (1 sola tarea asignada)"
-              oninput="recalcSubtaskRowUnitTotal('${s.id_subtarea}', '${order.id_orden}')"
-              style="width:58px; padding:6px 5px; border-radius:8px; border:1.5px solid ${isPerUnit ? "#38bdf8" : "var(--border-color)"}; font-weight:900; text-align:center;"
-            />
-            <span style="font-size:11px; color:var(--text-muted); font-weight:800;">×</span>
-            <input
-              type="number"
-              step="0.25"
-              min="0"
-              id="assign-unit-${s.id_subtarea}"
-              value="${Number(unitPay.toFixed(2))}"
-              title="Pago destajo por unidad ($)"
-              oninput="recalcSubtaskRowUnitTotal('${s.id_subtarea}', '${order.id_orden}')"
-              style="width:74px; padding:6px 6px; border-radius:8px; border:1px solid var(--border-color); font-weight:800; font-family:'JetBrains Mono',monospace;"
-            />
-          </div>
-        </td>
-        <td>
-          <input
-            type="number"
-            step="0.25"
-            min="0"
-            id="assign-comm-${s.id_subtarea}"
-            value="${Number(totalComm.toFixed(2))}"
-            oninput="updateLiveAssignmentTotals('${order.id_orden}')"
-            style="width:94px; padding:6px 8px; border-radius:8px; border:1.5px solid rgba(22,163,74,0.5); font-weight:900; color:#16a34a; font-family:'JetBrains Mono',monospace;"
-          />
-        </td>
-        <td>
-          <select
-            id="assign-tech-${s.id_subtarea}"
-            onchange="updateLiveAssignmentTotals('${order.id_orden}')"
-            style="width:100%; padding:8px 10px; border-radius:9px; border:1.5px solid var(--border-color); font-weight:800;"
-          >
-            ${techOptionsHtml(s.tecnico_id)}
-          </select>
-        </td>
-        <td style="text-align:center; white-space:nowrap;">
-          <div style="display:flex; gap:4px; justify-content:center;">
-            ${s.tecnico_id ? `
-              <button type="button" class="btn btn--danger btn--xs" style="padding:4px 7px; font-size:10px; font-weight:800;" onclick="unassignSubtaskInModalDirect('${s.id_subtarea}', '${order.id_orden}')" title="Quitar técnico asignado">
-                <i class="fas fa-times"></i> Quitar
-              </button>
-            ` : ""}
-            <button type="button" class="btn btn--ghost btn--xs" style="padding:4px 6px; font-size:10.5px; color:#ef4444;" onclick="deleteSubtaskDirect('${s.id_subtarea}', '${order.id_orden}')" title="Eliminar trabajo de destajo">
-              <i class="fas fa-trash"></i>
-            </button>
-          </div>
-        </td>
-      </tr>
-    `;
-          }
-        )
-        .join("")
-    : `<tr><td colspan="6" style="text-align:center; padding:18px; color:var(--text-muted); font-size:12.5px;">Aún no has agregado trabajos de destajo a esta orden. Selecciona arriba los trabajos del <strong>Catálogo de Destajo (Lista B)</strong> que realizarán los técnicos para cumplir los servicios del cliente.</td></tr>`;
+  const { internalTechs } = getAssignmentModalWorkers();
 
   const quickAssignButtons = internalTechs
     .slice(0, 6)
     .map(
       (t) => `
       <button type="button" class="btn btn--ghost" style="padding:5px 10px; font-size:11.5px;" onclick="assignAllSubtasksInModalTo('${t.id_usuario}', '${order.id_orden}')">
-        <i class="fas fa-user-tag"></i> Asignar Todo a ${t.nombre.split(" ")[0]}
+        <i class="fas fa-user-tag"></i> Asignar Todo a ${escapeHtml(t.nombre.split(" ")[0])}
       </button>
     `
     )
@@ -9418,7 +9561,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     ? clientServices
         .map(
           (c) => `<span style="display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:99px; background:rgba(245,223,0,0.12); border:1px solid rgba(245,223,0,0.35); font-size:11.5px; font-weight:800; color:var(--text-main);">
-            ${escapeHtml(c.descripcion)} <strong style="color:var(--renacer-gold);">$${Number(c.monto || 0).toFixed(2)}</strong>
+            ${escapeHtml(formatServiceDisplayLabel(c))} <strong style="color:var(--renacer-gold);">$${Number(c.monto || 0).toFixed(2)}</strong>
           </span>`
         )
         .join(" ")
@@ -9436,12 +9579,12 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
             <button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${order.id_orden}')" title="Inspeccionar ficha técnica">
               <i class="fas fa-barcode"></i> TROQUEL #${order.codigo_troquel}
             </button>
-            <span style="font-size:13.5px; font-weight:900;">${order.datos_motor.marca} ${order.datos_motor.modelo}</span>
+            <span style="font-size:13.5px; font-weight:900;">${escapeHtml(order.datos_motor.marca)} ${escapeHtml(order.datos_motor.modelo)}</span>
           </div>
           <div style="font-size:12px; color:var(--text-muted); line-height:1.45;">
-            Pieza: <strong>${order.datos_motor.tipo_pieza}</strong> · Serial: <strong>${order.datos_motor.serial}</strong><br/>
-            Cliente: <strong>${order.nombre_cliente}</strong> (${order.documento_cliente})<br/>
-            Observaciones: ${order.datos_motor.observaciones}
+            Pieza: <strong>${escapeHtml(order.datos_motor.tipo_pieza)}</strong> · Serial: <strong>${escapeHtml(order.datos_motor.serial)}</strong><br/>
+            Cliente: <strong>${escapeHtml(order.nombre_cliente)}</strong> (${escapeHtml(order.documento_cliente)})<br/>
+            Observaciones: ${escapeHtml(order.datos_motor.observaciones || "Sin observaciones")}
           </div>
         </div>
         <div class="form-section-box" style="margin-bottom:0; border-color:rgba(245,223,0,0.35);">
@@ -9497,9 +9640,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
               <th style="text-align:center;">Acciones</th>
             </tr>
           </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
+          <tbody id="assignment-modal-tbody"></tbody>
         </table>
       </div>
 
@@ -9514,21 +9655,32 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
     `
   });
 
-  updateLiveAssignmentTotals(order.id_orden);
+  renderAssignmentModalRows(order.id_orden);
 }
 
 function recalcSubtaskRowUnitTotal(subtaskId, orderId) {
   const qty = Math.max(1, Number(document.getElementById(`assign-qty-${subtaskId}`)?.value) || 1);
   const unitPay = Math.max(0, Number(document.getElementById(`assign-unit-${subtaskId}`)?.value) || 0);
+  const totalCalc = Number((qty * unitPay).toFixed(2));
   const commInp = document.getElementById(`assign-comm-${subtaskId}`);
   if (commInp) {
-    commInp.value = Number((qty * unitPay).toFixed(2));
+    commInp.value = totalCalc;
+  }
+  const sub = (tempAssignmentState.subtasks || []).find((s) => s.id_subtarea === subtaskId);
+  if (sub) {
+    sub.cantidad = qty;
+    if (qty > 1) sub.por_unidad = true;
+    sub.pago_unitario = unitPay;
+    sub.comision_base_tecnico = totalCalc;
   }
   updateLiveAssignmentTotals(orderId);
 }
 
 function captureCurrentAssignmentModalEdits(orderId) {
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  const subtasks =
+    tempAssignmentState && tempAssignmentState.orderId === orderId
+      ? tempAssignmentState.subtasks
+      : db.subtareas.filter((s) => s.orden_id === orderId);
   subtasks.forEach((s) => {
     const descInp = document.getElementById(`assign-desc-${s.id_subtarea}`);
     const qtyInp = document.getElementById(`assign-qty-${s.id_subtarea}`);
@@ -9547,9 +9699,11 @@ function captureCurrentAssignmentModalEdits(orderId) {
         const tech = db.usuarios.find((u) => u.id_usuario === sel.value);
         s.tecnico_id = sel.value;
         s.nombre_tecnico = tech ? tech.nombre : "Asignado";
+        s.es_outsourcing = Boolean(tech && (tech.rol === "outsourcing" || tech.tipo === "taller_externo" || tech.es_externo));
       } else {
         s.tecnico_id = null;
         s.nombre_tecnico = "Sin asignar";
+        s.es_outsourcing = false;
       }
     }
   });
@@ -9562,7 +9716,7 @@ function filterDestajoWorksForOrder(orderId, query) {
   const works = (db.catalogo_destajo || []).filter((w) => w.activo !== false);
   const filtered = q
     ? works.filter((w) => (w.nombre || "").toLowerCase().includes(q) || (w.categoria || "").toLowerCase().includes(q))
-    : works.slice(0, 15);
+    : works.slice(0, 20);
 
   if (!filtered.length) {
     dropdown.innerHTML = `
@@ -9608,7 +9762,19 @@ function pickDestajoWorkForOrder(orderId, destajoId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   const work = (db.catalogo_destajo || []).find((w) => w.id_destajo === destajoId);
   if (!order || !work) return;
+
+  if (tempAssignmentState.orderId !== orderId) {
+    tempAssignmentState = {
+      orderId,
+      subtasks: (db.subtareas || []).filter((s) => s.orden_id === orderId).map((s) => JSON.parse(JSON.stringify(s)))
+    };
+  }
   captureCurrentAssignmentModalEdits(orderId);
+
+  const dropdown = document.getElementById("destajo-works-live-dropdown");
+  const searchInp = document.getElementById("search-destajo-work-input");
+  if (dropdown) dropdown.classList.add("hidden");
+  if (searchInp) searchInp.value = "";
 
   // Si es outsourcing y existe un taller aliado registrado, pre-seleccionarlo automáticamente
   let defaultTechId = null;
@@ -9622,8 +9788,8 @@ function pickDestajoWorkForOrder(orderId, destajoId) {
   }
 
   const unitPay = Number(work.pago_destajo) || 0;
-  db.subtareas.push({
-    id_subtarea: "SUB-" + Date.now().toString().slice(-6) + "-" + Math.floor(Math.random() * 99),
+  tempAssignmentState.subtasks.push({
+    id_subtarea: generateUniqueSubtaskId(),
     orden_id: order.id_orden,
     codigo_troquel: order.codigo_troquel,
     descripcion_servicio: work.nombre,
@@ -9644,36 +9810,83 @@ function pickDestajoWorkForOrder(orderId, destajoId) {
     comision_pagada: false
   });
 
-  openSubtaskAssignmentModal(orderId);
-  showToast(`Trabajo "${work.nombre}" ($${unitPay.toFixed(2)}${work.por_unidad ? " c/u — ajusta la cantidad en la fila" : ""}) agregado a la matriz.`);
+  renderAssignmentModalRows(orderId);
+  showToast(`Trabajo #${tempAssignmentState.subtasks.length}: "${work.nombre}" ($${unitPay.toFixed(2)}${work.por_unidad ? " c/u" : ""}) agregado a la matriz.`, "success");
+}
+
+function removeSubtaskFromAssignmentDraft(subtaskId, orderId) {
+  if (tempAssignmentState.orderId !== orderId) return;
+  captureCurrentAssignmentModalEdits(orderId);
+  const sub = tempAssignmentState.subtasks.find((s) => s.id_subtarea === subtaskId);
+  if (!sub) return;
+
+  const doRemove = () => {
+    tempAssignmentState.subtasks = tempAssignmentState.subtasks.filter((s) => s.id_subtarea !== subtaskId);
+    renderAssignmentModalRows(orderId);
+    showToast(`Trabajo "${sub.descripcion_servicio}" quitado de la matriz.`, "info");
+  };
+
+  // Si ya estaba terminado o pagado, pedir confirmación antes de remover
+  if (sub.estado_subtarea === "terminado" || sub.comision_pagada) {
+    Swal.fire({
+      title: `¿Eliminar trabajo "${sub.descripcion_servicio}"?`,
+      text: "Este trabajo ya fue marcado como terminado o liquidado. Al guardar cambios se quitará de la orden.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      confirmButtonText: "Sí, quitar de la matriz",
+      cancelButtonText: "Cancelar"
+    }).then((res) => {
+      if (res.isConfirmed) doRemove();
+    });
+    return;
+  }
+
+  doRemove();
 }
 
 function unassignSubtaskInModalDirect(subtaskId, orderId) {
   captureCurrentAssignmentModalEdits(orderId);
-  const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
+  const sub = (tempAssignmentState.subtasks || []).find((s) => s.id_subtarea === subtaskId);
   if (sub) {
     sub.tecnico_id = null;
     sub.nombre_tecnico = "Sin asignar";
+    sub.es_outsourcing = false;
     sub.estado_subtarea = "pendiente";
   }
-  saveDatabase("Técnico desasignado");
-  openSubtaskAssignmentModal(orderId);
-  showToast("Técnico desasignado del trabajo.");
+  renderAssignmentModalRows(orderId);
+  showToast("Técnico desasignado de la fila.", "info");
 }
 
 function addSubtaskDirectInAssignmentModal(orderId, customName = "") {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
+  if (tempAssignmentState.orderId !== orderId) {
+    tempAssignmentState = {
+      orderId,
+      subtasks: (db.subtareas || []).filter((s) => s.orden_id === orderId).map((s) => JSON.parse(JSON.stringify(s)))
+    };
+  }
   captureCurrentAssignmentModalEdits(orderId);
-  db.subtareas.push({
-    id_subtarea: "SUB-" + Date.now().toString().slice(-6) + "-" + Math.floor(Math.random() * 99),
+  const dropdown = document.getElementById("destajo-works-live-dropdown");
+  const searchInp = document.getElementById("search-destajo-work-input");
+  if (dropdown) dropdown.classList.add("hidden");
+  if (searchInp) searchInp.value = "";
+
+  tempAssignmentState.subtasks.push({
+    id_subtarea: generateUniqueSubtaskId(),
     orden_id: order.id_orden,
     codigo_troquel: order.codigo_troquel,
     descripcion_servicio: customName || "Trabajo de Destajo Adicional",
     tecnico_id: null,
     nombre_tecnico: "Sin asignar",
     monto_servicio: 0,
+    por_unidad: false,
+    unidad_label: "",
+    cantidad: 1,
+    pago_unitario: 5,
     comision_base_tecnico: 5,
+    es_outsourcing: false,
     estado_subtarea: "pendiente",
     inicio_activo_ts: null,
     minutos_acumulados: 0,
@@ -9681,21 +9894,27 @@ function addSubtaskDirectInAssignmentModal(orderId, customName = "") {
     fecha_terminado: null,
     comision_pagada: false
   });
-  openSubtaskAssignmentModal(orderId);
+  renderAssignmentModalRows(orderId);
+  showToast(`Trabajo libre #${tempAssignmentState.subtasks.length} agregado a la matriz.`, "success");
 }
 
 function updateLiveAssignmentTotals(orderId) {
   const box = document.getElementById("live-assignment-totals-box");
   if (!box) return;
   const order = db.ordenes.find((o) => o.id_orden === orderId);
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  const subtasks =
+    tempAssignmentState && tempAssignmentState.orderId === orderId
+      ? tempAssignmentState.subtasks
+      : db.subtareas.filter((s) => s.orden_id === orderId);
   const totalOrderPrice = order ? (Number(order.monto_total) || 0) : 0;
   let totalOrderComm = 0;
   const byTech = {};
 
   subtasks.forEach((s) => {
-    const cVal = Math.max(0, Number(document.getElementById(`assign-comm-${s.id_subtarea}`)?.value ?? s.comision_base_tecnico) || 0);
-    const tId = document.getElementById(`assign-tech-${s.id_subtarea}`)?.value || "";
+    const commEl = document.getElementById(`assign-comm-${s.id_subtarea}`);
+    const techEl = document.getElementById(`assign-tech-${s.id_subtarea}`);
+    const cVal = Math.max(0, Number(commEl ? commEl.value : s.comision_base_tecnico) || 0);
+    const tId = techEl ? techEl.value : (s.tecnico_id || "");
     totalOrderComm += cVal;
     if (tId) {
       const tech = db.usuarios.find((u) => u.id_usuario === tId);
@@ -9717,7 +9936,7 @@ function updateLiveAssignmentTotals(orderId) {
     .map(
       (info) => `
       <div style="background:var(--bg-card); border:1px solid ${info.isExt ? "rgba(56,189,248,0.45)" : "rgba(22,163,74,0.4)"}; border-radius:10px; padding:8px 12px; font-size:12px;">
-        <strong>[${info.isExt ? "Externo" : "Interno"}] ${info.nombre}</strong> (${info.tareasCount} trabajo/s)<br/>
+        <strong>[${info.isExt ? "Externo" : "Interno"}] ${escapeHtml(info.nombre)}</strong> (${info.tareasCount} trabajo/s)<br/>
         <span>Destajo en esta orden: <strong style="color:${info.isExt ? "#38bdf8" : "#16a34a"};">+$${info.enEstaOrden.toFixed(2)}</strong></span> ·
         <span style="color:var(--text-muted);">Acumulado semanal: <strong>$${(info.acumuladoPrevio + info.enEstaOrden).toFixed(2)}</strong></span>
       </div>
@@ -9740,62 +9959,61 @@ function updateLiveAssignmentTotals(orderId) {
       ${
         techPills
           ? `<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:8px;">${techPills}</div>`
-          : `<div style="font-size:12px; color:#d97706; font-weight:700;">Agrega trabajos de la Lista B y asigna técnicos arriba para calcular su destajo.</div>`
+          : `<div style="font-size:12px; color:#d97706; font-weight:700;">Agrega trabajos de la Lista B y selecciona un técnico en cada fila (o usa "Asignar Todo a ...") para calcular su destajo.</div>`
       }
     </div>
   `;
 }
 
 function assignAllSubtasksInModalTo(techId, orderId) {
-  const selects = document.querySelectorAll("[id^='assign-tech-']");
-  selects.forEach((sel) => {
-    sel.value = techId;
-  });
-  if (orderId) updateLiveAssignmentTotals(orderId);
+  const targetOrderId = orderId || tempAssignmentState.orderId;
+  captureCurrentAssignmentModalEdits(targetOrderId);
+  const tech = (db.usuarios || []).find((u) => u.id_usuario === techId);
+  if (tempAssignmentState.orderId === targetOrderId) {
+    tempAssignmentState.subtasks.forEach((s) => {
+      s.tecnico_id = techId || null;
+      s.nombre_tecnico = tech ? tech.nombre : "Sin asignar";
+      s.es_outsourcing = Boolean(tech && (tech.rol === "outsourcing" || tech.tipo === "taller_externo" || tech.es_externo));
+    });
+    renderAssignmentModalRows(targetOrderId);
+  } else {
+    const selects = document.querySelectorAll("[id^='assign-tech-']");
+    selects.forEach((sel) => {
+      sel.value = techId;
+    });
+    if (targetOrderId) updateLiveAssignmentTotals(targetOrderId);
+  }
 }
 
 function confirmSubtaskAssignments(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  // Asegurar que ordenes antiguas preserven su presupuesto cliente separado al guardar matriz de destajo
+  // Asegurar que órdenes antiguas preserven su presupuesto cliente separado al guardar matriz de destajo
   if (!Array.isArray(order.servicios_cliente)) {
     order.servicios_cliente = getOrderClientServices(order).map((it) => ({
       id_item: it.id_item,
       descripcion: it.descripcion,
+      cantidad: Math.max(1, Number(it.cantidad) || 1),
+      precio_unitario: Number(it.precio_unitario ?? it.monto) || 0,
       monto: Number(it.monto) || 0,
+      por_unidad: Boolean(it.por_unidad),
+      unidad_label: it.unidad_label || "",
       es_item_extra: Boolean(it.es_item_extra)
     }));
   }
 
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
+  captureCurrentAssignmentModalEdits(orderId);
+  const draftSubs =
+    tempAssignmentState && tempAssignmentState.orderId === orderId
+      ? tempAssignmentState.subtasks
+      : db.subtareas.filter((s) => s.orden_id === orderId);
+
   let assignedCount = 0;
-
-  subtasks.forEach((s) => {
-    const descInp = document.getElementById(`assign-desc-${s.id_subtarea}`);
-    const qtyInp = document.getElementById(`assign-qty-${s.id_subtarea}`);
-    const unitInp = document.getElementById(`assign-unit-${s.id_subtarea}`);
-    const commInp = document.getElementById(`assign-comm-${s.id_subtarea}`);
-    const sel = document.getElementById(`assign-tech-${s.id_subtarea}`);
-
-    if (descInp && descInp.value.trim()) {
-      s.descripcion_servicio = descInp.value.trim();
-    }
-    if (qtyInp) {
-      s.cantidad = Math.max(1, Number(qtyInp.value) || 1);
-      if (s.cantidad > 1) s.por_unidad = true;
-    }
-    if (unitInp) {
-      s.pago_unitario = Math.max(0, Number(unitInp.value) || 0);
-    }
-    if (commInp) {
-      s.comision_base_tecnico = Math.max(0, Number(commInp.value) || 0);
-    }
-
-    if (sel && sel.value) {
-      const tech = db.usuarios.find((u) => u.id_usuario === sel.value);
-      s.tecnico_id = sel.value;
-      s.nombre_tecnico = tech ? tech.nombre : "Asignado";
+  draftSubs.forEach((s) => {
+    if (s.tecnico_id) {
+      const tech = db.usuarios.find((u) => u.id_usuario === s.tecnico_id);
+      s.nombre_tecnico = tech ? tech.nombre : (s.nombre_tecnico || "Asignado");
       s.es_outsourcing = Boolean(tech && (tech.rol === "outsourcing" || tech.tipo === "taller_externo" || tech.es_externo));
       if (!s.estado_subtarea) s.estado_subtarea = "pendiente";
       assignedCount++;
@@ -9806,15 +10024,29 @@ function confirmSubtaskAssignments(orderId) {
     }
   });
 
-  if (assignedCount === 0) {
-    showToast("Agrega al menos un trabajo de destajo y asígnalo a un técnico antes de confirmar.", "error");
+  if (draftSubs.length === 0 || assignedCount === 0) {
+    const msg =
+      draftSubs.length === 0
+        ? "Agrega al menos un trabajo de destajo desde el buscador de Lista B o el botón '+ Trabajo Libre' antes de confirmar."
+        : `Tienes <strong>${draftSubs.length} trabajo(s)</strong> en la tabla, pero ninguno tiene un técnico seleccionado en la columna <strong>"Técnico / Taller Asignado"</strong>.<br/><br/>Selecciona un técnico en el desplegable (o pulsa <strong>"Asignar Todo a ..."</strong>) y vuelve a confirmar.`;
+    Swal.fire({
+      icon: "warning",
+      title: draftSubs.length === 0 ? "Falta agregar trabajos de destajo" : "Falta asignar un técnico",
+      html: msg,
+      confirmButtonText: "Entendido, asignar ahora",
+      confirmButtonColor: "#f5c400"
+    });
+    showToast("Agrega al menos un trabajo de destajo y asígnalo a un técnico antes de confirmar.", "warning");
     return;
   }
+
+  // Comprometer el borrador de forma atómica dentro de db.subtareas
+  db.subtareas = (db.subtareas || []).filter((s) => s.orden_id !== orderId).concat(draftSubs);
 
   // PRESERVAR intacto el total facturado al cliente (solo recalculado desde Lista A + repuestos)
   recalcOrderTotalsFromClientServices(order);
 
-  // PRESERVAR ESTADO: Si la orden ya avanzó a calidad o entrega (ej. #1548), no retroceder a servicio
+  // PRESERVAR ESTADO: Si la orden ya avanzó a calidad o entrega, no retroceder a servicio
   const lateStages = ["calidad", "control_calidad", "entrega", "entregado", "archivado"];
   const isAlreadyAdvanced = lateStages.includes(order.estado_actual);
   if (!isAlreadyAdvanced && order.estado_actual !== "servicio" && order.estado_actual !== "asignacion_ejecucion" && order.estado_actual !== "terminado") {
@@ -9832,16 +10064,16 @@ function confirmSubtaskAssignments(orderId) {
     autor_rol: currentUser.rol_label,
     tipo_evento: "asignacion",
     mensaje: isAlreadyAdvanced
-      ? `Matriz de subtareas actualizada por ${currentUser.nombre} (conservando etapa ${formatStageName(order.estado_actual)}).`
-      : `Matriz de asignación confirmada por ${currentUser.nombre}. Orden en etapa 4. Servicio.`,
+      ? `Matriz de subtareas actualizada por ${currentUser.nombre} (${draftSubs.length} trabajo/s, conservando etapa ${formatStageName(order.estado_actual)}).`
+      : `Matriz de asignación confirmada por ${currentUser.nombre} (${draftSubs.length} trabajo/s, ${assignedCount} asignado/s). Orden en etapa 4. Servicio.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
 
-  saveDatabase();
+  saveDatabase(`Matriz de destajo confirmada (#${order.codigo_troquel})`);
   closeModal();
   renderApp();
-  showToast(`Troquel #${order.codigo_troquel} asignado y visible en el panel de los técnicos.`);
+  showToast(`Troquel #${order.codigo_troquel}: ${draftSubs.length} trabajo(s) guardados y visibles en el panel de los técnicos.`, "success");
 }
 
 /* ============================================================================
@@ -12199,6 +12431,661 @@ function confirmSubtaskCompletion(subtaskId) {
   showToast(`¡Excelente! Tarea finalizada con foto, enviada a Control de Calidad y comisión de $${Number(sub.comision_base_tecnico).toFixed(2)} sumada.`);
 }
 
+/* ============================================================================
+   SISTEMA REAL DE VOUCHERS DE NÓMINA POR ORDEN (v41)
+   - Sin filas demo falsas
+   - Agrupado POR ORDEN (#Troquel — Vehículo) con subtotales
+   - Persistido en db.vouchers_nomina y sincronizado en Google Sheets
+   - Accesible para Técnicos (solo sus propios vouchers) y Gerencia (todos + eliminar)
+   ============================================================================ */
+function getCurrentPayrollWeekRange() {
+  const nowW = new Date();
+  const curDay = nowW.getDay() || 7;
+  const monD = new Date(nowW);
+  monD.setDate(nowW.getDate() - curDay + 1);
+  const sunD = new Date(monD);
+  sunD.setDate(monD.getDate() + 6);
+  const fmtD = (d) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  return {
+    label: `${fmtD(monD)} - ${fmtD(sunD)}`,
+    startIso: monD.toISOString().slice(0, 10),
+    endIso: sunD.toISOString().slice(0, 10)
+  };
+}
+
+function groupSubtasksByOrderForVoucher(subtasks) {
+  const map = new Map();
+  (Array.isArray(subtasks) ? subtasks : []).forEach((s) => {
+    const ord = (db.ordenes || []).find((o) => o.id_orden === s.orden_id);
+    const key = String(s.orden_id || s.codigo_troquel || "SIN-ORDEN");
+    const troquel = ord ? String(ord.codigo_troquel || s.codigo_troquel || key) : String(s.codigo_troquel || key);
+    const vehiculo = ord
+      ? `${ord.datos_motor?.marca || ""} ${ord.datos_motor?.modelo || ""}`.trim() || (ord.datos_motor?.tipo_pieza || "Motor / Pieza")
+      : "Pieza de Taller";
+    const tipoPieza = ord ? String(ord.datos_motor?.tipo_pieza || "Pieza") : "";
+    if (!map.has(key)) {
+      map.set(key, {
+        orden_id: String(s.orden_id || ""),
+        codigo_troquel: troquel,
+        vehiculo,
+        tipo_pieza: tipoPieza,
+        items: [],
+        subtotal_orden: 0
+      });
+    }
+    const grp = map.get(key);
+    const qty = Math.max(1, Number(s.cantidad) || 1);
+    const monto = Number(s.comision_base_tecnico) || 0;
+    const unitPay = Number(s.pago_unitario !== undefined ? s.pago_unitario : monto / qty) || 0;
+    grp.items.push({
+      id_subtarea: String(s.id_subtarea || ""),
+      descripcion: String(s.descripcion_servicio || "Trabajo de destajo"),
+      cantidad: qty,
+      por_unidad: Boolean(s.por_unidad || qty > 1),
+      unidad_label: String(s.unidad_label || ""),
+      pago_unitario: unitPay,
+      monto,
+      minutos: Number(s.minutos_acumulados) || 0,
+      fecha_terminado: String(s.fecha_terminado || s.fecha_fin || "")
+    });
+    grp.subtotal_orden = Number((grp.subtotal_orden + monto).toFixed(2));
+  });
+  return Array.from(map.values());
+}
+
+function buildLivePreVoucherForUser(userId) {
+  const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
+  if (!user) return null;
+  const week = getCurrentPayrollWeekRange();
+  const unpaidDone = (db.subtareas || []).filter(
+    (s) => s.tecnico_id === userId && s.estado_subtarea === "terminado" && !s.comision_pagada
+  );
+  const ordenesDetalle = groupSubtasksByOrderForVoucher(unpaidDone);
+  const totalComisiones = Number(
+    unpaidDone.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0).toFixed(2)
+  );
+  const isPartner = isPartnerInManagementPayroll(user);
+  const sueldoBase = isPartner && isPartnerPayrollActive(user) ? getUserWeeklySalary(user) : 0;
+  const adelantosMovs = isPartner
+    ? (db.finanzas_movimientos || []).filter(
+        (m) =>
+          m.usuario_id === userId &&
+          m.tipo === "egreso" &&
+          (m.categoria === "Adelanto Socio / Retiro de Jefe" || m.categoria === "Adelanto / Vale a Trabajador") &&
+          !m.liquidado_en_nomina
+      )
+    : [];
+  const totalAdelantos = Number(
+    adelantosMovs.reduce((acc, m) => acc + (Number(m.monto) || 0), 0).toFixed(2)
+  );
+  const montoPagado = Math.max(0, Number((sueldoBase + totalComisiones - totalAdelantos).toFixed(2)));
+
+  return {
+    id_voucher: `PRE-${user.id_usuario}`,
+    es_prevoucher: true,
+    usuario_id: user.id_usuario,
+    nombre_usuario: user.nombre,
+    especialidad: user.especialidad || user.rol_label || "",
+    tipo_perfil: isPartner ? "gerencia" : (user.es_externo || user.rol === "outsourcing" ? "outsourcing" : "tecnico"),
+    fecha_liquidacion: new Date().toISOString().slice(0, 10),
+    periodo_label: `Semana Actual (${week.label})`,
+    sueldo_base: sueldoBase,
+    total_comisiones: totalComisiones,
+    total_adelantos: totalAdelantos,
+    monto_pagado: montoPagado,
+    tasa_bcv: Number(db.config?.tasaBcv) || 45.80,
+    metodo_pago: "Pendiente de liquidación",
+    cuenta: "",
+    referencia: "",
+    comprobante_foto: "",
+    movimiento_id: "",
+    emitido_por: "En curso (Corte Domingo)",
+    notas: "",
+    total_tareas: unpaidDone.length,
+    subtareas_ids: unpaidDone.map((s) => s.id_subtarea),
+    ordenes_detalle: ordenesDetalle
+  };
+}
+
+function createAndSavePayrollVoucher({
+  user,
+  subtasksPaid = [],
+  sueldoBase = 0,
+  totalComisiones = 0,
+  totalAdelantos = 0,
+  montoPagado = 0,
+  metodoPago = "efectivo",
+  cuenta = "",
+  referencia = "",
+  comprobanteFoto = "",
+  movimientoId = "",
+  notas = ""
+}) {
+  if (!Array.isArray(db.vouchers_nomina)) db.vouchers_nomina = [];
+  const week = getCurrentPayrollWeekRange();
+  const nowIso = new Date().toISOString().slice(0, 10);
+  const ordenesDetalle = groupSubtasksByOrderForVoucher(subtasksPaid);
+  const voucher = {
+    id_voucher: "VCH-" + Date.now() + "-" + Math.floor(Math.random() * 900 + 100),
+    usuario_id: user ? user.id_usuario : "",
+    nombre_usuario: user ? user.nombre : "Trabajador",
+    tipo_perfil: user && isPartnerInManagementPayroll(user)
+      ? "gerencia"
+      : (user && (user.es_externo || user.rol === "outsourcing") ? "outsourcing" : "tecnico"),
+    fecha_liquidacion: nowIso,
+    periodo_label: `Semana (${week.label})`,
+    sueldo_base: Number(sueldoBase) || 0,
+    total_comisiones: Number(totalComisiones) || 0,
+    total_adelantos: Number(totalAdelantos) || 0,
+    monto_pagado: Number(montoPagado) || 0,
+    tasa_bcv: Number(db.config?.tasaBcv) || 45.80,
+    metodo_pago: String(metodoPago || "efectivo"),
+    cuenta: String(cuenta || ""),
+    referencia: String(referencia || ""),
+    comprobante_foto: String(comprobanteFoto || ""),
+    movimiento_id: String(movimientoId || ""),
+    emitido_por: currentUser ? currentUser.nombre : "Gerencia",
+    notas: String(notas || ""),
+    total_tareas: Array.isArray(subtasksPaid) ? subtasksPaid.length : 0,
+    subtareas_ids: Array.isArray(subtasksPaid) ? subtasksPaid.map((s) => String(s.id_subtarea || "")) : [],
+    ordenes_detalle: ordenesDetalle
+  };
+  db.vouchers_nomina.unshift(voucher);
+  return voucher;
+}
+
+function renderUserVouchersHistorySectionHtml(userId, options = {}) {
+  const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
+  if (!user) return "";
+  const canDelete = Boolean(
+    options.allowDelete && currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller")
+  );
+  const reopenOnDelete = options.reopenUserId || "";
+  const preVoucher = buildLivePreVoucherForUser(userId);
+  const savedVouchers = (db.vouchers_nomina || []).filter((v) => v.usuario_id === userId);
+
+  const preTroquelesHtml = preVoucher && preVoucher.ordenes_detalle.length
+    ? preVoucher.ordenes_detalle
+        .map((od) => renderClickableTroquelBadge(od.orden_id || od.codigo_troquel, "#"))
+        .join(" ")
+    : `<span style="font-size:11.5px; color:var(--text-muted);">${preVoucher && preVoucher.sueldo_base > 0 ? "Sueldo Base Gerencia" : "En curso"}</span>`;
+
+  const savedRowsHtml = savedVouchers.length
+    ? savedVouchers
+        .map((v) => {
+          const troquelesHtml = Array.isArray(v.ordenes_detalle) && v.ordenes_detalle.length
+            ? v.ordenes_detalle.map((od) => renderClickableTroquelBadge(od.orden_id || od.codigo_troquel, "#")).join(" ")
+            : `<span style="font-size:11.5px; color:var(--text-muted);">${v.sueldo_base > 0 ? "Sueldo Base" : "Liquidación"}</span>`;
+          const ordersCount = Array.isArray(v.ordenes_detalle) ? v.ordenes_detalle.length : 0;
+          return `
+            <tr>
+              <td>
+                <strong>${escapeHtml(v.periodo_label || "Liquidación")}</strong>
+                <div style="font-size:11px; color:var(--text-muted);">Pagado el ${formatDateHuman(v.fecha_liquidacion, false)} · <code>${escapeHtml(v.id_voucher)}</code></div>
+              </td>
+              <td><div style="display:flex; gap:4px; flex-wrap:wrap;">${troquelesHtml}</div></td>
+              <td>
+                <strong>${ordersCount} orden(es)</strong>
+                <div style="font-size:11px; color:var(--text-muted);">${Number(v.total_tareas) || 0} trabajo(s)${v.sueldo_base > 0 ? ` + Base $${Number(v.sueldo_base).toFixed(2)}` : ""}</div>
+              </td>
+              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
+                $${Number(v.monto_pagado || 0).toFixed(2)}
+              </td>
+              <td>
+                <span style="font-size:11px; font-weight:800; background:rgba(34,197,94,0.15); color:#22c55e; padding:3px 8px; border-radius:6px;">
+                  <i class="fas fa-check-circle"></i> Liquidado y Pagado
+                </span>
+              </td>
+              <td style="text-align:right; white-space:nowrap;">
+                <div style="display:inline-flex; gap:5px; align-items:center;">
+                  <button type="button" class="btn btn--ghost btn--xs" onclick="openDetailedPayrollVoucherModal('${v.id_voucher}')">
+                    <i class="fas fa-file-invoice"></i> Ver Recibo
+                  </button>
+                  ${
+                    canDelete
+                      ? `<button type="button" class="btn btn--ghost btn--xs" style="color:#ef4444; padding:4px 7px;" onclick="deletePayrollVoucher('${v.id_voucher}', '${reopenOnDelete}')" title="Eliminar voucher del historial">
+                           <i class="fas fa-trash-alt"></i>
+                         </button>`
+                      : ""
+                  }
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `
+      <tr>
+        <td colspan="6" style="text-align:center; padding:16px; color:var(--text-muted); font-size:12px;">
+          <i class="fas fa-receipt" style="margin-right:5px; opacity:0.6;"></i>
+          Aún no hay liquidaciones pagadas registradas en el historial de <strong>${escapeHtml(user.nombre)}</strong>.
+        </td>
+      </tr>
+    `;
+
+  return `
+    <div class="data-table-wrapper">
+      <table class="renacer-table">
+        <thead>
+          <tr>
+            <th>Semana / Período</th>
+            <th>Órdenes y Troqueles</th>
+            <th>Detalle Realizado</th>
+            <th>Total</th>
+            <th>Estatus de Pago</th>
+            <th style="text-align:right;">Comprobante</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <strong>Semana Actual (En Curso)</strong>
+              <div style="font-size:11px; color:var(--text-muted);">${escapeHtml(preVoucher ? preVoucher.periodo_label : "")}</div>
+            </td>
+            <td><div style="display:flex; gap:4px; flex-wrap:wrap;">${preTroquelesHtml}</div></td>
+            <td>
+              <strong>${preVoucher ? preVoucher.ordenes_detalle.length : 0} orden(es)</strong>
+              <div style="font-size:11px; color:var(--text-muted);">${preVoucher ? preVoucher.total_tareas : 0} trabajo(s) por liquidar${preVoucher && preVoucher.sueldo_base > 0 ? ` + Base $${preVoucher.sueldo_base.toFixed(2)}` : ""}</div>
+            </td>
+            <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold); font-size:14px;">
+              $${preVoucher ? preVoucher.monto_pagado.toFixed(2) : "0.00"}
+            </td>
+            <td>
+              <span style="font-size:11px; font-weight:800; background:rgba(245,196,0,0.15); color:var(--renacer-gold); padding:3px 8px; border-radius:6px;">
+                <i class="fas fa-hourglass-half"></i> En Curso (Corte Domingo)
+              </span>
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <button type="button" class="btn btn--gold btn--xs" onclick="openLivePreVoucherModal('${user.id_usuario}')">
+                <i class="fas fa-receipt"></i> Ver Pre-Voucher
+              </button>
+            </td>
+          </tr>
+          ${savedRowsHtml}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function openWorkerVouchersHistoryModal(userId) {
+  if (currentUser && currentUser.rol === "tecnico" && currentUser.id_usuario !== userId) {
+    showToast("Acceso restringido: solo puedes consultar tus propios vouchers.", "warning");
+    return;
+  }
+  const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
+  if (!user) return;
+  const savedCount = (db.vouchers_nomina || []).filter((v) => v.usuario_id === userId).length;
+  const canManage = currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
+  const preVoucher = buildLivePreVoucherForUser(userId);
+
+  openModal({
+    title: `Vouchers de Nómina y Liquidaciones — ${user.nombre}`,
+    icon: "fa-file-invoice-dollar",
+    wide: true,
+    body: `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; background:var(--bg-input); padding:12px 16px; border-radius:12px; margin-bottom:14px; border:1px solid var(--border-subtle);">
+        <div>
+          <div style="font-size:15px; font-weight:900;">${escapeHtml(user.nombre)}</div>
+          <div style="font-size:12px; color:var(--text-muted);">${escapeHtml(user.especialidad || user.rol_label || "")} · ${savedCount} liquidación(es) pagada(s) en historial</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold btn--sm" onclick="openLivePreVoucherModal('${user.id_usuario}')">
+            <i class="fas fa-receipt"></i> Abrir Pre-Voucher Semanal ($${preVoucher ? preVoucher.monto_pagado.toFixed(2) : "0.00"})
+          </button>
+        </div>
+      </div>
+      ${renderUserVouchersHistorySectionHtml(userId, { allowDelete: canManage, reopenUserId: userId })}
+    `,
+    footer: `
+      <button type="button" class="btn btn--primary" onclick="closeModal()">Cerrar</button>
+    `
+  });
+}
+
+function openLivePreVoucherModal(userId) {
+  if (currentUser && currentUser.rol === "tecnico" && currentUser.id_usuario !== userId) {
+    showToast("Acceso restringido: solo puedes consultar tu propio pre-voucher.", "warning");
+    return;
+  }
+  const pre = buildLivePreVoucherForUser(userId);
+  if (!pre) return;
+  openDetailedPayrollVoucherModal(pre);
+}
+
+let __lastViewedVoucherObj = null;
+
+function openDetailedPayrollVoucherModal(voucherOrId) {
+  let voucher = null;
+  if (typeof voucherOrId === "string") {
+    voucher = (db.vouchers_nomina || []).find((v) => v.id_voucher === voucherOrId);
+  } else if (voucherOrId && typeof voucherOrId === "object") {
+    voucher = voucherOrId;
+  }
+  if (!voucher) {
+    showToast("Voucher no encontrado.", "error");
+    return;
+  }
+  if (currentUser && currentUser.rol === "tecnico" && voucher.usuario_id !== currentUser.id_usuario) {
+    showToast("Acceso restringido: solo puedes consultar tus propios comprobantes.", "warning");
+    return;
+  }
+
+  __lastViewedVoucherObj = voucher;
+  const isPre = Boolean(voucher.es_prevoucher);
+  const canDelete = Boolean(!isPre && currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller"));
+  const tasaBcv = Number(voucher.tasa_bcv || db.config?.tasaBcv) || 45.80;
+  const totalBs = Number(voucher.monto_pagado || 0) * tasaBcv;
+  const linkedMov = voucher.movimiento_id
+    ? (db.finanzas_movimientos || []).find((m) => m.id_mov === voucher.movimiento_id)
+    : null;
+  const photoUrl = voucher.comprobante_foto || (linkedMov && linkedMov.comprobante_foto) || "";
+  const ordenes = Array.isArray(voucher.ordenes_detalle) ? voucher.ordenes_detalle : [];
+
+  const ordersBreakdownHtml = ordenes.length
+    ? ordenes
+        .map((od) => {
+          const itemsRows = (od.items || [])
+            .map((it) => {
+              const qtyLabel =
+                it.por_unidad || Number(it.cantidad) > 1
+                  ? ` <span class="unit-mode-pill" style="margin-left:4px;">x${Number(it.cantidad) || 1}${it.unidad_label ? " " + escapeHtml(it.unidad_label) : ""} · $${Number(it.pago_unitario || 0).toFixed(2)} c/u</span>`
+                  : "";
+              return `
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid rgba(148,163,184,0.12); font-size:12.5px;">
+                  <div>
+                    <i class="fas fa-check" style="color:#22c55e; font-size:10px; margin-right:6px;"></i>
+                    <strong>${escapeHtml(it.descripcion)}</strong>${qtyLabel}
+                  </div>
+                  <strong style="font-family:'JetBrains Mono',monospace; color:#22c55e; white-space:nowrap;">$${Number(it.monto || 0).toFixed(2)}</strong>
+                </div>
+              `;
+            })
+            .join("");
+
+          return `
+            <div class="voucher-order-block">
+              <div class="voucher-order-head">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <span style="background:rgba(245,223,0,0.16); color:var(--renacer-gold); border:1px solid rgba(245,223,0,0.45); padding:3px 9px; border-radius:8px; font-family:'JetBrains Mono',monospace; font-weight:900; font-size:12px;">
+                    <i class="fas fa-barcode"></i> ORDEN #${escapeHtml(od.codigo_troquel)}
+                  </span>
+                  <strong style="font-size:13px;">${escapeHtml(od.vehiculo || "Motor / Pieza")}</strong>
+                  ${od.tipo_pieza ? `<span style="font-size:11px; color:var(--text-muted);">(${escapeHtml(od.tipo_pieza)})</span>` : ""}
+                </div>
+                <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:13.5px; color:var(--renacer-gold);">
+                  Subtotal Orden: $${Number(od.subtotal_orden || 0).toFixed(2)}
+                </div>
+              </div>
+              <div>${itemsRows}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div style="padding:18px; text-align:center; background:var(--bg-input); border-radius:12px; color:var(--text-muted); font-size:12.5px;">
+        ${
+          Number(voucher.sueldo_base) > 0
+            ? `<i class="fas fa-briefcase" style="color:var(--renacer-gold); margin-right:6px;"></i> Esta liquidación corresponde a <strong>Sueldo Base Semanal de Gerencia</strong> (sin trabajos de destajo adicionales en el período).`
+            : `<i class="fas fa-info-circle" style="margin-right:6px;"></i> Aún no hay trabajos terminados pendientes de liquidación en esta semana.`
+        }
+      </div>`;
+
+  const accountName = voucher.cuenta
+    ? ((getConfiguredBankAccounts().find((b) => b.id === voucher.cuenta) || {}).nombre || voucher.cuenta)
+    : "";
+
+  openModal({
+    title: isPre
+      ? `Pre-Voucher Semanal por Orden — ${voucher.nombre_usuario}`
+      : `Voucher Digital de Nómina — ${voucher.nombre_usuario}`,
+    icon: "fa-receipt",
+    wide: true,
+    body: `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; background:var(--bg-input); border:1.5px solid ${isPre ? "rgba(245,223,0,0.45)" : "rgba(34,197,94,0.45)"}; border-radius:14px; padding:14px 16px; margin-bottom:14px;">
+        <div>
+          <div style="font-size:16px; font-weight:900; color:var(--text-main);">RECTIFICADORA RENACER · JOB 8:7</div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+            Trabajador: <strong style="color:var(--text-main);">${escapeHtml(voucher.nombre_usuario)}</strong> · Período: <strong>${escapeHtml(voucher.periodo_label)}</strong>
+          </div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            Fecha: ${formatDateHuman(voucher.fecha_liquidacion, false)}${!isPre ? ` · Recibo: <code>${escapeHtml(voucher.id_voucher)}</code> · Emitido por: ${escapeHtml(voucher.emitido_por || "Gerencia")}` : ""}
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <span style="display:inline-block; background:${isPre ? "rgba(245,196,0,0.2)" : "#16a34a"}; color:${isPre ? "var(--renacer-gold)" : "#fff"}; font-size:11px; font-weight:900; padding:4px 10px; border-radius:8px; margin-bottom:4px;">
+            ${isPre ? "⏳ PRE-VOUCHER EN CURSO" : "✅ LIQUIDADO Y PAGADO"}
+          </span>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:900; color:#22c55e;">
+            $${Number(voucher.monto_pagado || 0).toFixed(2)}
+          </div>
+          <div style="font-size:11.5px; color:#38bdf8; font-weight:800;">
+            ≈ Bs. ${totalBs.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (BCV ${tasaBcv.toFixed(2)})
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section-box" style="margin-bottom:14px;">
+        <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span><i class="fas fa-layer-group"></i> Desglose de Trabajos Completados (Agrupado Por Orden)</span>
+          <span style="font-size:11.5px; color:var(--text-muted);">${ordenes.length} orden(es) · ${Number(voucher.total_tareas) || 0} trabajo(s)</span>
+        </div>
+        ${ordersBreakdownHtml}
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
+        <div class="form-section-box" style="margin-bottom:0;">
+          <div class="form-section-title"><i class="fas fa-calculator"></i> Resumen de Liquidación</div>
+          <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px;">
+            ${Number(voucher.sueldo_base) > 0 ? `<div style="display:flex; justify-content:space-between;"><span>Sueldo Base Semanal:</span><strong>+$${Number(voucher.sueldo_base).toFixed(2)}</strong></div>` : ""}
+            <div style="display:flex; justify-content:space-between;"><span>Comisiones / Destajo (${Number(voucher.total_tareas) || 0} trab.):</span><strong style="color:#22c55e;">+$${Number(voucher.total_comisiones || 0).toFixed(2)}</strong></div>
+            ${Number(voucher.total_adelantos) > 0 ? `<div style="display:flex; justify-content:space-between;"><span>Adelantos Descontados:</span><strong style="color:#ef4444;">-$${Number(voucher.total_adelantos).toFixed(2)}</strong></div>` : ""}
+            <div style="border-top:1px solid var(--border-subtle); padding-top:6px; margin-top:2px; display:flex; justify-content:space-between; font-size:14px; font-weight:900;">
+              <span>TOTAL ${isPre ? "A LIQUIDAR" : "PAGADO"}:</span>
+              <span style="color:#22c55e; font-family:'JetBrains Mono',monospace;">$${Number(voucher.monto_pagado || 0).toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+        ${
+          !isPre
+            ? `
+          <div class="form-section-box" style="margin-bottom:0;">
+            <div class="form-section-title"><i class="fas fa-money-check-dollar"></i> Soporte de Pago</div>
+            <div style="font-size:12.5px; line-height:1.6;">
+              <div><strong>Método:</strong> ${escapeHtml(voucher.metodo_pago || "-")}</div>
+              ${accountName ? `<div><strong>Cuenta / Caja:</strong> ${escapeHtml(accountName)}</div>` : ""}
+              ${voucher.referencia ? `<div><strong>Referencia:</strong> <code>${escapeHtml(voucher.referencia)}</code></div>` : ""}
+              ${voucher.notas ? `<div><strong>Notas:</strong> ${escapeHtml(voucher.notas)}</div>` : ""}
+            </div>
+            ${
+              photoUrl
+                ? `<div style="margin-top:8px;">
+                     <img src="${photoUrl}" alt="Comprobante de pago" style="max-height:110px; border-radius:8px; border:1.5px solid #22c55e; cursor:zoom-in;" onclick="openPhotoLightbox('${photoUrl}', 'Comprobante Voucher ${escapeHtml(voucher.id_voucher)}')" />
+                   </div>`
+                : ""
+            }
+          </div>
+        `
+            : ""
+        }
+      </div>
+    `,
+    footer: `
+      <div style="display:flex; justify-content:space-between; align-items:center; width:100%; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold" onclick="printPayrollVoucherDocument()">
+            <i class="fas fa-print"></i> Imprimir / Guardar PDF
+          </button>
+          ${
+            canDelete
+              ? `<button type="button" class="btn btn--danger" onclick="deletePayrollVoucher('${voucher.id_voucher}')">
+                   <i class="fas fa-trash-alt"></i> Eliminar Voucher
+                 </button>`
+              : ""
+          }
+        </div>
+        <button type="button" class="btn btn--primary" onclick="closeModal()">Cerrar</button>
+      </div>
+    `
+  });
+}
+
+function printPayrollVoucherDocument(voucherObj) {
+  const v = voucherObj || __lastViewedVoucherObj;
+  if (!v) {
+    showToast("No hay voucher seleccionado para imprimir.", "error");
+    return;
+  }
+  const win = window.open("", "_blank");
+  if (!win) {
+    showToast("Permite las ventanas emergentes para imprimir o guardar el voucher en PDF.", "warning");
+    return;
+  }
+  const tasaBcv = Number(v.tasa_bcv || db.config?.tasaBcv) || 45.80;
+  const totalBs = Number(v.monto_pagado || 0) * tasaBcv;
+  const ordenes = Array.isArray(v.ordenes_detalle) ? v.ordenes_detalle : [];
+
+  const rowsHtml = ordenes.length
+    ? ordenes
+        .map((od) => {
+          const itemLines = (od.items || [])
+            .map((it) => {
+              const qtyTxt = it.por_unidad || Number(it.cantidad) > 1
+                ? ` (x${Number(it.cantidad) || 1}${it.unidad_label ? " " + escapeHtml(it.unidad_label) : ""} · $${Number(it.pago_unitario || 0).toFixed(2)} c/u)`
+                : "";
+              return `<tr>
+                <td style="border:1px solid #cbd5e1; padding:6px 10px;">${escapeHtml(it.descripcion)}${qtyTxt}</td>
+                <td style="border:1px solid #cbd5e1; padding:6px 10px; text-align:right; font-weight:700;">$${Number(it.monto || 0).toFixed(2)}</td>
+              </tr>`;
+            })
+            .join("");
+          return `
+            <div style="margin-bottom:12px; border:1.5px solid #cbd5e1; border-radius:8px; overflow:hidden;">
+              <div style="background:#0f1638; color:#fff; padding:7px 12px; display:flex; justify-content:space-between; font-size:12px; font-weight:800;">
+                <span>ORDEN #${escapeHtml(od.codigo_troquel)} — ${escapeHtml(od.vehiculo || "Pieza de Taller")}</span>
+                <span>Subtotal: $${Number(od.subtotal_orden || 0).toFixed(2)}</span>
+              </div>
+              <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                <tbody>${itemLines}</tbody>
+              </table>
+            </div>
+          `;
+        })
+        .join("")
+    : `<p style="font-size:12px; color:#475569;">Sin órdenes de destajo en este período (Sueldo base o sin trabajos completados).</p>`;
+
+  win.document.write(`
+    <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+    <title>Voucher Nómina ${escapeHtml(v.nombre_usuario)} — ${escapeHtml(v.id_voucher)}</title>
+    <style>
+      body { font-family: 'Segoe UI', Arial, sans-serif; color:#0f172a; margin:22px; font-size:13px; }
+      .head { display:flex; justify-content:space-between; border-bottom:2px solid #0f1638; padding-bottom:10px; margin-bottom:14px; }
+      .tot { background:#f8fafc; border:1.5px solid #0f1638; border-radius:8px; padding:10px 14px; margin-top:12px; }
+      .sigs { display:grid; grid-template-columns:1fr 1fr; gap:30px; margin-top:42px; text-align:center; }
+      .sig { border-top:1px solid #475569; padding-top:6px; font-size:11.5px; font-weight:bold; }
+      @media print { .no-print { display:none !important; } }
+    </style></head><body>
+      <div class="head">
+        <div>
+          <div style="font-size:20px; font-weight:900; color:#0f1638;">RECTIFICADORA RENACER C.A.</div>
+          <div style="font-size:11px; color:#b45309; font-style:italic; font-weight:700;">JOB 8:7 · ${v.es_prevoucher ? "PRE-VOUCHER SEMANAL DE NÓMINA" : "COMPROBANTE OFICIAL DE NÓMINA"}</div>
+        </div>
+        <div style="text-align:right; font-size:12px;">
+          <div><strong>Trabajador:</strong> ${escapeHtml(v.nombre_usuario)}</div>
+          <div><strong>Período:</strong> ${escapeHtml(v.periodo_label)}</div>
+          <div><strong>Fecha:</strong> ${formatDateHuman(v.fecha_liquidacion, false)} · <code>${escapeHtml(v.id_voucher)}</code></div>
+        </div>
+      </div>
+      <h3 style="margin:0 0 10px 0; font-size:13px; text-transform:uppercase; color:#0f1638;">Desglose Detallado por Orden (${ordenes.length} orden/es · ${Number(v.total_tareas) || 0} trabajo/s)</h3>
+      ${rowsHtml}
+      <div class="tot">
+        ${Number(v.sueldo_base) > 0 ? `<div style="display:flex; justify-content:space-between;"><span>Sueldo Base Semanal:</span><strong>+$${Number(v.sueldo_base).toFixed(2)}</strong></div>` : ""}
+        <div style="display:flex; justify-content:space-between;"><span>Total Destajo / Comisiones:</span><strong>+$${Number(v.total_comisiones || 0).toFixed(2)}</strong></div>
+        ${Number(v.total_adelantos) > 0 ? `<div style="display:flex; justify-content:space-between;"><span>Adelantos Descontados:</span><strong>-$${Number(v.total_adelantos).toFixed(2)}</strong></div>` : ""}
+        <div style="display:flex; justify-content:space-between; font-size:16px; font-weight:900; border-top:1.5px solid #cbd5e1; margin-top:6px; padding-top:6px;">
+          <span>TOTAL NETO ${v.es_prevoucher ? "A LIQUIDAR" : "PAGADO"}:</span>
+          <span style="color:#16a34a;">$${Number(v.monto_pagado || 0).toFixed(2)} (Bs. ${totalBs.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+        </div>
+        ${!v.es_prevoucher ? `<div style="font-size:11.5px; color:#475569; margin-top:6px;">Método: ${escapeHtml(v.metodo_pago || "-")} ${v.referencia ? `· Ref: ${escapeHtml(v.referencia)}` : ""} · Emitido por: ${escapeHtml(v.emitido_por || "Gerencia")}</div>` : ""}
+      </div>
+      <div class="sigs">
+        <div class="sig">Firma Gerencia / Jefatura de Taller</div>
+        <div class="sig">Recibí Conforme (${escapeHtml(v.nombre_usuario)})</div>
+      </div>
+      <div class="no-print" style="margin-top:20px; text-align:center;">
+        <button type="button" onclick="window.print()" style="padding:10px 18px; font-weight:800; background:#0f1638; color:#fff; border:none; border-radius:8px; cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+      </div>
+      <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); };</script>
+    </body></html>
+  `);
+  win.document.close();
+}
+
+function deletePayrollVoucher(voucherId, reopenUserId = "") {
+  if (!currentUser || (currentUser.rol !== "admin" && currentUser.rol !== "jefe_taller")) {
+    showToast("Solo Gerencia o Administración puede eliminar vouchers.", "error");
+    return;
+  }
+  const voucher = (db.vouchers_nomina || []).find((v) => v.id_voucher === voucherId);
+  if (!voucher) {
+    showToast("El voucher ya no existe.", "warning");
+    return;
+  }
+
+  Swal.fire({
+    title: `¿Eliminar voucher ${voucher.id_voucher}?`,
+    html: `
+      <div style="text-align:left; font-size:13px;">
+        <p style="margin-bottom:10px;">
+          Trabajador: <strong>${escapeHtml(voucher.nombre_usuario)}</strong><br/>
+          Monto: <strong>$${Number(voucher.monto_pagado || 0).toFixed(2)}</strong> · Fecha: ${formatDateHuman(voucher.fecha_liquidacion, false)}
+        </p>
+        <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); padding:10px; border-radius:10px; font-size:12px;">
+          <input type="checkbox" id="swal-del-voucher-revert" style="margin-top:2px; width:16px; height:16px;" />
+          <span><strong>También revertir el pago:</strong> eliminar el egreso de Caja y devolver sus trabajos a estado <em>"Por Liquidar"</em> (útil si fue una liquidación de prueba o por error).</span>
+        </label>
+      </div>
+    `,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#ef4444",
+    confirmButtonText: "Sí, Eliminar Voucher",
+    cancelButtonText: "Cancelar",
+    preConfirm: () => Boolean(document.getElementById("swal-del-voucher-revert")?.checked)
+  }).then((res) => {
+    if (!res.isConfirmed) return;
+    const shouldRevert = Boolean(res.value);
+    db.vouchers_nomina = (db.vouchers_nomina || []).filter((v) => v.id_voucher !== voucherId);
+
+    if (shouldRevert) {
+      const subIdSet = new Set(Array.isArray(voucher.subtareas_ids) ? voucher.subtareas_ids : []);
+      (db.subtareas || []).forEach((s) => {
+        if (s.id_liquidacion === voucherId || subIdSet.has(s.id_subtarea)) {
+          s.comision_pagada = false;
+          s.id_liquidacion = "";
+        }
+      });
+      if (voucher.movimiento_id) {
+        db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((m) => m.id_mov !== voucher.movimiento_id);
+      }
+    }
+
+    saveDatabase(`Voucher eliminado (${voucher.id_voucher})`);
+    flushCloudPush(true, { reason: `Eliminación de voucher ${voucher.id_voucher}` });
+    if (reopenUserId) {
+      openWorkerVouchersHistoryModal(reopenUserId);
+    } else {
+      closeModal();
+    }
+    renderApp();
+    showToast(
+      shouldRevert
+        ? `Voucher ${voucher.id_voucher} eliminado y pago revertido correctamente.`
+        : `Voucher ${voucher.id_voucher} eliminado del historial.`,
+      "success"
+    );
+  });
+}
+
 function renderWorkerEarningsScreen() {
   const mySubs = db.subtareas.filter((s) => {
     if (s.tecnico_id !== currentUser.id_usuario) return false;
@@ -12209,29 +13096,14 @@ function renderWorkerEarningsScreen() {
     return true;
   });
   const doneSubs = mySubs.filter((s) => s.estado_subtarea === "terminado");
-  const totalEarned = doneSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+  const unpaidDoneSubs = doneSubs.filter((s) => !s.comision_pagada);
+  const totalEarnedPending = unpaidDoneSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
   const totalMinutes = mySubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
-
-  // Cálculo dinámico del ciclo semanal de Lunes a Domingo (Corte Domingo)
-  const nowW = new Date();
-  const curDay = nowW.getDay() || 7;
-  const monD = new Date(nowW);
-  monD.setDate(nowW.getDate() - curDay + 1);
-  const sunD = new Date(monD);
-  sunD.setDate(monD.getDate() + 6);
-  const fmtD = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-  const curWeekLabel = `${fmtD(monD)} - ${fmtD(sunD)}`;
-
-  const prevMonD = new Date(monD);
-  prevMonD.setDate(monD.getDate() - 7);
-  const prevSunD = new Date(prevMonD);
-  prevSunD.setDate(prevMonD.getDate() + 6);
-  const prevWeekLabel = `${fmtD(prevMonD)} - ${fmtD(prevSunD)}`;
 
   return `
     <div style="background:var(--bg-card); border-radius:18px; padding:20px; border:1px solid var(--border-subtle); margin-bottom:18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
-        <h2 style="font-size:20px; font-weight:900;"><i class="fas fa-hand-holding-dollar" style="color:var(--renacer-gold);"></i> Mi Ficha de Producción y Comisiones — ${currentUser.nombre}</h2>
+        <h2 style="font-size:20px; font-weight:900;"><i class="fas fa-hand-holding-dollar" style="color:var(--renacer-gold);"></i> Mi Ficha de Producción y Comisiones — ${escapeHtml(currentUser.nombre)}</h2>
         <p style="font-size:13px; color:var(--text-muted);">
           Relación de piezas trabajadas por número de Troquel, tiempo invertido en cada pieza y comisiones por destajo.
         </p>
@@ -12242,8 +13114,8 @@ function renderWorkerEarningsScreen() {
           <strong style="font-family:'JetBrains Mono',monospace; font-size:20px;">${formatMinutes(totalMinutes)}</strong>
         </div>
         <div style="text-align:right;">
-          <span style="font-size:11px; color:var(--text-muted); font-weight:800; display:block;">TOTAL GANADO (TERMINADOS)</span>
-          <strong style="font-family:'JetBrains Mono',monospace; font-size:26px; font-weight:900; color:#16a34a;">$${totalEarned.toFixed(2)}</strong>
+          <span style="font-size:11px; color:var(--text-muted); font-weight:800; display:block;">POR LIQUIDAR (TERMINADOS)</span>
+          <strong style="font-family:'JetBrains Mono',monospace; font-size:26px; font-weight:900; color:#16a34a;">$${totalEarnedPending.toFixed(2)}</strong>
         </div>
       </div>
     </div>
@@ -12261,34 +13133,41 @@ function renderWorkerEarningsScreen() {
           </tr>
         </thead>
         <tbody>
-          ${mySubs
-            .map((s) => {
-              const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
-              return `
-                <tr>
-                  <td>
-                    ${renderClickableTroquelBadge(ord ? ord.id_orden : s.orden_id, "TROQUEL #")}
-                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${ord ? `${ord.datos_motor.marca} ${ord.datos_motor.modelo}` : ""}</div>
-                  </td>
-                  <td>${escapeHtml(formatSubtaskDisplayLabel(s))}</td>
-                  <td>${formatDateHuman(s.fecha_terminado || (ord && ord.fecha_ingreso), false)}</td>
-                  <td><span data-live-subtask-id="${s.id_subtarea}">${formatLiveSubtaskTimer(s)}</span></td>
-                  <td><span class="state-badge ${s.estado_subtarea === "terminado" ? "state-badge--done" : "state-badge--wait"}">${s.estado_subtarea.toUpperCase()}</span></td>
-                  <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">$${Number(s.comision_base_tecnico).toFixed(2)}</td>
-                </tr>
-              `;
-            })
-            .join("")}
+          ${
+            mySubs.length
+              ? mySubs
+                  .map((s) => {
+                    const ord = db.ordenes.find((o) => o.id_orden === s.orden_id);
+                    return `
+                      <tr>
+                        <td>
+                          ${renderClickableTroquelBadge(ord ? ord.id_orden : s.orden_id, "TROQUEL #")}
+                          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${ord ? `${escapeHtml(ord.datos_motor.marca)} ${escapeHtml(ord.datos_motor.modelo)}` : ""}</div>
+                        </td>
+                        <td>${escapeHtml(formatSubtaskDisplayLabel(s))}</td>
+                        <td>${formatDateHuman(s.fecha_terminado || (ord && ord.fecha_ingreso), false)}</td>
+                        <td><span data-live-subtask-id="${s.id_subtarea}">${formatLiveSubtaskTimer(s)}</span></td>
+                        <td>
+                          <span class="state-badge ${s.estado_subtarea === "terminado" ? "state-badge--done" : "state-badge--wait"}">${s.estado_subtarea.toUpperCase()}</span>
+                          ${s.comision_pagada ? `<span class="state-badge state-badge--done" style="margin-left:4px; font-size:10px;">LIQUIDADO</span>` : ""}
+                        </td>
+                        <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">$${Number(s.comision_base_tecnico).toFixed(2)}</td>
+                      </tr>
+                    `;
+                  })
+                  .join("")
+              : `<tr><td colspan="6" style="text-align:center; padding:20px; color:var(--text-muted);">Aún no tienes trabajos registrados en ejecución o terminados.</td></tr>`
+          }
         </tbody>
       </table>
     </div>
 
-    <!-- SECCIÓN DE HISTORIAL DE VOUCHERS Y LIQUIDACIONES DE NÓMINA SEMANAL -->
+    <!-- SECCIÓN REAL DE HISTORIAL DE VOUCHERS Y LIQUIDACIONES DE NÓMINA SEMANAL (SIN FILAS DEMO) -->
     <div style="margin-top:24px; background:var(--bg-card); border-radius:18px; padding:20px; border:1px solid var(--border-subtle);">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
         <div>
           <span style="font-size:11px; font-weight:900; color:var(--renacer-gold); text-transform:uppercase;">
-            <i class="fas fa-file-invoice-dollar"></i> NÓMINA POR DESTAJO SEMANAL
+            <i class="fas fa-file-invoice-dollar"></i> NÓMINA POR DESTAJO SEMANAL (DETALLE POR ORDEN)
           </span>
           <h3 style="font-size:17px; font-weight:900; margin-top:2px;">
             Historial de Vouchers y Liquidaciones de Nómina Semanal
@@ -12299,93 +13178,33 @@ function renderWorkerEarningsScreen() {
         </div>
       </div>
 
-      <div class="data-table-wrapper">
-        <table class="renacer-table">
-          <thead>
-            <tr>
-              <th>Semana / Período</th>
-              <th>Piezas y Troqueles</th>
-              <th>Subtareas Realizadas</th>
-              <th>Total Ganado</th>
-              <th>Estatus de Pago</th>
-              <th style="text-align:right;">Comprobante</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>
-                <strong>Semana Actual</strong>
-                <div style="font-size:11px; color:var(--text-muted);">${curWeekLabel}</div>
-              </td>
-              <td>${doneSubs.length ? doneSubs.map(s => { const o = db.ordenes.find(ord => ord.id_orden === s.orden_id); return o ? renderClickableTroquelBadge(o.id_orden, "#") : ''; }).filter(Boolean).join(' ') : 'En curso'}</td>
-              <td><strong>${doneSubs.length} subtareas</strong> terminadas</td>
-              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
-                $${totalEarned.toFixed(2)}
-              </td>
-              <td>
-                <span style="font-size:11px; font-weight:800; background:rgba(245,196,0,0.15); color:var(--renacer-gold); padding:3px 8px; border-radius:6px;">
-                  <i class="fas fa-hourglass-half"></i> En Curso (Corte Domingo)
-                </span>
-              </td>
-              <td style="text-align:right;">
-                <button type="button" class="btn btn--gold btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Actual (${curWeekLabel})', ${totalEarned}, ${doneSubs.length})">
-                  <i class="fas fa-receipt"></i> Ver Pre-Voucher
-                </button>
-              </td>
-            </tr>
-            <tr>
-              <td>
-                <strong>Semana Anterior</strong>
-                <div style="font-size:11px; color:var(--text-muted);">${prevWeekLabel}</div>
-              </td>
-              <td>${renderClickableTroquelBadge("1548", "#")}</td>
-              <td><strong>Trabajos completados</strong></td>
-              <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a; font-size:14px;">
-                $${totalEarned > 0 ? totalEarned.toFixed(2) : "35.00"}
-              </td>
-              <td>
-                <span style="font-size:11px; font-weight:800; background:rgba(34,197,94,0.15); color:#22c55e; padding:3px 8px; border-radius:6px;">
-                  <i class="fas fa-check-circle"></i> Liquidado y Pagado
-                </span>
-              </td>
-              <td style="text-align:right;">
-                <button type="button" class="btn btn--ghost btn--xs" onclick="openWorkerPayrollVoucherModal('${currentUser.nombre}', 'Semana Anterior (${prevWeekLabel})', ${totalEarned > 0 ? totalEarned : 35.00}, ${doneSubs.length || 7})">
-                  <i class="fas fa-file-invoice"></i> Ver Recibo
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      ${renderUserVouchersHistorySectionHtml(currentUser.id_usuario, {
+        allowDelete: currentUser.rol === "admin" || currentUser.rol === "jefe_taller"
+      })}
     </div>
   `;
 }
 
+// Retrocompatibilidad segura: redirige al nuevo Voucher Detallado por Orden
 function openWorkerPayrollVoucherModal(workerName, period, amount, taskCount) {
-  Swal.fire({
-    title: `<strong style="font-size:17px; color:#0f1638;">VOUCHER DIGITAL DE NÓMINA DESTAJO</strong>`,
-    html: `
-      <div style="text-align:left; font-size:13px; color:#1e293b; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:12px; padding:16px; margin-top:8px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #e2e8f0; padding-bottom:8px; margin-bottom:12px;">
-          <div>
-            <strong style="font-size:15px; color:#0f1638;">RECTIFICADORA RENACER</strong>
-            <div style="font-size:11px; color:#64748b;">JOB 8:7 · SISTEMA DE TALLER</div>
-          </div>
-          <span style="background:#22c55e; color:#fff; font-size:11px; font-weight:800; padding:3px 8px; border-radius:6px;">CERTIFICADO</span>
-        </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
-          <div><strong style="color:#64748b; font-size:11px;">TÉCNICO:</strong><br><strong style="font-size:13px;">${workerName}</strong></div>
-          <div><strong style="color:#64748b; font-size:11px;">PERÍODO:</strong><br><span>${period}</span></div>
-          <div><strong style="color:#64748b; font-size:11px;">TAREAS TERMINADAS:</strong><br><span>${taskCount} trabajos</span></div>
-          <div><strong style="color:#64748b; font-size:11px;">TOTAL A LIQUIDAR:</strong><br><strong style="font-size:18px; color:#16a34a; font-family:'JetBrains Mono',monospace;">$${Number(amount).toFixed(2)}</strong></div>
-        </div>
-        <div style="border-top:1px dashed #cbd5e1; padding-top:10px; font-size:11px; color:#64748b; text-align:center;">
-          Liquidación de destajo avalada por Dirección (Moisés González) y Jefatura de Taller (Jesús Andrade).
-        </div>
-      </div>
-    `,
-    confirmButtonText: "Entendido",
-    confirmButtonColor: "#f5c400"
+  const user = (db.usuarios || []).find((u) => u.nombre === workerName) || currentUser;
+  if (user) {
+    openLivePreVoucherModal(user.id_usuario);
+    return;
+  }
+  openDetailedPayrollVoucherModal({
+    id_voucher: "VCH-VIEW",
+    es_prevoucher: true,
+    usuario_id: "",
+    nombre_usuario: workerName || "Trabajador",
+    fecha_liquidacion: new Date().toISOString().slice(0, 10),
+    periodo_label: period || "Semana Actual",
+    sueldo_base: 0,
+    total_comisiones: Number(amount) || 0,
+    total_adelantos: 0,
+    monto_pagado: Number(amount) || 0,
+    total_tareas: Number(taskCount) || 0,
+    ordenes_detalle: []
   });
 }
 
@@ -12766,6 +13585,9 @@ function renderCommissionsAndStaffScreen() {
               <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal('${t.id_usuario}')">
                 <i class="fas fa-clipboard-list"></i> Ficha / Trabajos y Tiempos
               </button>
+              <button type="button" class="btn btn--gold" style="padding:5px 9px; font-size:11.5px;" onclick="openWorkerVouchersHistoryModal('${t.id_usuario}')" title="Ver Pre-Voucher semanal y recibos de pago por orden">
+                <i class="fas fa-receipt"></i> Vouchers${(() => { const c = (db.vouchers_nomina || []).filter((v) => v.usuario_id === t.id_usuario).length; return c > 0 ? ` (${c})` : ""; })()}
+              </button>
               <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${t.id_usuario}')" title="Editar nombre, especialidad, teléfono o PIN">
                 <i class="fas fa-edit"></i> Editar
               </button>
@@ -12829,6 +13651,9 @@ function renderCommissionsAndStaffScreen() {
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
               <button type="button" class="btn btn--primary" style="padding:5px 10px; font-size:11.5px;" onclick="openWorkerProfileModal('${w.id_usuario}')">
                 <i class="fas fa-list-check"></i> Ficha / Trabajos Tercerizados
+              </button>
+              <button type="button" class="btn btn--gold" style="padding:5px 9px; font-size:11.5px;" onclick="openWorkerVouchersHistoryModal('${w.id_usuario}')" title="Ver vouchers y recibos de pago por orden">
+                <i class="fas fa-receipt"></i> Vouchers${(() => { const c = (db.vouchers_nomina || []).filter((v) => v.usuario_id === w.id_usuario).length; return c > 0 ? ` (${c})` : ""; })()}
               </button>
               <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${w.id_usuario}')" title="Editar taller aliado">
                 <i class="fas fa-edit"></i> Editar
@@ -13046,6 +13871,9 @@ function renderCommissionsAndStaffScreen() {
             </button>
             <button type="button" class="btn btn--ghost btn--xs" style="flex:1;" onclick="openRegisterPartnerAdvanceModal('${p.user.id_usuario}')">
               <i class="fas fa-minus-circle"></i> Retiro
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1; color:var(--renacer-gold); border-color:rgba(245,223,0,0.4);" onclick="openWorkerVouchersHistoryModal('${p.user.id_usuario}')" title="Ver historial de vouchers y pre-voucher semanal">
+              <i class="fas fa-receipt"></i> Vouchers
             </button>
             ${
               p.payrollActive || p.totalExtras > 0
@@ -13276,9 +14104,28 @@ function confirmLiquidateExternalWorkshop(workshopId) {
     return;
   }
 
-  // 1. Asentar Egreso en Libro Diario
+  // 1. Recolectar subtareas completadas y generar Voucher oficial por orden
   const movId = "FIN-" + Date.now();
   const now = new Date().toISOString().slice(0, 10);
+  const pendingSubs = db.subtareas.filter(
+    (s) => s.tecnico_id === workshopId && s.estado_subtarea === "terminado" && !s.comision_pagada
+  );
+  const voucher = createAndSavePayrollVoucher({
+    user: ws,
+    subtasksPaid: pendingSubs,
+    sueldoBase: 0,
+    totalComisiones: amount,
+    totalAdelantos: 0,
+    montoPagado: amount,
+    metodoPago: method,
+    cuenta: method === "efectivo" ? "efectivo" : "mercantil",
+    referencia: ref,
+    comprobanteFoto: "",
+    movimientoId: movId,
+    notas: notes
+  });
+
+  // 2. Asentar Egreso en Libro Diario
   db.finanzas_movimientos.unshift({
     id_mov: movId,
     fecha: now,
@@ -13288,26 +14135,24 @@ function confirmLiquidateExternalWorkshop(workshopId) {
     metodo: method,
     cuenta: method === "efectivo" ? "efectivo" : "mercantil",
     referencia: ref,
-    concepto: "Pago por trabajos tercerizados a " + ws.nombre + ". " + notes,
+    concepto: `Pago por trabajos tercerizados a ${ws.nombre} (Voucher ${voucher.id_voucher}). ${notes}`,
     registrado_por: currentUser ? currentUser.nombre : "Sistema",
     comprobante_foto: "",
     orden_id: "OUTSOURCING",
     codigo_troquel: "-"
   });
 
-  // 2. Marcar subtareas completadas como pagadas
-  const pendingSubs = db.subtareas.filter(
-    (s) => s.tecnico_id === workshopId && s.estado_subtarea === "terminado" && !s.comision_pagada
-  );
+  // 3. Marcar subtareas completadas como pagadas y vincular al voucher
   pendingSubs.forEach((s) => {
     s.comision_pagada = true;
     s.fecha_pago_comision = now;
+    s.id_liquidacion = voucher.id_voucher;
   });
 
-  saveDatabase();
+  saveDatabase(`Liquidación taller aliado ${ws.nombre}`);
   closeModal();
   renderApp();
-  showToast("Pago de $" + amount.toFixed(2) + " a " + ws.nombre + " registrado como Egreso en el Libro Diario.");
+  showToast("Pago de $" + amount.toFixed(2) + " a " + ws.nombre + " registrado con Voucher " + voucher.id_voucher + ".", "success");
 }
 
 /* ---------- FICHA COMPLETA DEL TRABAJADOR (HISTORIAL DE PIEZAS, TIEMPOS Y AJUSTE DE COMISIÓN) ---------- */
@@ -13444,6 +14289,19 @@ function openWorkerProfileModal(techId) {
         </div>
       </div>
 
+      <div class="form-section-box" style="border-color:rgba(245,223,0,0.4);">
+        <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span><i class="fas fa-file-invoice-dollar" style="color:var(--renacer-gold);"></i> Vouchers Semanales y Liquidaciones de Nómina (Por Orden)</span>
+          <button type="button" class="btn btn--gold btn--xs" onclick="openLivePreVoucherModal('${tech.id_usuario}')">
+            <i class="fas fa-receipt"></i> Ver Pre-Voucher Semanal
+          </button>
+        </div>
+        ${renderUserVouchersHistorySectionHtml(tech.id_usuario, {
+          allowDelete: currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller"),
+          reopenUserId: tech.id_usuario
+        })}
+      </div>
+
       <div class="form-section-box" style="margin-bottom:0;">
         <div class="form-section-title"><i class="fas fa-calendar-alt"></i> Fechas Activas y Proyectos Trabajados</div>
         <div style="max-height:150px; overflow-y:auto;">
@@ -13457,7 +14315,7 @@ function openWorkerProfileModal(techId) {
       </button>
       ${
         unpaidDone > 0
-          ? `<button type="button" class="btn btn--success btn--lg" onclick="payTechnicianWeeklyCommission('${tech.id_usuario}', ${unpaidDone}); closeModal();">
+          ? `<button type="button" class="btn btn--success btn--lg" onclick="openLiquidateWorkerModal('${tech.id_usuario}', ${unpaidDone})">
               <i class="fas fa-hand-holding-usd"></i> Liquidar Comisiones Terminadas ($${unpaidDone.toFixed(2)})
             </button>`
           : ""
@@ -13522,6 +14380,34 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
   const amountBs = amountUsd * tasaBcv;
 
   const unpaidSubs = db.subtareas.filter((s) => s.tecnico_id === techId && s.estado_subtarea === "terminado" && !s.comision_pagada);
+  const groupedOrders = groupSubtasksByOrderForVoucher(unpaidSubs);
+  const groupedOrdersPreviewHtml = groupedOrders.length
+    ? `
+      <div class="form-section-box" style="margin-top:10px; margin-bottom:10px; border-color:rgba(245,223,0,0.35);">
+        <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span><i class="fas fa-layer-group"></i> Desglose de Órdenes Incluidas en este Voucher (${groupedOrders.length} orden/es)</span>
+          <span style="font-size:11px; color:var(--text-muted);">${unpaidSubs.length} trabajo(s)</span>
+        </div>
+        <div style="max-height:170px; overflow-y:auto;">
+          ${groupedOrders
+            .map(
+              (od) => `
+              <div style="padding:7px 10px; border-bottom:1px dashed var(--border-subtle); font-size:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; font-weight:800;">
+                  <span><strong style="color:var(--renacer-gold);">ORDEN #${escapeHtml(od.codigo_troquel)}</strong> · ${escapeHtml(od.vehiculo)}</span>
+                  <span style="font-family:'JetBrains Mono',monospace; color:#22c55e;">$${Number(od.subtotal_orden || 0).toFixed(2)}</span>
+                </div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                  ${(od.items || []).map((it) => `${escapeHtml(it.descripcion)}${Number(it.cantidad) > 1 ? ` (x${it.cantidad})` : ""} ($${Number(it.monto || 0).toFixed(2)})`).join(" · ")}
+                </div>
+              </div>
+            `
+            )
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
 
   openModal({
     title: `Liquidación de Nómina / Salario por Destajo — ${tech.nombre}`,
@@ -13533,20 +14419,22 @@ function openLiquidateWorkerModal(techId, suggestedAmount) {
           <i class="fas fa-hand-holding-usd"></i> Registro de Egreso de Caja por Pago de Salario / Comisiones
         </div>
         <div style="font-size:12px; color:var(--text-secondary); margin-top:3px;">
-          El pago de nómina constituye un gasto operativo que se registra automáticamente en el Libro Diario como <strong>Egreso</strong>. Es obligatorio o altamente recomendado adjuntar el registro fotográfico de los billetes entregados o captura de Pago Móvil para el arqueo de caja.
+          El pago de nómina constituye un gasto operativo que se registra automáticamente en el Libro Diario como <strong>Egreso</strong> y genera el <strong>Voucher Oficial Por Orden</strong> en el historial del trabajador.
         </div>
       </div>
 
       <div class="form-grid-2">
         <div class="form-field">
           <label>Trabajador / Técnico</label>
-          <input type="text" value="${tech.nombre} (${tech.especialidad || 'Técnico Rectificador'})" readonly style="background:var(--bg-card); font-weight:700;" />
+          <input type="text" value="${escapeHtml(tech.nombre)} (${escapeHtml(tech.especialidad || 'Técnico Rectificador')})" readonly style="background:var(--bg-card); font-weight:700;" />
         </div>
         <div class="form-field">
-          <label>Subtareas Terminadas por Liquidar</label>
-          <input type="text" value="${unpaidSubs.length} pieza(s) / labor(es) finalizadas" readonly style="background:var(--bg-card); font-weight:700;" />
+          <label>Órdenes / Trabajos por Liquidar</label>
+          <input type="text" value="${groupedOrders.length} orden(es) · ${unpaidSubs.length} labor(es) finalizadas" readonly style="background:var(--bg-card); font-weight:700;" />
         </div>
       </div>
+
+      ${groupedOrdersPreviewHtml}
 
       <div class="form-grid-2" style="margin-top:10px;">
         <div class="form-field">
@@ -13638,29 +14526,47 @@ function confirmWorkerLiquidation(techId) {
   };
   const methodName = methodNames[method] || method;
 
-  // Marcar subtareas terminadas como pagadas
-  let countSubs = 0;
-  db.subtareas.forEach((s) => {
-    if (s.tecnico_id === techId && s.estado_subtarea === "terminado" && !s.comision_pagada) {
-      s.comision_pagada = true;
-      s.fecha_pago_comision = new Date().toISOString().slice(0, 10);
-      countSubs++;
-    }
-  });
-
   const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const movId = "MOV-" + Date.now();
+
+  // Recolectar subtareas terminadas pendientes y generar Voucher oficial agrupado por orden
+  const subsToPay = db.subtareas.filter(
+    (s) => s.tecnico_id === techId && s.estado_subtarea === "terminado" && !s.comision_pagada
+  );
+  const countSubs = subsToPay.length;
+  const voucher = createAndSavePayrollVoucher({
+    user: tech,
+    subtasksPaid: subsToPay,
+    sueldoBase: 0,
+    totalComisiones: amount,
+    totalAdelantos: 0,
+    montoPagado: amount,
+    metodoPago: methodName,
+    cuenta,
+    referencia: ref || "S/R",
+    comprobanteFoto: currentWorkerLiquidationPhoto || "",
+    movimientoId: movId,
+    notas: `${countSubs} trabajo(s) liquidado(s)`
+  });
+
+  // Marcar subtareas terminadas como pagadas y vincular al voucher
+  subsToPay.forEach((s) => {
+    s.comision_pagada = true;
+    s.fecha_pago_comision = dateStr;
+    s.id_liquidacion = voucher.id_voucher;
+  });
 
   // Asentar Egreso en Finanzas / Libro Diario
   db.finanzas_movimientos.unshift({
-    id_mov: "MOV-" + Date.now(),
+    id_mov: movId,
     fecha: dateStr,
     hora: timeStr,
     tipo: "egreso",
     categoria: "Pago de Nómina / Comisiones",
-    concepto: `Liquidación de nómina a ${tech.nombre} (${countSubs} subtarea/s finalizadas) · ${methodName}`,
+    concepto: `Liquidación de nómina a ${tech.nombre} (${countSubs} subtarea/s finalizadas · Voucher ${voucher.id_voucher}) · ${methodName}`,
     monto: amount,
     monto_bs: amount * tasaBcv,
     tasa_bcv: tasaBcv,
@@ -13674,14 +14580,14 @@ function confirmWorkerLiquidation(techId) {
   // Notificación Push
   sendPushNotification(
     "Nómina / Salario Liquidado",
-    `Se asentó el egreso de $${amount.toFixed(2)} pagados a ${tech.nombre} (${methodName}).`,
+    `Se asentó el egreso de $${amount.toFixed(2)} pagados a ${tech.nombre} (${methodName}). Voucher ${voucher.id_voucher}.`,
     "finanzas"
   );
 
-  saveDatabase();
+  saveDatabase(`Liquidación nómina ${tech.nombre}`);
   closeModal();
   renderApp();
-  showToast(`Liquidación de $${amount.toFixed(2)} asentada como egreso a nombre de ${tech.nombre}.`);
+  showToast(`Liquidación de $${amount.toFixed(2)} asentada y Voucher ${voucher.id_voucher} generado para ${tech.nombre}.`, "success");
 }
 
 function payTechnicianWeeklyCommission(techId, amount) {
@@ -16185,8 +17091,8 @@ function openEditCompleteOrderModal(orderId) {
     .join("");
 
   openModal({
-    title: `Modificar Orden #${order.codigo_troquel} (Edición Completa)`,
-    icon: "fa-edit",
+    title: `Modificar Factura / Orden #${order.codigo_troquel} (Edición Completa)`,
+    icon: "fa-file-pen",
     wide: true,
     body: `
       <form id="form-edit-complete-order" onsubmit="event.preventDefault(); saveEditedCompleteOrder('${order.id_orden}');">
@@ -16202,7 +17108,7 @@ function openEditCompleteOrderModal(orderId) {
           <div class="form-grid-3">
             <div class="form-field">
               <label>Código de Troquel *</label>
-              <input type="text" id="edit-ord-troquel" value="${order.codigo_troquel}" required style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:#0f1638;" />
+              <input type="text" id="edit-ord-troquel" value="${order.codigo_troquel}" required style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--renacer-gold);" />
             </div>
             <div class="form-field">
               <label>Fase / Estado del Proceso *</label>
@@ -16293,7 +17199,7 @@ function openEditCompleteOrderModal(orderId) {
           <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
             <span><i class="fas fa-receipt"></i> 3. Servicios Facturados al Cliente (Lista A)</span>
             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              <button type="button" class="btn btn--ghost btn--xs" onclick="closeModal(); openSubtaskAssignmentModal('${order.id_orden}');" title="Abrir Matriz independiente de trabajos de destajo">
+              <button type="button" class="btn btn--ghost btn--xs" onclick="saveEditedOrderAndOpenDestajo('${order.id_orden}')" title="Guardar factura y abrir Matriz independiente de trabajos de destajo">
                 <i class="fas fa-hammer"></i> Matriz de Destajo
               </button>
               <button type="button" class="btn btn--gold btn--xs" onclick="addCustomServiceToEditOrder()">
@@ -16782,6 +17688,20 @@ function saveEditedCompleteOrder(orderId) {
   closeModal();
   renderApp();
   showToast(`Orden #${troquel} actualizada correctamente.`);
+}
+
+function saveEditedOrderAndOpenDestajo(orderId) {
+  const troquel = (document.getElementById("edit-ord-troquel")?.value || "").trim();
+  const cliName = (document.getElementById("edit-cli-name")?.value || "").trim();
+  const cliDoc = (document.getElementById("edit-cli-doc")?.value || "").trim();
+  const marca = (document.getElementById("edit-ord-marca")?.value || "").trim();
+  const modelo = (document.getElementById("edit-ord-modelo")?.value || "").trim();
+  if (troquel && cliName && cliDoc && marca && modelo) {
+    saveEditedCompleteOrder(orderId);
+  } else {
+    closeModal();
+  }
+  openSubtaskAssignmentModal(orderId);
 }
 
 function cancelOrArchiveFromEditModal(orderId) {
