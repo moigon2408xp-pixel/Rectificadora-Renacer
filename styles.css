@@ -1631,12 +1631,12 @@ body {
   color: var(--renacer-gold);
 }
 
-/* Toast Notification */
+/* Toast Notification (v41: siempre por encima de modales y alertas) */
 .renacer-toast {
   position: fixed;
-  bottom: 82px;
+  bottom: 24px;
   right: 20px;
-  z-index: 500;
+  z-index: 260000;
   background: #182254;
   color: #ffffff;
   border-left: 5px solid var(--renacer-gold);
@@ -1644,8 +1644,45 @@ body {
   border-radius: 12px;
   font-size: 13.5px;
   font-weight: 700;
-  box-shadow: var(--shadow-lg);
+  max-width: min(440px, calc(100vw - 32px));
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
   transition: all 0.25s ease;
+}
+.renacer-toast--error {
+  background: #7f1d1d;
+  border-left-color: #ef4444;
+}
+.renacer-toast--warning {
+  background: #78350f;
+  border-left-color: #f59e0b;
+}
+.renacer-toast--info {
+  background: #0c4a6e;
+  border-left-color: #38bdf8;
+}
+.renacer-toast--success {
+  background: #14532d;
+  border-left-color: #22c55e;
+}
+.voucher-order-block {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+[data-theme="light"] .voucher-order-block {
+  background: #f8fafc;
+}
+.voucher-order-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border-subtle);
 }
 
 
