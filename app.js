@@ -37,11 +37,21 @@ let hasUnsyncedLocalChanges = Boolean(localStorage.getItem(DIRTY_FLAG_KEY));
 let lastKnownCloudRevision = Number(localStorage.getItem(CLOUD_REV_KEY) || "0") || 0;
 let cloudBackupsSupported = false;
 let cloudDedicatedTabsSupported = false;
+let cloudTurboSyncSupported = false;
+let lastSyncedTabHashes = {};
 let lastLocalBackupSaveTs = 0;
 let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
+let lastCloudPullDoneTs = 0;
+let cloudPushConsecutiveFailures = 0;
+let lastCloudSyncError = "";
+let lastCloudPushDurationMs = 0;
+let lastCloudPayloadKb = 0;
+let lastCloudWrittenTabsCount = 0;
+let photoMigrationInProgress = false;
+let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.23.v43";
+const CURRENT_APP_VERSION = "2026.11.23.v44";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -2194,6 +2204,192 @@ function hydrateDatabaseFromSheets(cloudData) {
   });
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 28000) {
+  if (typeof AbortController === "undefined") {
+    return await fetch(url, options);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(`Tiempo de espera agotado (${Math.round(timeoutMs / 1000)}s) al conectar con Google Sheets`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function computeFastStringHash(str) {
+  const s = String(str || "");
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0") + "_" + s.length;
+}
+
+function computeTabPayloadHash(tabName, arr) {
+  if (!Array.isArray(arr)) return "empty";
+  let normalized = arr;
+  if (tabName === "ordenes") {
+    normalized = arr.map((r) => {
+      if (!r || typeof r !== "object") return r;
+      const { ultima_actualizacion, ...rest } = r;
+      return rest;
+    });
+  } else if (tabName === "config_sistema") {
+    normalized = arr.map((r) => ({ clave: r && r.clave, valor_json: r && r.valor_json }));
+  } else if (tabName === "bitacora") {
+    normalized = arr.map((r) => {
+      if (!r || typeof r !== "object") return r;
+      if (r.id_mensaje === "SYS-META-STATE" || r.orden_id === "__SYSTEM__") {
+        return { id_mensaje: r.id_mensaje, orden_id: r.orden_id, mensaje: r.mensaje };
+      }
+      return r;
+    });
+  }
+  return computeFastStringHash(JSON.stringify(normalized));
+}
+
+function computeAllTabHashes(payloadObj) {
+  const hashes = {};
+  if (!payloadObj || typeof payloadObj !== "object") return hashes;
+  Object.keys(payloadObj).forEach((k) => {
+    if (Array.isArray(payloadObj[k])) {
+      hashes[k] = computeTabPayloadHash(k, payloadObj[k]);
+    }
+  });
+  return hashes;
+}
+
+function countInlineBase64PhotosInDb(sourceDb) {
+  const d = sourceDb || db || {};
+  let count = 0;
+  let totalBytes = 0;
+  const check = (val) => {
+    if (typeof val === "string" && val.startsWith("data:image") && val.length >= 8000) {
+      count++;
+      totalBytes += val.length;
+    }
+  };
+  (d.ordenes || []).forEach((o) => {
+    if (!o) return;
+    (Array.isArray(o.galeria_fotos_pieza) ? o.galeria_fotos_pieza : []).forEach(check);
+    (Array.isArray(o.galeria_fotos_repuestos) ? o.galeria_fotos_repuestos : []).forEach(check);
+    check(o.comprobante_pago_foto);
+    check(o.foto_entrega_final);
+  });
+  (d.subtareas || []).forEach((s) => {
+    if (!s) return;
+    check(s.foto_terminado_url || s.foto_evidencia_terminado);
+  });
+  (d.bitacora || []).forEach((b) => {
+    if (!b) return;
+    check(b.foto_adjunta_url);
+  });
+  (d.finanzas_movimientos || []).forEach((m) => {
+    if (!m) return;
+    check(m.comprobante_foto || m.soporte_foto);
+  });
+  (d.inventario_repuestos || []).forEach((r) => {
+    if (!r) return;
+    check(r.foto || r.foto_url);
+  });
+  (d.vouchers_nomina || []).forEach((v) => {
+    if (!v) return;
+    check(v.comprobante_foto);
+  });
+  return { count, totalKb: Math.round(totalBytes / 1024) };
+}
+
+async function uploadImageDataUrlToDrive(dataUrl, fileNamePrefix = "evidencia", timeoutMs = 15000) {
+  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image")) return dataUrl;
+  if (!GAS_API_URL || (typeof navigator !== "undefined" && navigator.onLine === false)) return dataUrl;
+  try {
+    const fileName = `${fileNamePrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`;
+    const res = await fetchWithTimeout(
+      GAS_API_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          action: "upload_photo",
+          base64: dataUrl,
+          fileName
+        })
+      },
+      timeoutMs
+    );
+    const json = await res.json();
+    if (json && json.success && json.data && json.data.url) {
+      return String(json.data.url);
+    }
+  } catch (err) {
+    console.warn("Subida directa a Drive no disponible (se usará copia local comprimida):", err);
+  }
+  return dataUrl;
+}
+
+async function runCloudPhotoMigration(interactive = false) {
+  if (!GAS_API_URL || photoMigrationInProgress) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    if (interactive) showToast("Sin conexión a internet para optimizar fotos.", "error");
+    return false;
+  }
+  photoMigrationInProgress = true;
+  let totalMigrated = 0;
+  let totalUploaded = 0;
+  let remaining = 0;
+  try {
+    if (interactive) {
+      showToast("Optimizando fotos antiguas a Google Drive para acelerar la nube...", "info");
+    }
+    for (let round = 0; round < 12; round++) {
+      if (hasUnsyncedLocalChanges || cloudPushInFlight) break;
+      const res = await fetchWithTimeout(
+        GAS_API_URL,
+        {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ action: "migrate_photos_batch", limit: 6 })
+        },
+        32000
+      );
+      const json = await res.json();
+      if (!json || !json.success || !json.data) break;
+      if (json.data.busy) {
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      totalMigrated += Number(json.data.migratedPhotos || 0);
+      totalUploaded += Number(json.data.uploadedNewDriveFiles || 0);
+      remaining = Number(json.data.remainingPhotos || 0);
+      if (remaining <= 0 || Number(json.data.updatedCells || 0) === 0) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    if (totalMigrated > 0) {
+      await syncFromGoogleSheets(true, { forceFull: true });
+      if (interactive) {
+        showToast(`Optimización completada: ${totalMigrated} foto(s) movidas a Google Drive (${totalUploaded} archivos nuevos). La nube ahora es hasta 10x más rápida.`);
+      }
+    } else if (interactive) {
+      showToast("Todas las fotografías ya están optimizadas en Google Drive.");
+    }
+    return true;
+  } catch (err) {
+    console.warn("Aviso durante optimización de fotos a Drive:", err);
+    if (interactive) showToast("No se pudo completar la optimización de fotos en este momento.", "warning");
+    return false;
+  } finally {
+    photoMigrationInProgress = false;
+  }
+}
+
 function updateCloudSyncBadge(state, detailText) {
   cloudSyncStatus = state;
   if (detailText) lastCloudSyncTime = detailText;
@@ -2201,6 +2397,7 @@ function updateCloudSyncBadge(state, detailText) {
   const iconEl = document.getElementById("cloud-sync-badge-icon");
   const btnEl = document.getElementById("btn-sidebar-cloud-sync") || document.getElementById("btn-header-cloud-sync");
   const floatEl = document.getElementById("cloud-sync-floating-pill");
+  const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
 
   if (state === "syncing") {
     if (iconEl) iconEl.className = "fas fa-sync fa-spin";
@@ -2211,6 +2408,17 @@ function updateCloudSyncBadge(state, detailText) {
       floatEl.innerHTML = `<i class="fas fa-sync fa-spin"></i> Guardando cambios en Google Sheets...`;
     }
   } else if (state === "pending" || state === "error") {
+    const showRealAlert = isOffline || cloudPushConsecutiveFailures >= 1 || (!cloudPushInFlight && !cloudPushDebounceTimer && !cloudPushPending);
+    if (!showRealAlert) {
+      if (iconEl) iconEl.className = "fas fa-sync fa-spin";
+      if (badgeEl) badgeEl.textContent = "Guardando en Nube...";
+      if (btnEl) btnEl.style.borderColor = "rgba(245,196,0,0.65)";
+      if (floatEl) {
+        floatEl.className = "cloud-sync-floating-pill cloud-sync-floating-pill--syncing";
+        floatEl.innerHTML = `<i class="fas fa-sync fa-spin"></i> Guardando cambios en Google Sheets...`;
+      }
+      return;
+    }
     if (iconEl) iconEl.className = "fas fa-exclamation-triangle";
     if (badgeEl) badgeEl.textContent = hasUnsyncedLocalChanges ? "Pendiente de Subir" : "Modo Local (Offline)";
     if (btnEl) btnEl.style.borderColor = "rgba(239,68,68,0.8)";
@@ -2227,7 +2435,7 @@ function updateCloudSyncBadge(state, detailText) {
     if (floatEl) {
       if (hasUnsyncedLocalChanges) {
         floatEl.className = "cloud-sync-floating-pill cloud-sync-floating-pill--syncing";
-        floatEl.innerHTML = `<i class="fas fa-clock"></i> Cambios locales pendientes de respaldo...`;
+        floatEl.innerHTML = `<i class="fas fa-sync fa-spin"></i> Respaldando cambios en la nube...`;
       } else {
         floatEl.className = "cloud-sync-floating-pill hidden";
       }
@@ -2248,11 +2456,13 @@ function clearLocalChangesDirtyIfUpToDate(pushSnapshotTs) {
   // Solo limpiar la bandera dirty si NO hubo otra edición local mientras este push viajaba
   if (lastLocalMutationTs <= pushSnapshotTs && !cloudPushPending && !cloudPushDebounceTimer) {
     hasUnsyncedLocalChanges = false;
+    cloudPushConsecutiveFailures = 0;
+    lastCloudSyncError = "";
     try {
       localStorage.removeItem(DIRTY_FLAG_KEY);
     } catch (e) {}
     if (cloudRetryTimer) {
-      clearInterval(cloudRetryTimer);
+      clearTimeout(cloudRetryTimer);
       cloudRetryTimer = null;
     }
   }
@@ -2260,16 +2470,17 @@ function clearLocalChangesDirtyIfUpToDate(pushSnapshotTs) {
 
 function scheduleCloudRetry() {
   if (cloudRetryTimer) return;
-  cloudRetryTimer = setInterval(() => {
-    if (!hasUnsyncedLocalChanges) {
-      clearInterval(cloudRetryTimer);
-      cloudRetryTimer = null;
-      return;
-    }
-    if (!cloudPushInFlight && navigator.onLine !== false) {
+  const attemptIdx = Math.min(cloudPushConsecutiveFailures, 3);
+  const delayMs = [6000, 12000, 20000, 30000][attemptIdx] || 15000;
+  cloudRetryTimer = setTimeout(() => {
+    cloudRetryTimer = null;
+    if (!hasUnsyncedLocalChanges) return;
+    if (!cloudPushInFlight && !cloudPushDebounceTimer && navigator.onLine !== false) {
       _executeSingleCloudPush(true);
+    } else if (hasUnsyncedLocalChanges) {
+      scheduleCloudRetry();
     }
-  }, 8000);
+  }, delayMs);
 }
 
 function mergeArrayByKey(serverArr, localArr, keyFn) {
@@ -2375,23 +2586,35 @@ function saveLocalSafetyBackup(reason = "Respaldo automático local") {
 
 async function _executeSingleCloudPush(silent = true, opts = {}) {
   if (!GAS_API_URL) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    cloudPushConsecutiveFailures++;
+    lastCloudSyncError = "Sin conexión a internet";
+    hasUnsyncedLocalChanges = true;
+    scheduleCloudRetry();
+    updateCloudSyncBadge("pending");
+    return false;
+  }
   cloudPushInFlight = true;
   cloudPushPending = false;
   updateCloudSyncBadge("syncing");
   let lastOk = false;
   let conflictRetries = 0;
+  let busyRetries = 0;
+  const pushStartTs = Date.now();
 
   try {
-    // BLINDAJE v43: Si un teléfono de técnico/recepción aún NO ha sincronizado desde la nube en esta sesión,
+    // BLINDAJE v43/v44: Si un teléfono de técnico/recepción aún NO ha sincronizado desde la nube en esta sesión,
     // leer y fusionar PRIMERO los catálogos/config del servidor para JAMÁS pisar Lista A/Lista B con caché viejo.
     if (!hasSyncedFromCloudOnce && !opts.force && currentUser && !isUserCatalogAdmin(currentUser)) {
       try {
-        const preRes = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
+        const preRes = await fetchWithTimeout(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`, {}, 28000);
         const preJson = await preRes.json();
-        if (preJson && preJson.success && preJson.data) {
+        if (preJson && preJson.success && preJson.data && !preJson.data.busy) {
           const preHydrated = hydrateDatabaseFromSheets(preJson.data);
+          lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(preHydrated));
           db = mergeDatabasesNonDestructive(preHydrated, db);
           saveLocalOnly();
+          if (preJson.data.turboSyncSupported) cloudTurboSyncSupported = true;
           if (typeof preJson.data.revision === "number") {
             lastKnownCloudRevision = preJson.data.revision;
             try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
@@ -2404,33 +2627,92 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
     do {
       cloudPushPending = false;
       const pushSnapshotTs = lastLocalMutationTs;
-      const payload = prepareSheetsPayload(db);
+      const fullPayload = prepareSheetsPayload(db);
+      const currentHashes = computeAllTabHashes(fullPayload);
+
+      // TURBO DELTA SYNC v44: enviar ÚNICAMENTE las pestañas cuyo contenido realmente cambió
+      // (de ~935 KB y 14 hojas a ~3-10 KB y 1-2 hojas -> ~10x más rápido y sin bloqueos)
+      const canSendPartial =
+        cloudTurboSyncSupported &&
+        hasSyncedFromCloudOnce &&
+        !opts.force &&
+        !opts.forceFull &&
+        Object.keys(lastSyncedTabHashes).length >= 10;
+
+      let payloadToSend = fullPayload;
+      let isPartial = false;
+      let changedTabs = [];
+
+      if (canSendPartial) {
+        const deltaPayload = {};
+        Object.keys(fullPayload).forEach((tabKey) => {
+          if (currentHashes[tabKey] !== lastSyncedTabHashes[tabKey]) {
+            deltaPayload[tabKey] = fullPayload[tabKey];
+            changedTabs.push(tabKey);
+          }
+        });
+        if (changedTabs.length === 0 && !opts.forceBackup) {
+          // Nada cambió realmente respecto al último estado confirmado en la nube
+          lastOk = true;
+          lastCloudPushDoneTs = Date.now();
+          lastCloudPushDurationMs = Math.max(1, Date.now() - pushStartTs);
+          lastCloudPayloadKb = 0;
+          lastCloudWrittenTabsCount = 0;
+          clearLocalChangesDirtyIfUpToDate(pushSnapshotTs);
+          updateCloudSyncBadge(hasUnsyncedLocalChanges ? "syncing" : "online", lastCloudSyncTime);
+          break;
+        }
+        payloadToSend = deltaPayload;
+        isPartial = true;
+      }
+
       const requestBody = {
         action: "push_state",
-        payload,
+        payload: payloadToSend,
+        partial: isPartial,
+        changedTabs: isPartial ? changedTabs : undefined,
         baseRevision: opts.force ? undefined : (lastKnownCloudRevision || undefined),
         force: Boolean(opts.force),
         forceBackup: Boolean(opts.forceBackup),
         reason: opts.reason || "Actualización del taller",
         actor: currentUser ? currentUser.nombre : "Sistema"
       };
+      const serializedBody = JSON.stringify(requestBody);
+      lastCloudPayloadKb = Math.max(1, Math.round(serializedBody.length / 1024));
 
-      const res = await fetch(GAS_API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(requestBody)
-      });
+      const res = await fetchWithTimeout(
+        GAS_API_URL,
+        {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: serializedBody
+        },
+        32000
+      );
       const json = await res.json();
 
       if (json && json.success) {
         const data = json.data || {};
         if (data.backupsSupported) cloudBackupsSupported = true;
         if (data.dedicatedTabsSupported) cloudDedicatedTabsSupported = true;
+        if (data.turboSyncSupported) cloudTurboSyncSupported = true;
+
+        // Si otro teléfono estaba terminando de escribir justo en este segundo, esperar brevemente y reintentar sin alarmar
+        if (data.busy && data.retryable && busyRetries < 2) {
+          busyRetries++;
+          await new Promise((r) => setTimeout(r, 1800 * busyRetries));
+          cloudPushPending = true;
+          continue;
+        }
+        if (data.busy) {
+          throw new Error("Servidor ocupado guardando otro equipo; reintentando en segundos");
+        }
 
         // Si el servidor reporta conflicto (otro equipo guardó cambios más nuevos), fusionamos sin perder nada y reintentamos
         if (data.conflict && data.serverState && conflictRetries < 2) {
           conflictRetries++;
           const serverHydrated = hydrateDatabaseFromSheets(data.serverState);
+          lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(serverHydrated));
           db = mergeDatabasesNonDestructive(serverHydrated, db);
           saveLocalOnly();
           if (typeof data.revision === "number") {
@@ -2446,15 +2728,33 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
           try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
         }
 
+        // Actualizar hashes confirmados
+        if (isPartial) {
+          changedTabs.forEach((k) => { lastSyncedTabHashes[k] = currentHashes[k]; });
+        } else {
+          lastSyncedTabHashes = { ...currentHashes };
+        }
+        if (Number(data.photosMigrated || 0) > 0) {
+          // El servidor movió fotos a Drive: permitir que la próxima lectura silenciosa refresque los enlaces ligeros
+          delete lastSyncedTabHashes.ordenes;
+          delete lastSyncedTabHashes.subtareas;
+          delete lastSyncedTabHashes.bitacora;
+          delete lastSyncedTabHashes.finanzas;
+        }
+
         lastOk = true;
         hasSyncedFromCloudOnce = true;
+        cloudPushConsecutiveFailures = 0;
+        lastCloudSyncError = "";
         lastCloudPushDoneTs = Date.now();
+        lastCloudPushDurationMs = Math.max(1, Date.now() - pushStartTs);
+        lastCloudWrittenTabsCount = Array.isArray(data.writtenTabs) ? data.writtenTabs.length : (isPartial ? changedTabs.length : 14);
         clearLocalChangesDirtyIfUpToDate(pushSnapshotTs);
 
         const stamp = data.savedAt || new Date().toLocaleTimeString();
-        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "pending" : "online", stamp);
+        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "syncing" : "online", stamp);
         if (!silent && !cloudPushPending) {
-          showToast(`Respaldo guardado en la nube (${stamp})`);
+          showToast(`Respaldo guardado en la nube (${stamp} · ${(lastCloudPushDurationMs / 1000).toFixed(1)}s)`);
         }
       } else {
         throw new Error((json && json.error) || "Respuesta no válida de Sheets");
@@ -2463,7 +2763,9 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
     return lastOk;
   } catch (err) {
     console.warn("Aviso al sincronizar hacia Google Sheets:", err);
-    // CONSERVAR SIEMPRE la bandera dirty para que el pull de 15s JAMÁS sobrescriba los cambios locales
+    cloudPushConsecutiveFailures++;
+    lastCloudSyncError = String(err && err.message ? err.message : err || "Error de red");
+    // CONSERVAR SIEMPRE la bandera dirty para que el pull de fondo JAMÁS sobrescriba los cambios locales
     hasUnsyncedLocalChanges = true;
     try { localStorage.setItem(DIRTY_FLAG_KEY, String(lastLocalMutationTs || Date.now())); } catch (e) {}
     scheduleCloudRetry();
@@ -2551,8 +2853,9 @@ function isAnyModalOpen() {
   return false;
 }
 
-async function syncFromGoogleSheets(silent = false) {
+async function syncFromGoogleSheets(silent = false, opts = {}) {
   if (!GAS_API_URL) return false;
+  const forceFull = Boolean(opts && opts.forceFull);
 
   // BLINDAJE MODAL ACTIVO (v41): Si el usuario tiene un modal o formulario abierto (ej. Matriz de Destajo,
   // Editar Factura, Nueva Orden o Liquidación), pausar la lectura silenciosa de fondo para jamás
@@ -2565,7 +2868,7 @@ async function syncFromGoogleSheets(silent = false) {
   // JAMÁS bajar datos viejos encima del trabajo del usuario. Primero subir los cambios pendientes.
   if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
     if (silent) {
-      if (!cloudPushInFlight) {
+      if (!cloudPushInFlight && !cloudPushDebounceTimer) {
         _executeSingleCloudPush(true);
       }
       return false;
@@ -2578,25 +2881,48 @@ async function syncFromGoogleSheets(silent = false) {
     }
   }
 
-  if (silent && lastCloudPushDoneTs && Date.now() - lastCloudPushDoneTs < 4000) {
+  if (silent && !forceFull && lastCloudPushDoneTs && Date.now() - lastCloudPushDoneTs < 4000) {
     return false;
   }
 
   const pullStartTs = Date.now();
   if (!silent) updateCloudSyncBadge("syncing");
   try {
-    const res = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
+    // ZERO-COST POLL v44: si ya sincronizamos antes y es lectura silenciosa, enviar sinceRev para que
+    // Apps Script responda en <1s sin abrir Sheets cuando nadie modificó nada.
+    const useSinceRev = silent && !forceFull && hasSyncedFromCloudOnce && lastKnownCloudRevision > 0;
+    const syncUrl = useSinceRev
+      ? `${GAS_API_URL}?action=sync_all&sinceRev=${lastKnownCloudRevision}&t=${Date.now()}`
+      : `${GAS_API_URL}?action=sync_all&t=${Date.now()}`;
+
+    const res = await fetchWithTimeout(syncUrl, {}, 28000);
     const json = await res.json();
     if (json && json.success && json.data) {
+      if (json.data.turboSyncSupported) cloudTurboSyncSupported = true;
+      if (json.data.backupsSupported) cloudBackupsSupported = true;
+      if (json.data.dedicatedTabsSupported) cloudDedicatedTabsSupported = true;
+
+      // Si otro teléfono está guardando justo en este instante, no mostrar error ni bloquear
+      if (json.data.busy) {
+        if (!silent) showToast("Otro equipo está guardando en este instante; reintenta en un segundo.", "info");
+        return false;
+      }
+
+      // FAST-PATH: Sin cambios desde la última revisión -> 0 re-renders y <1s de red
+      if (json.data.unchanged) {
+        lastCloudPullDoneTs = Date.now();
+        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "syncing" : "online", json.data.serverTime || lastCloudSyncTime);
+        return true;
+      }
+
       // PROTECCIÓN ANTI-SOBREESCRITURA: si el usuario hizo un cambio local o abrió un modal mientras esta lectura viajaba, descartarla
       if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || lastLocalMutationTs > pullStartTs || (silent && isAnyModalOpen())) {
-        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "pending" : "online");
+        updateCloudSyncBadge(hasUnsyncedLocalChanges ? "syncing" : "online");
         return false;
       }
 
       hasSyncedFromCloudOnce = true;
-      if (json.data.backupsSupported) cloudBackupsSupported = true;
-      if (json.data.dedicatedTabsSupported) cloudDedicatedTabsSupported = true;
+      lastCloudPullDoneTs = Date.now();
       if (typeof json.data.revision === "number") {
         lastKnownCloudRevision = json.data.revision;
         try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
@@ -2638,6 +2964,7 @@ async function syncFromGoogleSheets(silent = false) {
           isUserCatalogAdmin(currentUser);
 
         db = hydrateDatabaseFromSheets(json.data);
+        lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(db));
         saveLocalOnly();
         saveCatalogsSafetyVault(db);
         populateLoginSelect();
@@ -2651,14 +2978,24 @@ async function syncFromGoogleSheets(silent = false) {
         // BLINDAJE v43: JAMÁS auto-sobrescribir la nube si faltó metaFromCloud.
         // Solo poblar pestañas dedicadas nuevas si el usuario es Admin/Gerencia y acabamos de leer meta válido de Sheets.
         if (needsInitialDedicatedTabSeed) {
-          queueCloudPush(true, { reason: "Migración automática a pestañas dedicadas v43 (Lista B, Config, Papelera)" });
+          queueCloudPush(true, { forceFull: true, reason: "Migración automática a pestañas dedicadas v43 (Lista B, Config, Papelera)" });
+        }
+
+        // AUTO-OPTIMIZACIÓN SILENCIOSA v44: Si un Admin/Gerencia abre sesión y todavía hay fotos pesadas base64
+        // heredadas en Sheets, migrarlas automáticamente en segundo plano a Google Drive para reducir >90% el peso.
+        if (cloudTurboSyncSupported && !autoPhotoMigrationStarted && isUserCatalogAdmin(currentUser)) {
+          const inlineStats = countInlineBase64PhotosInDb(db);
+          if (inlineStats.count > 0) {
+            autoPhotoMigrationStarted = true;
+            setTimeout(() => runCloudPhotoMigration(false), 5000);
+          }
         }
 
         if (!silent) showToast(`Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
         return true;
       } else {
         // Solo sembrar la nube si Google Sheets está 100% virgen (sin usuarios, ni catálogo, ni clientes, ni órdenes)
-        await flushCloudPush(silent, { force: true, reason: "Inicialización inicial de base de datos" });
+        await flushCloudPush(silent, { force: true, forceFull: true, reason: "Inicialización inicial de base de datos" });
         return true;
       }
     }
@@ -3099,6 +3436,10 @@ function openCloudSyncModal() {
   const statusBg = hasUnsyncedLocalChanges ? "rgba(239,68,68,0.12)" : "rgba(22,163,74,0.1)";
   const statusBorder = hasUnsyncedLocalChanges ? "rgba(239,68,68,0.45)" : "rgba(22,163,74,0.4)";
   const statusColor = hasUnsyncedLocalChanges ? "#f87171" : "#15803d";
+  const inlinePhotoStats = countInlineBase64PhotosInDb(db);
+  const speedText = lastCloudPushDurationMs > 0
+    ? `${(lastCloudPushDurationMs / 1000).toFixed(1)}s · ${lastCloudPayloadKb} KB · ${lastCloudWrittenTabsCount} hoja(s)`
+    : (cloudTurboSyncSupported ? "Motor Turbo Delta activo" : "Estándar");
   openModal({
     title: "Respaldo en la Nube (Google Sheets & Drive) — Cero Pérdida de Datos",
     icon: "fa-cloud",
@@ -3113,9 +3454,25 @@ function openCloudSyncModal() {
           <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
             Última sincronización: <strong>${lastCloudSyncTime}</strong> · Rev: <strong>#${lastKnownCloudRevision}</strong> · Órdenes: <strong>${db.ordenes.length}</strong> · Lista A: <strong>${(db.catalogo_servicios || []).length}</strong> · Lista B: <strong>${(db.catalogo_destajo || []).length}</strong> · Papelera: <strong>${(db.papelera_respaldo || []).length}</strong>
           </div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">
+            <i class="fas fa-bolt" style="color:var(--renacer-gold);"></i> Velocidad: <strong>${speedText}</strong> ·
+            Fotos en Sheets sin migrar: <strong style="color:${inlinePhotoStats.count > 0 ? "#f59e0b" : "#22c55e"};">${inlinePhotoStats.count > 0 ? `${inlinePhotoStats.count} (${inlinePhotoStats.totalKb} KB)` : "0 (100% en Drive ✅)"}</strong>
+          </div>
+          ${lastCloudSyncError && hasUnsyncedLocalChanges ? `<div style="font-size:11px; color:#fca5a5; margin-top:4px;"><i class="fas fa-circle-info"></i> Último aviso: ${escapeHtml(lastCloudSyncError)}</div>` : ""}
         </div>
         <span class="state-badge ${hasUnsyncedLocalChanges ? "state-badge--wait" : "state-badge--done"}">${hasUnsyncedLocalChanges ? "PENDIENTE" : cloudSyncStatus === "online" ? "RESPALDADO" : cloudSyncStatus === "syncing" ? "GUARDANDO" : "LOCAL"}</span>
       </div>
+
+      ${inlinePhotoStats.count > 0 ? `
+      <div style="background:rgba(245,196,0,0.09); border:1.5px solid rgba(245,196,0,0.45); border-radius:12px; padding:10px 14px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <div style="font-size:12px; color:var(--text-main); line-height:1.4;">
+          <strong style="color:var(--renacer-gold);"><i class="fas fa-rocket"></i> Aceleración Disponible:</strong>
+          Hay <strong>${inlinePhotoStats.count} foto(s) antigua(s) (${inlinePhotoStats.totalKb} KB)</strong> guardadas dentro de Sheets. Moverlas a Google Drive hace que la app sincronice hasta <strong>10× más rápido</strong> sin avisos de "Pendiente de Subir".
+        </div>
+        <button type="button" class="btn btn--gold btn--sm" onclick="closeModal(); runCloudPhotoMigration(true);">
+          <i class="fas fa-bolt"></i> Optimizar Fotos a Drive
+        </button>
+      </div>` : ""}
 
       <div class="form-field" style="margin-bottom:14px;">
         <label>URL del Web App de Google Apps Script</label>
@@ -3797,6 +4154,28 @@ function getUserBitacoraReadMap(userId) {
   return merged[uid] || {};
 }
 
+function syncBitacoraReadToCloudSilently(userId, orderId, timestamp, bulkMap) {
+  if (!GAS_API_URL || !hasSyncedFromCloudOnce || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+  try {
+    const body = {
+      action: "save_bitacora_read",
+      userId: String(userId || ""),
+      orderId: orderId ? String(orderId) : undefined,
+      timestamp: timestamp ? Number(timestamp) : undefined,
+      map: bulkMap && typeof bulkMap === "object" ? bulkMap : undefined
+    };
+    fetchWithTimeout(
+      GAS_API_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(body)
+      },
+      12000
+    ).catch(() => {});
+  } catch (e) {}
+}
+
 function saveUserBitacoraReadTimestamp(userId, orderId, tsValue, syncCloud = false) {
   const uid = String(userId || "").trim();
   const oid = String(orderId || "").trim();
@@ -3822,9 +4201,9 @@ function saveUserBitacoraReadTimestamp(userId, orderId, tsValue, syncCloud = fal
     if (!db.config.bitacora_lecturas[uid][oid] || val > db.config.bitacora_lecturas[uid][oid]) {
       db.config.bitacora_lecturas[uid][oid] = val;
       saveLocalOnly();
+      // Sincronización ultra-ligera (v44): NUNCA ensucia la bandera dirty ni dispara reescritura de 14 hojas solo por leer un chat
       if (syncCloud && hasSyncedFromCloudOnce) {
-        markLocalChangesDirty();
-        queueCloudPush(true, { reason: "Lectura de bitácora sincronizada" });
+        syncBitacoraReadToCloudSilently(uid, oid, val, null);
       }
     }
   }
@@ -3927,12 +4306,14 @@ function markOrderBitacoraAsRead(orderId, syncCloud = true) {
 function markAllBitacorasAsRead() {
   if (!currentUser) return;
   const { groups } = getAllUnreadBitacoraGroups(currentUser);
+  const bulkMap = {};
   groups.forEach((g) => {
     markOrderBitacoraAsRead(g.orderId, false);
+    const readMap = getUserBitacoraReadMap(currentUser.id_usuario);
+    if (readMap && readMap[g.orderId]) bulkMap[g.orderId] = readMap[g.orderId];
   });
   if (groups.length > 0 && hasSyncedFromCloudOnce) {
-    markLocalChangesDirty();
-    queueCloudPush(true, { reason: "Todas las bitácoras marcadas como leídas" });
+    syncBitacoraReadToCloudSilently(currentUser.id_usuario, null, null, bulkMap);
   }
   renderBitacoraBellBadge();
   renderBitacoraNotificationsDropdown();
@@ -10037,49 +10418,68 @@ function handleLightboxMouseDown(e) {
   window.addEventListener("mouseup", onMouseUp);
 }
 
-function compressImageForSheets(file, maxDim = 720, maxChars = 34000) {
-  return new Promise((resolve) => {
+async function compressImageForSheets(file, maxDim = 720, maxChars = 34000, uploadToDrive = true) {
+  const localResult = await new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        let targetDim = maxDim;
-        let quality = 0.72;
-        let dataUrl = "";
-
-        for (let attempt = 0; attempt < 5; attempt++) {
+        const drawAt = (dim, q) => {
           let w = img.width;
           let h = img.height;
-          if (w > targetDim || h > targetDim) {
+          if (w > dim || h > dim) {
             if (w > h) {
-              h = Math.round((h * targetDim) / w);
-              w = targetDim;
+              h = Math.round((h * dim) / w);
+              w = dim;
             } else {
-              w = Math.round((w * targetDim) / h);
-              h = targetDim;
+              w = Math.round((w * dim) / h);
+              h = dim;
             }
           }
           canvas.width = Math.max(1, w);
           canvas.height = Math.max(1, h);
           const ctx = canvas.getContext("2d");
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          dataUrl = canvas.toDataURL("image/jpeg", quality);
-          if (dataUrl.length <= maxChars) break;
+          return canvas.toDataURL("image/jpeg", q);
+        };
+
+        // Versión nítida para subir directo a Google Drive (si hay internet)
+        const driveDataUrl = drawAt(Math.max(maxDim, 960), 0.78);
+
+        // Versión liviana de respaldo offline por si en este instante no hubiera conexión
+        let targetDim = maxDim;
+        let quality = 0.72;
+        let fallbackDataUrl = "";
+        for (let attempt = 0; attempt < 5; attempt++) {
+          fallbackDataUrl = drawAt(targetDim, quality);
+          if (fallbackDataUrl.length <= Math.min(maxChars, 26000)) break;
           quality = Math.max(0.35, quality - 0.12);
           targetDim = Math.round(targetDim * 0.78);
         }
-        resolve(dataUrl);
+        resolve({ driveDataUrl, fallbackDataUrl });
       };
-      img.onerror = () => resolve(String(ev.target.result || "").slice(0, maxChars));
+      img.onerror = () => {
+        const safe = String(ev.target.result || "").slice(0, maxChars);
+        resolve({ driveDataUrl: safe, fallbackDataUrl: safe });
+      };
       img.src = ev.target.result;
     };
     reader.readAsDataURL(file);
   });
+
+  // SUBIDA DIRECTA A GOOGLE DRIVE (v44): guarda solo un enlace de 69 chars en Sheets (360x más ligero)
+  if (uploadToDrive && GAS_API_URL && (typeof navigator === "undefined" || navigator.onLine !== false)) {
+    const uploadedUrl = await uploadImageDataUrlToDrive(localResult.driveDataUrl, "renacer_foto", 14000);
+    if (uploadedUrl && uploadedUrl.startsWith("http")) {
+      return uploadedUrl;
+    }
+  }
+  return localResult.fallbackDataUrl;
 }
 
 function readFileAsCompressedDataUrl(file) {
-  return compressImageForSheets(file, 720, 32000);
+  return compressImageForSheets(file, 720, 32000, true);
 }
 
 /* ============================================================================
@@ -21820,8 +22220,8 @@ window.addEventListener("DOMContentLoaded", () => {
   // Cronómetro en tiempo real (Fase 3): actualiza cada segundo los trabajos "En Proceso"
   setInterval(tickLiveSubtaskTimers, 1000);
 
-  // Sincronización automática de fondo cada 15 segundos (protegida contra colisiones de escritura)
-  setInterval(() => syncFromGoogleSheets(true), 15000);
+  // Sincronización automática de fondo cada 20 segundos (zero-cost con sinceRev <1s cuando no hay cambios)
+  setInterval(() => syncFromGoogleSheets(true), 20000);
 
   // Sincronizar automáticamente en vivo al regresar a la pestaña; al salir, empujar cualquier cambio pendiente con keepalive
   window.addEventListener("visibilitychange", () => {
@@ -21829,7 +22229,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (hasUnsyncedLocalChanges || cloudPushPending || cloudPushDebounceTimer) {
         sendKeepaliveCloudPushOnExit();
       }
-    } else {
+    } else if (!lastCloudPullDoneTs || Date.now() - lastCloudPullDoneTs >= 6000) {
       syncFromGoogleSheets(true);
     }
   });
@@ -21840,6 +22240,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("online", () => {
     if (hasUnsyncedLocalChanges) {
+      cloudPushConsecutiveFailures = 0;
       showToast("Conexión restablecida. Respaldando cambios pendientes en Google Sheets...", "info");
       flushCloudPush(false);
     } else {
@@ -21847,7 +22248,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
   window.addEventListener("focus", () => {
-    syncFromGoogleSheets(true);
+    if (!lastCloudPullDoneTs || Date.now() - lastCloudPullDoneTs >= 6000) {
+      syncFromGoogleSheets(true);
+    }
   });
   window.addEventListener("beforeunload", (e) => {
     if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
