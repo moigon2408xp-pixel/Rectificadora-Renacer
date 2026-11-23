@@ -12,9 +12,9 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="./qrcode.min.js?v=20261122_v42"></script>
-  <script src="./html5-qrcode.min.js?v=20261122_v42"></script>
-  <link rel="stylesheet" href="./styles.css?v=20261122_v42" />
+  <script src="./qrcode.min.js?v=20261123_v43"></script>
+  <script src="./html5-qrcode.min.js?v=20261123_v43"></script>
+  <link rel="stylesheet" href="./styles.css?v=20261123_v43" />
   <title>Rectificadora Renacer — Sistema de Taller y Producción (Job 8:7)</title>
 </head>
 <body>
@@ -126,22 +126,42 @@
         <!-- Menú de Navegación Vertical -->
         <nav class="sidebar-nav-menu" id="renacer-tabs-bar"></nav>
 
-        <!-- Pie de Barra Lateral -->
-        <div class="sidebar-bottom-status">
-          <button type="button" id="btn-sidebar-cloud-sync" class="sidebar-sync-pill" onclick="openCloudSyncModal()" title="Sincronización con Google Sheets">
-            <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
-            <span id="cloud-sync-badge-label">Sheets Conectado</span>
+        <!-- Información de Sesión y Controles (arriba de Sheets Conectado - v43) -->
+        <div id="sidebar-session-panel" class="sidebar-session-panel">
+          <button type="button" class="sidebar-session-user-btn" onclick="openInteractiveProfileModal(); toggleSidebarMenu(false);" title="Mi Perfil & Seguridad">
+            <span class="user-live-dot"></span>
+            <i class="fas fa-user-circle sidebar-session-avatar"></i>
+            <div class="sidebar-session-user-info sidebar-text-hide">
+              <strong id="sidebar-user-name">Moisés González</strong>
+              <small id="sidebar-user-role">Administrador</small>
+            </div>
+            <i class="fas fa-chevron-right sidebar-text-hide" style="font-size:10px; opacity:0.65;"></i>
           </button>
-          <div style="display:flex; gap:6px; margin-top:8px; width:100%;">
-            <button type="button" class="btn btn--ghost btn--xs" style="flex:1; font-size:10.5px; padding:4px 6px; border-color:rgba(255,255,255,0.15);" onclick="forceAppRefresh()" title="Forzar actualización y limpiar caché">
-              <i class="fas fa-sync-alt"></i> <span class="sidebar-text-hide">Actualizar</span>
+          <div class="sidebar-session-actions">
+            <button type="button" class="sidebar-mini-action" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
+              <i class="fas fa-moon" id="sidebar-theme-icon"></i>
+              <span class="sidebar-text-hide" id="sidebar-theme-label">Tema</span>
             </button>
-            <button type="button" class="btn btn--ghost btn--xs" style="flex:1; font-size:10.5px; padding:4px 6px; border-color:rgba(255,255,255,0.15);" onclick="openInteractiveProfileModal()" title="Mi Perfil y Ajustes">
-              <i class="fas fa-user-cog"></i> <span class="sidebar-text-hide">Perfil</span>
+            <button type="button" class="sidebar-mini-action" onclick="forceAppRefresh()" title="Forzar actualización y limpiar caché">
+              <i class="fas fa-sync-alt"></i>
+              <span class="sidebar-text-hide">Actualizar</span>
+            </button>
+            <button type="button" class="sidebar-mini-action sidebar-mini-action--danger" onclick="logout()" title="Cerrar sesión">
+              <i class="fas fa-power-off"></i>
+              <span class="sidebar-text-hide">Salir</span>
             </button>
           </div>
         </div>
+
+        <!-- Pie de Barra Lateral -->
+        <div class="sidebar-bottom-status">
+          <button type="button" id="btn-sidebar-cloud-sync" class="sidebar-sync-pill" onclick="openCloudSyncModal(); toggleSidebarMenu(false);" title="Sincronización con Google Sheets">
+            <i class="fas fa-cloud" id="cloud-sync-badge-icon"></i>
+            <span id="cloud-sync-badge-label">Sheets Conectado</span>
+          </button>
+        </div>
       </aside>
+      <div id="sidebar-mobile-backdrop" class="sidebar-mobile-backdrop" onclick="toggleSidebarMenu(false)"></div>
 
       <!-- CONTENEDOR PRINCIPAL VIEWPORT -->
       <div class="renacer-main-viewport">
@@ -153,13 +173,13 @@
               <i class="fas fa-bars"></i>
             </button>
 
-            <!-- Marca compacta para móviles -->
-            <div class="topbar-mobile-brand">
+            <!-- Marca compacta para móviles (solo logo a la izquierda en móvil) -->
+            <div class="topbar-mobile-brand" onclick="navigateTab('default')" style="cursor:pointer;">
               <img src="./logo_renacer.png?v=20261113_1825" alt="Renacer" class="topbar-mobile-logo" />
               <span class="topbar-mobile-title">RENACER</span>
             </div>
 
-            <!-- Buscador Global -->
+            <!-- Buscador Global (visible siempre en PC y Teléfono) -->
             <div class="topbar-search-box">
               <i class="fas fa-search search-icon"></i>
               <input
@@ -173,7 +193,7 @@
                 autocorrect="off"
                 autocapitalize="off"
                 spellcheck="false"
-                placeholder="Buscar Orden, Cédula o Motor..."
+                placeholder="Buscar Troquel, Cliente o Motor..."
                 oninput="handleGlobalSearch(this.value)"
               />
               <button type="button" id="clear-search-btn" class="clear-search-btn hidden" onclick="clearGlobalSearch()" title="Limpiar búsqueda">
@@ -212,36 +232,40 @@
             </button>
 
             <!-- Botón Kiosco QR Asistencia (Recepción / Admin) -->
-            <button type="button" id="btn-topbar-attendance-kiosk" class="btn-topbar-action btn-topbar-action--dark" onclick="openAttendanceKioskModal()" title="Kiosco de Asistencia Presencial con QR Dinámico" style="border-color:rgba(56,189,248,0.4); color:#38bdf8;">
+            <button type="button" id="btn-topbar-attendance-kiosk" class="btn-topbar-action btn-topbar-action--dark topbar-desktop-only" onclick="openAttendanceKioskModal()" title="Kiosco de Asistencia Presencial con QR Dinámico" style="border-color:rgba(56,189,248,0.4); color:#38bdf8;">
               <i class="fas fa-qrcode"></i>
               <span>Kiosco QR</span>
             </button>
 
-            <!-- Selector / Perfil Interactivo de Usuario -->
-            <div class="topbar-user-pill" onclick="openInteractiveProfileModal()" title="Mi Perfil & Configuración">
+            <!-- Selector / Perfil Interactivo de Usuario (Desktop; en móvil vive en el menú desplegable arriba de Sheets Conectado) -->
+            <div class="topbar-user-pill topbar-desktop-only" onclick="openInteractiveProfileModal()" title="Mi Perfil & Configuración">
               <span class="user-live-dot"></span>
               <i class="fas fa-user-circle"></i>
               <span id="active-user-label">Moisés González</span>
               <i class="fas fa-chevron-down" style="font-size:10px; opacity:0.8;"></i>
             </div>
 
-            <!-- Notificaciones Push -->
-            <button type="button" id="btn-push-notifications" class="control-btn-circle" onclick="togglePushNotifications()" title="Activar / Comprobar Notificaciones Push">
-              <i class="fas fa-bell"></i>
-              <span id="push-status-dot" class="push-status-dot hidden"></span>
-            </button>
+            <!-- Notificaciones y Novedades de Bitácoras (Campana desplegable en PC y Móvil) -->
+            <div class="bitacora-bell-wrapper">
+              <button type="button" id="btn-push-notifications" class="control-btn-circle bitacora-bell-btn" onclick="toggleBitacoraNotificationsDropdown(event)" title="Novedades en Bitácoras y Notificaciones">
+                <i class="fas fa-bell"></i>
+                <span id="push-status-dot" class="push-status-dot hidden"></span>
+                <span id="bitacora-bell-badge" class="bitacora-bell-badge hidden">0</span>
+              </button>
+              <div id="bitacora-notif-dropdown" class="bitacora-notif-dropdown hidden"></div>
+            </div>
 
-            <!-- Botón Forzar Actualización -->
-            <button type="button" class="control-btn-circle" onclick="forceAppRefresh()" title="Forzar Actualización (Limpiar Caché y Recargar)">
+            <!-- Botón Forzar Actualización (Desktop) -->
+            <button type="button" class="control-btn-circle topbar-desktop-only" onclick="forceAppRefresh()" title="Forzar Actualización (Limpiar Caché y Recargar)">
               <i class="fas fa-sync-alt"></i>
             </button>
 
-            <!-- Botones de Sistema -->
-            <button type="button" class="control-btn-circle" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
+            <!-- Botones de Sistema (Desktop) -->
+            <button type="button" class="control-btn-circle topbar-desktop-only" onclick="toggleTheme()" title="Cambiar Modo Claro / Oscuro">
               <i class="fas fa-moon" id="theme-icon"></i>
             </button>
 
-            <button type="button" class="control-btn-circle" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Cerrar sesión">
+            <button type="button" class="control-btn-circle topbar-desktop-only" style="background:rgba(239,68,68,0.2); border-color:rgba(239,68,68,0.45);" onclick="logout()" title="Cerrar sesión">
               <i class="fas fa-power-off"></i>
             </button>
           </div>
@@ -262,7 +286,7 @@
 
   </div>
 
-  <script src="./app.js?v=20261122_v42"></script>
+  <script src="./app.js?v=20261123_v43"></script>
 </body>
 </html>
 
