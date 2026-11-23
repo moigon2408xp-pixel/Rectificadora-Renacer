@@ -18,6 +18,8 @@ const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V6";
 const DIRTY_FLAG_KEY = "RECTIFICADORA_RENACER_DIRTY_V8";
 const CLOUD_REV_KEY = "RECTIFICADORA_RENACER_CLOUD_REV_V8";
 const LOCAL_BACKUPS_KEY = "RECTIFICADORA_RENACER_LOCAL_BACKUPS_V8";
+const CATALOGS_VAULT_KEY = "RECTIFICADORA_RENACER_CATALOGS_VAULT_V1";
+const BITACORA_READS_KEY = "RECTIFICADORA_RENACER_BITACORA_READS_V1";
 const DEFAULT_GAS_API_URL = "https://script.google.com/macros/s/AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA/exec";
 let GAS_API_URL = localStorage.getItem("RENACER_GAS_API_URL") || DEFAULT_GAS_API_URL;
 if (!GAS_API_URL || !GAS_API_URL.includes("AKfycbxyK00PgiP58wNO8bWhsmnfq_V424dcUh3_bcktKeeepTXEWWJmA4QuPN9k_aLB6mrWCA")) {
@@ -34,11 +36,137 @@ let cloudRetryTimer = null;
 let hasUnsyncedLocalChanges = Boolean(localStorage.getItem(DIRTY_FLAG_KEY));
 let lastKnownCloudRevision = Number(localStorage.getItem(CLOUD_REV_KEY) || "0") || 0;
 let cloudBackupsSupported = false;
+let cloudDedicatedTabsSupported = false;
 let lastLocalBackupSaveTs = 0;
 let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
 
-const CURRENT_APP_VERSION = "2026.11.22.v42";
+const CURRENT_APP_VERSION = "2026.11.23.v43";
+
+/* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
+function isJavierRestrictedUser(user) {
+  if (!user) return false;
+  if (user.id_usuario === "USR-JAVIER") return true;
+  const norm = String(user.nombre || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+  return user.rol === "jefe_taller" && norm.includes("javier andrade");
+}
+
+function isUserCatalogAdmin(user) {
+  if (!user) return false;
+  return (user.rol === "admin" || user.rol === "jefe_taller") && !isJavierRestrictedUser(user);
+}
+
+const DEFAULT_DESTAJO_IDS_SET = new Set([
+  "DES-DESARME", "DES-LAVQUIM", "DES-APLAN", "DES-GUIAS", "DES-ASIENT",
+  "DES-SOLDAD", "DES-ARMADO", "DES-PRUEBA", "DES-CIGUENAL", "DES-BLOQUE"
+]);
+
+function isDestajoListLikelyFactoryDefault(list) {
+  if (!Array.isArray(list) || list.length === 0) return true;
+  if (list.length !== 10) return false;
+  const hasCustom = list.some(
+    (x) =>
+      !x ||
+      !DEFAULT_DESTAJO_IDS_SET.has(String(x.id_destajo || "")) ||
+      Boolean(x.por_unidad) ||
+      String(x.nombre || "") === "Servicio de la camara"
+  );
+  return !hasCustom;
+}
+
+function saveCatalogsSafetyVault(sourceDb) {
+  try {
+    const d = sourceDb || db;
+    if (!d) return;
+    const prev = safeJsonParse(localStorage.getItem(CATALOGS_VAULT_KEY), {}) || {};
+    const nextVault = { ...prev, updatedAt: Date.now() };
+    if (Array.isArray(d.catalogo_servicios) && d.catalogo_servicios.length > 0) {
+      const hasPerUnit = d.catalogo_servicios.some((c) => c && c.por_unidad);
+      const prevHasPerUnit = Array.isArray(prev.catalogo_servicios) && prev.catalogo_servicios.some((c) => c && c.por_unidad);
+      if (hasPerUnit || !prevHasPerUnit || isUserCatalogAdmin(currentUser)) {
+        nextVault.catalogo_servicios = d.catalogo_servicios.map((c) => ({ ...c }));
+      }
+    }
+    if (Array.isArray(d.catalogo_destajo) && d.catalogo_destajo.length > 0) {
+      if (!isDestajoListLikelyFactoryDefault(d.catalogo_destajo) || !Array.isArray(prev.catalogo_destajo) || isUserCatalogAdmin(currentUser)) {
+        nextVault.catalogo_destajo = d.catalogo_destajo.map((w) => ({ ...w }));
+      }
+    }
+    if (d.config && Array.isArray(d.config.bancos_cuentas) && d.config.bancos_cuentas.length > 0) {
+      nextVault.bancos_cuentas = d.config.bancos_cuentas.map((b) => ({ ...b }));
+    }
+    localStorage.setItem(CATALOGS_VAULT_KEY, JSON.stringify(nextVault));
+  } catch (e) {}
+}
+
+function loadCatalogsSafetyVault() {
+  try {
+    const parsed = safeJsonParse(localStorage.getItem(CATALOGS_VAULT_KEY), null);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* ---------- Papelera de Recuperación Permanente (v43): Nada se pierde jamás ---------- */
+function archiveToRecycleBin(tipoEntidad, idEntidad, etiqueta, datosObj, motivo = "") {
+  try {
+    if (!db) return null;
+    if (!Array.isArray(db.papelera_respaldo)) db.papelera_respaldo = [];
+    const cloned = JSON.parse(JSON.stringify(datosObj || {}));
+    // Evitar fotos base64 gigantes que saturen una celda de papelera (conservando URLs de Drive y datos completos)
+    const stripHugeBase64 = (obj) => {
+      if (!obj || typeof obj !== "object") return obj;
+      if (Array.isArray(obj)) return obj.map(stripHugeBase64);
+      const out = {};
+      Object.keys(obj).forEach((k) => {
+        const v = obj[k];
+        if (typeof v === "string" && v.startsWith("data:image") && v.length > 18000) {
+          out[k] = "";
+        } else if (v && typeof v === "object") {
+          out[k] = stripHugeBase64(v);
+        } else {
+          out[k] = v;
+        }
+      });
+      return out;
+    };
+    const nowLocal = getLocalDateTimeISO();
+    const entry = {
+      id_eliminado: "DEL-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6).toUpperCase(),
+      fecha_eliminacion: nowLocal,
+      tipo_entidad: String(tipoEntidad || "registro"),
+      id_entidad: String(idEntidad || ""),
+      etiqueta: String(etiqueta || idEntidad || "Registro eliminado"),
+      eliminado_por: currentUser ? currentUser.nombre : "Sistema",
+      motivo: String(motivo || "Eliminación directa desde la aplicación"),
+      datos: stripHugeBase64(cloned)
+    };
+    db.papelera_respaldo.unshift(entry);
+    if (db.papelera_respaldo.length > 200) {
+      db.papelera_respaldo = db.papelera_respaldo.slice(0, 200);
+    }
+    return entry;
+  } catch (e) {
+    console.warn("Aviso al archivar en papelera de recuperación:", e);
+    return null;
+  }
+}
+
+function getLocalDateTimeISO() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
 
 /* ---------- Helpers de Clasificación de Talleres Externos / Outsourcing (v42) ---------- */
 function isExternalUser(user) {
@@ -612,7 +740,8 @@ function getInitialDatabase() {
     inventario_repuestos: [],
     movimientos_inventario: [],
     asistencias: [],
-    vouchers_nomina: []
+    vouchers_nomina: [],
+    papelera_respaldo: []
   };
 }
 
@@ -936,8 +1065,13 @@ function normalizeDatabaseSchema(d) {
 
   // LISTA B INDEPENDIENTE: Catálogo de Trabajos / Operaciones de Destajo para Técnicos y Outsourcing
   if (!Array.isArray(d.catalogo_destajo)) {
-    const seedDestajo = getInitialDatabase().catalogo_destajo || [];
-    d.catalogo_destajo = seedDestajo.map((x) => ({ ...x }));
+    const vault = loadCatalogsSafetyVault();
+    if (vault && Array.isArray(vault.catalogo_destajo) && vault.catalogo_destajo.length > 0) {
+      d.catalogo_destajo = vault.catalogo_destajo.map((x) => ({ ...x }));
+    } else {
+      const seedDestajo = getInitialDatabase().catalogo_destajo || [];
+      d.catalogo_destajo = seedDestajo.map((x) => ({ ...x }));
+    }
   } else {
     d.catalogo_destajo = d.catalogo_destajo
       .filter((x) => x && String(x.nombre || "").trim() !== "")
@@ -951,6 +1085,22 @@ function normalizeDatabaseSchema(d) {
         por_unidad: Boolean(x.por_unidad),
         unidad_label: String(x.unidad_label || ""),
         activo: x.activo !== false && String(x.activo).toLowerCase() !== "false"
+      }));
+  }
+  if (!Array.isArray(d.papelera_respaldo)) {
+    d.papelera_respaldo = [];
+  } else {
+    d.papelera_respaldo = d.papelera_respaldo
+      .filter((p) => p && String(p.id_eliminado || "").trim() !== "")
+      .map((p) => ({
+        id_eliminado: String(p.id_eliminado),
+        fecha_eliminacion: String(p.fecha_eliminacion || ""),
+        tipo_entidad: String(p.tipo_entidad || "registro"),
+        id_entidad: String(p.id_entidad || ""),
+        etiqueta: String(p.etiqueta || ""),
+        eliminado_por: String(p.eliminado_por || "Sistema"),
+        motivo: String(p.motivo || ""),
+        datos: p.datos && typeof p.datos === "object" ? p.datos : safeJsonParse(p.datos_json, {})
       }));
   }
   if (!d.finanzas_categorias) {
@@ -1184,7 +1334,8 @@ function prepareSheetsPayload(sourceDb) {
         pago_unitario: Number(s.pago_unitario) || (Number(s.comision_base_tecnico) || 0) / Math.max(1, Number(s.cantidad) || 1),
         unidad_label: s.unidad_label || "",
         es_outsourcing: Boolean(s.es_outsourcing),
-        es_repuesto_externo: Boolean(s.es_repuesto_externo)
+        es_repuesto_externo: Boolean(s.es_repuesto_externo),
+        fecha_asignacion: s.fecha_asignacion || ""
       }
     };
     return {
@@ -1285,6 +1436,7 @@ function prepareSheetsPayload(sourceDb) {
       forzar_actualizacion_version: d.config?.forzar_actualizacion_version || "",
       cuentasFinancieras: Array.isArray(d.config?.cuentasFinancieras) ? d.config.cuentasFinancieras : undefined,
       bancos_cuentas: Array.isArray(d.config?.bancos_cuentas) && d.config.bancos_cuentas.length ? d.config.bancos_cuentas : undefined,
+      bitacora_lecturas: d.config?.bitacora_lecturas && typeof d.config.bitacora_lecturas === "object" ? d.config.bitacora_lecturas : undefined,
       migrations: d.config?.migrations || { javier_gerencia_v38: true },
       doc_template: d.config?.doc_template || {
         tipo_documento: "ORDEN Y PRESUPUESTO",
@@ -1321,15 +1473,18 @@ function prepareSheetsPayload(sourceDb) {
         }))
       : [],
     finanzas_extras: finanzasExtras,
-    asistencia_extras: asistenciaExtras
+    asistencia_extras: asistenciaExtras,
+    papelera_respaldo: Array.isArray(d.papelera_respaldo) ? d.papelera_respaldo.slice(0, 25) : []
   };
 
   let metaJson = JSON.stringify(metaState);
   if (metaJson.length > 44000) {
+    metaState.papelera_respaldo = metaState.papelera_respaldo.slice(0, 8);
     metaState.movimientos_inventario = metaState.movimientos_inventario.slice(-25);
     metaJson = JSON.stringify(metaState);
   }
   if (metaJson.length > 46000) {
+    metaState.papelera_respaldo = [];
     metaState.movimientos_inventario = [];
     metaState.vouchers_nomina = metaState.vouchers_nomina.slice(0, 45);
     metaJson = JSON.stringify(metaState);
@@ -1384,7 +1539,23 @@ function prepareSheetsPayload(sourceDb) {
     descripcion_servicio: c.nombre || c.descripcion_servicio || "",
     precio_sugerido_usd: Number(c.precio_sugerido ?? c.precio_sugerido_usd ?? 0),
     comision_tecnico_usd: Number(c.comision_sugerida ?? c.comision_tecnico_usd ?? 0),
-    activo: c.activo !== false
+    activo: c.activo !== false,
+    por_unidad: Boolean(c.por_unidad),
+    unidad_label: String(c.unidad_label || ""),
+    es_outsourcing: Boolean(c.es_outsourcing),
+    taller_externo_nombre: String(c.taller_externo_nombre || "")
+  }));
+
+  const catalogo_destajo = (d.catalogo_destajo || []).map((w) => ({
+    id_destajo: w.id_destajo || "",
+    categoria: w.categoria || "Rectificación General",
+    nombre: w.nombre || "",
+    pago_destajo: Math.max(0, Number(w.pago_destajo ?? 0)),
+    es_outsourcing: Boolean(w.es_outsourcing),
+    taller_externo_nombre: String(w.taller_externo_nombre || ""),
+    por_unidad: Boolean(w.por_unidad),
+    unidad_label: String(w.unidad_label || ""),
+    activo: w.activo !== false
   }));
 
   const finanzas = (d.finanzas_movimientos || d.finanzas || []).map((m) => ({
@@ -1399,7 +1570,11 @@ function prepareSheetsPayload(sourceDb) {
     metodo_pago: m.metodo || m.metodo_pago || "efectivo",
     referencia: m.referencia || "",
     comprobante_foto: sanitizeSheetsCellStr(m.comprobante_foto || m.soporte_foto || "", 44000),
-    registrado_por: m.registrado_por || m.usuario_registro || (currentUser ? currentUser.nombre : "Sistema")
+    registrado_por: m.registrado_por || m.usuario_registro || (currentUser ? currentUser.nombre : "Sistema"),
+    cuenta: m.cuenta || "",
+    usuario_id: m.usuario_id || "",
+    voucher_id: m.voucher_id || "",
+    liquidado_en_nomina: Boolean(m.liquidado_en_nomina)
   }));
 
   const asistencia = (d.asistencias || d.asistencia || []).map((a) => ({
@@ -1409,7 +1584,92 @@ function prepareSheetsPayload(sourceDb) {
     nombre_usuario: a.nombre || a.nombre_usuario || "",
     turno_modalidad: a.observacion || a.turno_modalidad || "Jornada Completa",
     hora_registro: a.hora_entrada || a.hora_registro || "09:00 AM",
-    observacion: a.estado || a.observacion || "Presente"
+    observacion: a.estado || a.observacion || "Presente",
+    hora_salida: a.hora_salida || "",
+    hora_salida_almuerzo: a.hora_salida_almuerzo || "",
+    hora_regreso_almuerzo: a.hora_regreso_almuerzo || "",
+    es_tardanza: Boolean(a.es_tardanza),
+    metodo_registro: a.metodo_registro || ""
+  }));
+
+  const inventario_repuestos = (d.inventario_repuestos || []).map((r) => ({
+    id_repuesto: r.id_repuesto || r.id || "",
+    codigo: r.codigo || "",
+    nombre: r.nombre || "",
+    categoria: r.categoria || "General",
+    stock_actual: Number(r.stock_actual) || 0,
+    stock_minimo: Number(r.stock_minimo) || 0,
+    unidad: r.unidad || "Pieza",
+    precio_costo: Number(r.precio_costo) || 0,
+    precio_venta: Number(r.precio_venta) || 0,
+    ubicacion: r.ubicacion || "",
+    foto_url: sanitizeSheetsCellStr(r.foto || r.foto_url || "", 44000),
+    notas: r.notas || ""
+  }));
+
+  const cuentas_por_pagar = safeCxp.map((cxp) => ({
+    id_cxp: cxp.id_cxp || "",
+    acreedor: cxp.acreedor || "",
+    concepto: cxp.concepto || "",
+    monto_total: Number(cxp.monto_total) || 0,
+    monto_abonado: Number(cxp.monto_abonado) || 0,
+    saldo_pendiente: Number(cxp.saldo_pendiente) || 0,
+    estado: cxp.estado || "activa",
+    fecha_registro: cxp.fecha_registro || nowStr.slice(0, 10),
+    historial_abonos_json: sanitizeSheetsCellStr(JSON.stringify(cxp.historial_abonos || []), 44000)
+  }));
+
+  const vouchers_nomina = (d.vouchers_nomina || []).slice(0, 200).map((v) => ({
+    id_voucher: v.id_voucher || "",
+    usuario_id: v.usuario_id || "",
+    nombre_usuario: v.nombre_usuario || "",
+    tipo_perfil: v.tipo_perfil || "tecnico",
+    fecha_liquidacion: v.fecha_liquidacion || "",
+    periodo_label: v.periodo_label || "",
+    sueldo_base: Number(v.sueldo_base) || 0,
+    total_comisiones: Number(v.total_comisiones) || 0,
+    total_adelantos: Number(v.total_adelantos) || 0,
+    monto_pagado: Number(v.monto_pagado) || 0,
+    tasa_bcv: Number(v.tasa_bcv) || Number(d.config?.tasaBcv) || 45.80,
+    metodo_pago: v.metodo_pago || "efectivo",
+    cuenta: v.cuenta || "",
+    referencia: v.referencia || "",
+    comprobante_foto: sanitizeSheetsCellStr(v.comprobante_foto || "", 44000),
+    movimiento_id: v.movimiento_id || "",
+    movimientos_ids_json: JSON.stringify(v.movimientos_ids || []),
+    pagos_detalle_json: sanitizeSheetsCellStr(
+      JSON.stringify(
+        (Array.isArray(v.pagos_detalle) ? v.pagos_detalle : []).map((pd) => ({
+          ...pd,
+          comprobante_foto: (pd && pd.comprobante_foto && String(pd.comprobante_foto).startsWith("data:")) ? "" : ((pd && pd.comprobante_foto) || "")
+        }))
+      ),
+      44000
+    ),
+    subtareas_ids_json: JSON.stringify(v.subtareas_ids || []),
+    ordenes_detalle_json: sanitizeSheetsCellStr(JSON.stringify(v.ordenes_detalle || []), 44000),
+    emitido_por: v.emitido_por || "Gerencia",
+    notas: v.notas || ""
+  }));
+
+  const config_sistema = [
+    { clave: "config", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.config || {}), 44000), ultima_actualizacion: nowStr },
+    { clave: "config_taller", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.config_taller || {}), 44000), ultima_actualizacion: nowStr },
+    { clave: "text_customizations", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.text_customizations || {}), 44000), ultima_actualizacion: nowStr },
+    { clave: "finanzas_categorias", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.finanzas_categorias || {}), 44000), ultima_actualizacion: nowStr },
+    { clave: "usuarios_extras", valor_json: sanitizeSheetsCellStr(JSON.stringify(usuariosExtras || {}), 44000), ultima_actualizacion: nowStr },
+    { clave: "movimientos_inventario", valor_json: sanitizeSheetsCellStr(JSON.stringify((d.movimientos_inventario || []).slice(-180)), 44000), ultima_actualizacion: nowStr }
+  ];
+
+  const papelera_respaldo = (d.papelera_respaldo || []).slice(0, 200).map((p) => ({
+    id_eliminado: p.id_eliminado || "",
+    fecha_eliminacion: p.fecha_eliminacion || nowStr,
+    tipo_entidad: p.tipo_entidad || "registro",
+    id_entidad: p.id_entidad || "",
+    etiqueta: p.etiqueta || "",
+    eliminado_por: p.eliminado_por || "Sistema",
+    motivo: p.motivo || "",
+    datos_json: sanitizeSheetsCellStr(JSON.stringify(p.datos || {}), 44000)
   }));
 
   return {
@@ -1419,8 +1679,14 @@ function prepareSheetsPayload(sourceDb) {
     bitacora,
     usuarios,
     catalogo,
+    catalogo_destajo,
     finanzas,
-    asistencia
+    asistencia,
+    inventario_repuestos,
+    cuentas_por_pagar,
+    vouchers_nomina,
+    config_sistema,
+    papelera_respaldo
   };
 }
 
@@ -1433,16 +1699,36 @@ function extractCloudMetaState(cloudData) {
   return safeJsonParse(metaRow.mensaje, null);
 }
 
+function extractCloudConfigSistemaMap(cloudData) {
+  const out = {};
+  if (!cloudData || !Array.isArray(cloudData.config_sistema)) return out;
+  cloudData.config_sistema.forEach((row) => {
+    const k = String(row && row.clave ? row.clave : "").trim();
+    if (!k) return;
+    const parsed = safeJsonParse(row.valor_json, null);
+    if (parsed !== null) out[k] = parsed;
+  });
+  return out;
+}
+
 /* Convierte los registros leídos desde Google Sheets (sync_all) de vuelta al modelo rico de la PWA */
 function hydrateDatabaseFromSheets(cloudData) {
   const base = normalizeDatabaseSchema(getInitialDatabase());
   if (!cloudData || typeof cloudData !== "object") return base;
 
+  const cfgTab = extractCloudConfigSistemaMap(cloudData);
   const meta = extractCloudMetaState(cloudData) || {};
-  const uExtras = meta.usuarios_extras || {};
+  const vault = loadCatalogsSafetyVault() || {};
+  const uExtras = cfgTab.usuarios_extras || meta.usuarios_extras || {};
   const cExtras = meta.catalogo_extras || {};
   const fExtras = meta.finanzas_extras || {};
   const aExtras = meta.asistencia_extras || {};
+
+  // Índices de respaldo en memoria/bóveda para JAMÁS perder por_unidad ni Lista B si faltara meta
+  const prevCatMap = new Map();
+  ((vault.catalogo_servicios || []).concat((db && db.catalogo_servicios) || [])).forEach((c) => {
+    if (c && (c.id_cat || c.id_servicio)) prevCatMap.set(String(c.id_cat || c.id_servicio), c);
+  });
 
   const roleLabels = {
     admin: "Administrador del Sistema",
@@ -1603,6 +1889,7 @@ function hydrateDatabaseFromSheets(cloudData) {
       unidad_label: String(uMeta.unidad_label || ""),
       es_outsourcing: Boolean(uMeta.es_outsourcing),
       es_repuesto_externo: Boolean(uMeta.es_repuesto_externo),
+      fecha_asignacion: String(uMeta.fecha_asignacion || ""),
       estado_subtarea: String(s.estado_subtarea || "pendiente"),
       minutos_acumulados: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
       tiempo_neto_min: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
@@ -1639,27 +1926,68 @@ function hydrateDatabaseFromSheets(cloudData) {
     fecha_hora: cleanDateISO(b.fecha_hora, true)
   }));
 
-  // Respetar 100% el catálogo guardado en Google Sheets (altas, ediciones y bajas)
+  // Respetar 100% el catálogo guardado en Google Sheets (prioriza columnas nativas v43 -> meta -> memoria/bóveda)
+  const parseBoolSheet = (v) => v === true || String(v).toLowerCase() === "true";
+  const hasNativeCol = (row, key) => row && row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "";
+
   const catalogo_servicios = Array.isArray(cloudData.catalogo)
     ? cloudData.catalogo
         .filter((c) => c && String(c.descripcion_servicio || c.nombre || "").trim() !== "")
         .map((c) => {
           const cid = String(c.id_servicio || c.id_cat || ("CAT-" + Math.random().toString(36).slice(2, 7)));
-          const extra = cExtras[cid] || {};
+          const extra = cExtras[cid];
+          const prev = prevCatMap.get(cid);
+          const hasNativePU = hasNativeCol(c, "por_unidad");
+          const porUnidad = hasNativePU
+            ? parseBoolSheet(c.por_unidad)
+            : (extra && extra.por_unidad !== undefined ? Boolean(extra.por_unidad) : Boolean(prev && prev.por_unidad));
+          const unidadLabel = hasNativeCol(c, "unidad_label")
+            ? String(c.unidad_label)
+            : (extra && extra.unidad_label !== undefined ? String(extra.unidad_label || "") : String((prev && prev.unidad_label) || ""));
           return {
             id_cat: cid,
-            categoria: String(extra.categoria || c.categoria_pieza || c.categoria || "Rectificación General"),
+            categoria: String((extra && extra.categoria) || c.categoria_pieza || c.categoria || "Rectificación General"),
             nombre: String(c.descripcion_servicio || c.nombre || "").trim(),
             precio_sugerido: Number(c.precio_sugerido_usd ?? c.precio_sugerido ?? 0),
             comision_sugerida: Number(c.comision_tecnico_usd ?? c.comision_sugerida ?? 0),
-            es_outsourcing: Boolean(extra.es_outsourcing),
-            taller_externo_nombre: String(extra.taller_externo_nombre || ""),
-            por_unidad: Boolean(extra.por_unidad),
-            unidad_label: String(extra.unidad_label || ""),
+            es_outsourcing: hasNativeCol(c, "es_outsourcing") ? parseBoolSheet(c.es_outsourcing) : Boolean(extra && extra.es_outsourcing),
+            taller_externo_nombre: hasNativeCol(c, "taller_externo_nombre") ? String(c.taller_externo_nombre) : String((extra && extra.taller_externo_nombre) || ""),
+            por_unidad: porUnidad,
+            unidad_label: porUnidad ? unidadLabel : "",
             activo: c.activo !== false && String(c.activo).toLowerCase() !== "false"
           };
         })
     : base.catalogo_servicios;
+
+  // LISTA B DEDICADA (v43): prioridad Pestaña Catalogo_Destajo -> SYS-META-STATE -> memoria/bóveda (JAMÁS resetear a defaults por falla temporal!)
+  const dedicatedDestajoRows = Array.isArray(cloudData.catalogo_destajo)
+    ? cloudData.catalogo_destajo
+        .filter((w) => w && String(w.nombre || "").trim() !== "")
+        .map((w) => ({
+          id_destajo: String(w.id_destajo || ("DES-" + Math.random().toString(36).slice(2, 7))),
+          categoria: String(w.categoria || "Rectificación General"),
+          nombre: String(w.nombre || "").trim(),
+          pago_destajo: Math.max(0, Number(w.pago_destajo ?? 0)),
+          es_outsourcing: parseBoolSheet(w.es_outsourcing),
+          taller_externo_nombre: String(w.taller_externo_nombre || ""),
+          por_unidad: parseBoolSheet(w.por_unidad),
+          unidad_label: String(w.unidad_label || ""),
+          activo: w.activo !== false && String(w.activo).toLowerCase() !== "false"
+        }))
+    : [];
+
+  let resolvedCatalogoDestajo;
+  if (dedicatedDestajoRows.length > 0) {
+    resolvedCatalogoDestajo = dedicatedDestajoRows;
+  } else if (Array.isArray(meta.catalogo_destajo) && meta.catalogo_destajo.length > 0) {
+    resolvedCatalogoDestajo = meta.catalogo_destajo;
+  } else if (db && Array.isArray(db.catalogo_destajo) && db.catalogo_destajo.length > 0) {
+    resolvedCatalogoDestajo = db.catalogo_destajo.map((x) => ({ ...x }));
+  } else if (Array.isArray(vault.catalogo_destajo) && vault.catalogo_destajo.length > 0) {
+    resolvedCatalogoDestajo = vault.catalogo_destajo.map((x) => ({ ...x }));
+  } else {
+    resolvedCatalogoDestajo = undefined;
+  }
 
   const validFinanzas = Array.isArray(cloudData.finanzas)
     ? cloudData.finanzas.filter((f) => f && String(f.concepto || f.id_movimiento || "").trim() !== "")
@@ -1675,11 +2003,11 @@ function hydrateDatabaseFromSheets(cloudData) {
       concepto: String(f.concepto || ""),
       monto: Number(f.monto_usd ?? f.monto ?? 0),
       metodo: String(f.metodo_pago || f.metodo || "efectivo"),
-      cuenta: String(extra.cuenta || ""),
+      cuenta: String((hasNativeCol(f, "cuenta") ? f.cuenta : "") || extra.cuenta || ""),
       referencia: String(extra.referencia || f.referencia || ""),
-      usuario_id: String(extra.usuario_id || f.usuario_id || ""),
-      voucher_id: String(extra.voucher_id || f.voucher_id || ""),
-      liquidado_en_nomina: Boolean(extra.liquidado_en_nomina),
+      usuario_id: String((hasNativeCol(f, "usuario_id") ? f.usuario_id : "") || extra.usuario_id || ""),
+      voucher_id: String((hasNativeCol(f, "voucher_id") ? f.voucher_id : "") || extra.voucher_id || ""),
+      liquidado_en_nomina: hasNativeCol(f, "liquidado_en_nomina") ? parseBoolSheet(f.liquidado_en_nomina) : Boolean(extra.liquidado_en_nomina),
       comprobante_foto: String(f.comprobante_foto || ""),
       registrado_por: String(f.registrado_por || ""),
       orden_id: String(f.orden_id || "-"),
@@ -1699,71 +2027,170 @@ function hydrateDatabaseFromSheets(cloudData) {
       nombre: String(a.nombre_usuario || a.nombre || ""),
       fecha: cleanDateISO(a.fecha || new Date().toISOString(), false),
       hora_entrada: cleanTimeHuman(a.hora_registro || a.hora_entrada || "Activo"),
-      hora_salida: String(extra.hora_salida || ""),
-      hora_salida_almuerzo: String(extra.hora_salida_almuerzo || ""),
-      hora_regreso_almuerzo: String(extra.hora_regreso_almuerzo || ""),
-      es_tardanza: Boolean(extra.es_tardanza),
-      metodo_registro: String(extra.metodo_registro || ""),
+      hora_salida: String((hasNativeCol(a, "hora_salida") ? a.hora_salida : "") || extra.hora_salida || ""),
+      hora_salida_almuerzo: String((hasNativeCol(a, "hora_salida_almuerzo") ? a.hora_salida_almuerzo : "") || extra.hora_salida_almuerzo || ""),
+      hora_regreso_almuerzo: String((hasNativeCol(a, "hora_regreso_almuerzo") ? a.hora_regreso_almuerzo : "") || extra.hora_regreso_almuerzo || ""),
+      es_tardanza: hasNativeCol(a, "es_tardanza") ? parseBoolSheet(a.es_tardanza) : Boolean(extra.es_tardanza),
+      metodo_registro: String((hasNativeCol(a, "metodo_registro") ? a.metodo_registro : "") || extra.metodo_registro || ""),
       estado: String(a.observacion || a.estado || "Presente"),
       observacion: String(a.turno_modalidad || "Jornada Completa")
     };
   });
 
-  // Conservar configuración, tasas vivas y metadatos persistidos en la nube (o en memoria actual si aún no hay meta)
+  // Pestañas dedicadas v43: Inventario, CxP, Vouchers, Config_Sistema y Papelera_Respaldo (con fallback a meta)
+  const dedicatedInv = Array.isArray(cloudData.inventario_repuestos)
+    ? cloudData.inventario_repuestos
+        .filter((r) => r && String(r.nombre || r.codigo || "").trim() !== "")
+        .map((r) => ({
+          id_repuesto: String(r.id_repuesto || ("REP-" + Math.random().toString(36).slice(2, 6))),
+          codigo: String(r.codigo || ""),
+          nombre: String(r.nombre || ""),
+          categoria: String(r.categoria || "General"),
+          stock_actual: Number(r.stock_actual) || 0,
+          stock_minimo: Number(r.stock_minimo) || 0,
+          unidad: String(r.unidad || "Pieza"),
+          precio_costo: Number(r.precio_costo) || 0,
+          precio_venta: Number(r.precio_venta) || 0,
+          ubicacion: String(r.ubicacion || ""),
+          foto: String(r.foto_url || r.foto || ""),
+          notas: String(r.notas || "")
+        }))
+    : [];
+
+  const dedicatedCxp = Array.isArray(cloudData.cuentas_por_pagar)
+    ? cloudData.cuentas_por_pagar
+        .filter((c) => c && String(c.id_cxp || c.acreedor || "").trim() !== "")
+        .map((c) => ({
+          id_cxp: String(c.id_cxp || ""),
+          acreedor: String(c.acreedor || ""),
+          concepto: String(c.concepto || ""),
+          monto_total: Number(c.monto_total) || 0,
+          monto_abonado: Number(c.monto_abonado) || 0,
+          saldo_pendiente: Number(c.saldo_pendiente) || 0,
+          estado: String(c.estado || "activa"),
+          fecha_registro: cleanDateISO(c.fecha_registro || "", false),
+          historial_abonos: safeJsonParse(c.historial_abonos_json, [])
+        }))
+    : [];
+
+  const dedicatedVouchers = Array.isArray(cloudData.vouchers_nomina)
+    ? cloudData.vouchers_nomina
+        .filter((v) => v && String(v.id_voucher || "").trim() !== "")
+        .map((v) => ({
+          id_voucher: String(v.id_voucher || ""),
+          usuario_id: String(v.usuario_id || ""),
+          nombre_usuario: String(v.nombre_usuario || ""),
+          tipo_perfil: String(v.tipo_perfil || "tecnico"),
+          fecha_liquidacion: cleanDateISO(v.fecha_liquidacion || "", false),
+          periodo_label: String(v.periodo_label || ""),
+          sueldo_base: Number(v.sueldo_base) || 0,
+          total_comisiones: Number(v.total_comisiones) || 0,
+          total_adelantos: Number(v.total_adelantos) || 0,
+          monto_pagado: Number(v.monto_pagado) || 0,
+          tasa_bcv: Number(v.tasa_bcv) || 45.80,
+          metodo_pago: String(v.metodo_pago || "efectivo"),
+          cuenta: String(v.cuenta || ""),
+          referencia: String(v.referencia || ""),
+          comprobante_foto: String(v.comprobante_foto || ""),
+          movimiento_id: String(v.movimiento_id || ""),
+          movimientos_ids: safeJsonParse(v.movimientos_ids_json, []),
+          pagos_detalle: safeJsonParse(v.pagos_detalle_json, []),
+          subtareas_ids: safeJsonParse(v.subtareas_ids_json, []),
+          ordenes_detalle: safeJsonParse(v.ordenes_detalle_json, []),
+          emitido_por: String(v.emitido_por || "Gerencia"),
+          notas: String(v.notas || "")
+        }))
+    : [];
+
+  const dedicatedPapelera = Array.isArray(cloudData.papelera_respaldo)
+    ? cloudData.papelera_respaldo
+        .filter((p) => p && String(p.id_eliminado || "").trim() !== "")
+        .map((p) => ({
+          id_eliminado: String(p.id_eliminado),
+          fecha_eliminacion: String(p.fecha_eliminacion || ""),
+          tipo_entidad: String(p.tipo_entidad || "registro"),
+          id_entidad: String(p.id_entidad || ""),
+          etiqueta: String(p.etiqueta || ""),
+          eliminado_por: String(p.eliminado_por || "Sistema"),
+          motivo: String(p.motivo || ""),
+          datos: safeJsonParse(p.datos_json, {})
+        }))
+    : [];
+
+  const cloudConfigSource = cfgTab.config || meta.config || {};
+  const cloudTextSource = (cfgTab.text_customizations && Object.keys(cfgTab.text_customizations).length)
+    ? cfgTab.text_customizations
+    : (meta.text_customizations && Object.keys(meta.text_customizations).length ? meta.text_customizations : null);
+
+  // Conservar configuración, tasas vivas, lecturas de bitácora y metadatos persistidos en la nube
+  const mergedBitacoraLecturas = mergeBitacoraReadsMaps(
+    cloudConfigSource.bitacora_lecturas || {},
+    (db && db.config && db.config.bitacora_lecturas) || {}
+  );
   const mergedConfig = {
     ...base.config,
     ...(db && db.config ? db.config : {}),
-    ...(meta.config || {}),
-    // Las migraciones de nube deben evaluarse según lo guardado en Sheets (meta.config), no desde el default local
-    migrations: (meta.config && meta.config.migrations) ? { ...meta.config.migrations } : {}
+    ...cloudConfigSource,
+    bitacora_lecturas: mergedBitacoraLecturas,
+    migrations: (cloudConfigSource && cloudConfigSource.migrations) ? { ...cloudConfigSource.migrations } : ((db && db.config && db.config.migrations) || {})
   };
-  // Si en memoria ya tenemos tasas en vivo del día y en meta siguen las default (45.80/52.40), mantener las vivas
-  if (db && db.config && db.config.tasaFechaActualizacion && (!meta.config || !meta.config.tasaFechaActualizacion)) {
+  if (db && db.config && db.config.tasaFechaActualizacion && (!cloudConfigSource || !cloudConfigSource.tasaFechaActualizacion)) {
     mergedConfig.tasaBcv = db.config.tasaBcv;
     mergedConfig.tasaBinance = db.config.tasaBinance;
     mergedConfig.tasaFechaActualizacion = db.config.tasaFechaActualizacion;
   }
 
+  const rawVouchers = dedicatedVouchers.length > 0
+    ? dedicatedVouchers
+    : (Array.isArray(meta.vouchers_nomina) ? meta.vouchers_nomina : []);
+  const movById = new Map((finanzas_movimientos || []).map((m) => [m.id_mov, m]));
+  const hydratedVouchers = rawVouchers.map((v) => {
+    const mainMov = v.movimiento_id ? movById.get(v.movimiento_id) : null;
+    const hydratedPagos = Array.isArray(v.pagos_detalle)
+      ? v.pagos_detalle.map((pd) => {
+          const pm = pd && pd.movimiento_id ? movById.get(pd.movimiento_id) : null;
+          return {
+            ...pd,
+            comprobante_foto: (pd && pd.comprobante_foto) || (pm && pm.comprobante_foto) || ""
+          };
+        })
+      : undefined;
+    return {
+      ...v,
+      comprobante_foto: v.comprobante_foto || (mainMov && mainMov.comprobante_foto) || (hydratedPagos && hydratedPagos[0] && hydratedPagos[0].comprobante_foto) || "",
+      ...(hydratedPagos ? { pagos_detalle: hydratedPagos } : {})
+    };
+  });
+
+  // Unión acumulativa de Papelera_Respaldo (nube + meta + memoria local) para no perder jamás elementos eliminados
+  const mergedPapelera = mergeArrayByKey(
+    mergeArrayByKey(dedicatedPapelera, Array.isArray(meta.papelera_respaldo) ? meta.papelera_respaldo : [], (x) => x && x.id_eliminado),
+    (db && Array.isArray(db.papelera_respaldo)) ? db.papelera_respaldo : [],
+    (x) => x && x.id_eliminado
+  ).sort((a, b) => String(b.fecha_eliminacion || "").localeCompare(String(a.fecha_eliminacion || "")));
+
   return normalizeDatabaseSchema({
     ...base,
     config: mergedConfig,
-    config_taller: meta.config_taller || (db && db.config_taller) || base.config_taller,
-    text_customizations: meta.text_customizations && Object.keys(meta.text_customizations).length
-      ? meta.text_customizations
-      : ((db && db.text_customizations) || {}),
-    finanzas_categorias: meta.finanzas_categorias || (db && db.finanzas_categorias) || base.finanzas_categorias,
-    cuentas_por_pagar: Array.isArray(meta.cuentas_por_pagar) ? meta.cuentas_por_pagar : [],
-    inventario_repuestos: Array.isArray(meta.inventario_repuestos) ? meta.inventario_repuestos : [],
-    movimientos_inventario: Array.isArray(meta.movimientos_inventario) ? meta.movimientos_inventario : [],
+    config_taller: cfgTab.config_taller || meta.config_taller || (db && db.config_taller) || base.config_taller,
+    text_customizations: cloudTextSource || (db && db.text_customizations) || {},
+    finanzas_categorias: cfgTab.finanzas_categorias || meta.finanzas_categorias || (db && db.finanzas_categorias) || base.finanzas_categorias,
+    cuentas_por_pagar: dedicatedCxp.length > 0 ? dedicatedCxp : (Array.isArray(meta.cuentas_por_pagar) ? meta.cuentas_por_pagar : []),
+    inventario_repuestos: dedicatedInv.length > 0 ? dedicatedInv : (Array.isArray(meta.inventario_repuestos) ? meta.inventario_repuestos : []),
+    movimientos_inventario: Array.isArray(cfgTab.movimientos_inventario)
+      ? cfgTab.movimientos_inventario
+      : (Array.isArray(meta.movimientos_inventario) ? meta.movimientos_inventario : []),
     usuarios,
     clientes,
     ordenes,
     subtareas,
     bitacora,
     catalogo_servicios,
-    catalogo_destajo: Array.isArray(meta.catalogo_destajo) ? meta.catalogo_destajo : undefined,
-    vouchers_nomina: Array.isArray(meta.vouchers_nomina)
-      ? meta.vouchers_nomina.map((v) => {
-          const movById = new Map((finanzas_movimientos || []).map((m) => [m.id_mov, m]));
-          const mainMov = v.movimiento_id ? movById.get(v.movimiento_id) : null;
-          const hydratedPagos = Array.isArray(v.pagos_detalle)
-            ? v.pagos_detalle.map((pd) => {
-                const pm = pd && pd.movimiento_id ? movById.get(pd.movimiento_id) : null;
-                return {
-                  ...pd,
-                  comprobante_foto: (pd && pd.comprobante_foto) || (pm && pm.comprobante_foto) || ""
-                };
-              })
-            : undefined;
-          return {
-            ...v,
-            comprobante_foto: v.comprobante_foto || (mainMov && mainMov.comprobante_foto) || (hydratedPagos && hydratedPagos[0] && hydratedPagos[0].comprobante_foto) || "",
-            ...(hydratedPagos ? { pagos_detalle: hydratedPagos } : {})
-          };
-        })
-      : [],
+    catalogo_destajo: resolvedCatalogoDestajo,
+    vouchers_nomina: hydratedVouchers,
     finanzas_movimientos,
-    asistencias
+    asistencias,
+    papelera_respaldo: mergedPapelera
   });
 }
 
@@ -1858,28 +2285,67 @@ function mergeArrayByKey(serverArr, localArr, keyFn) {
   return Array.from(map.values());
 }
 
+function mergeBitacoraReadsMaps(mapA, mapB) {
+  const out = {};
+  const ingest = (src) => {
+    if (!src || typeof src !== "object") return;
+    Object.keys(src).forEach((uid) => {
+      if (!src[uid] || typeof src[uid] !== "object") return;
+      if (!out[uid]) out[uid] = {};
+      Object.keys(src[uid]).forEach((ordId) => {
+        const val = Number(src[uid][ordId]) || 0;
+        if (!out[uid][ordId] || val > out[uid][ordId]) {
+          out[uid][ordId] = val;
+        }
+      });
+    });
+  };
+  ingest(mapA);
+  ingest(mapB);
+  return out;
+}
+
 function mergeDatabasesNonDestructive(serverDb, localDb) {
   const s = normalizeDatabaseSchema(serverDb || getInitialDatabase());
   const l = normalizeDatabaseSchema(localDb || db);
+  // BLINDAJE v43: Solo Gerencia/Admin (no técnicos, ni recepción, ni perfiles restringidos) pueden
+  // pisar catálogos (Lista A / Lista B), configuración global, usuarios o CxP durante una fusión por conflicto.
+  const localCanOverrideCatalogs = isUserCatalogAdmin(currentUser);
+  const keepServerDestajo =
+    !localCanOverrideCatalogs ||
+    (!isDestajoListLikelyFactoryDefault(s.catalogo_destajo) && isDestajoListLikelyFactoryDefault(l.catalogo_destajo));
+  const mergedCatServicios = localCanOverrideCatalogs
+    ? mergeArrayByKey(s.catalogo_servicios, l.catalogo_servicios, (x) => x && (x.id_cat || x.id_servicio))
+    : s.catalogo_servicios;
+  const mergedCatDestajo = keepServerDestajo
+    ? s.catalogo_destajo
+    : mergeArrayByKey(s.catalogo_destajo, l.catalogo_destajo, (x) => x && x.id_destajo);
+  const mergedReads = mergeBitacoraReadsMaps(
+    (s.config && s.config.bitacora_lecturas) || {},
+    (l.config && l.config.bitacora_lecturas) || {}
+  );
   return normalizeDatabaseSchema({
     ...s,
-    config: { ...(s.config || {}), ...(l.config || {}) },
-    config_taller: { ...(s.config_taller || {}), ...(l.config_taller || {}) },
-    text_customizations: { ...(s.text_customizations || {}), ...(l.text_customizations || {}) },
-    finanzas_categorias: l.finanzas_categorias || s.finanzas_categorias,
-    usuarios: mergeArrayByKey(s.usuarios, l.usuarios, (x) => x && x.id_usuario),
-    catalogo_servicios: mergeArrayByKey(s.catalogo_servicios, l.catalogo_servicios, (x) => x && (x.id_cat || x.id_servicio)),
-    catalogo_destajo: mergeArrayByKey(s.catalogo_destajo, l.catalogo_destajo, (x) => x && x.id_destajo),
+    config: localCanOverrideCatalogs
+      ? { ...(s.config || {}), ...(l.config || {}), bitacora_lecturas: mergedReads }
+      : { ...(l.config || {}), ...(s.config || {}), bitacora_lecturas: mergedReads },
+    config_taller: localCanOverrideCatalogs ? { ...(s.config_taller || {}), ...(l.config_taller || {}) } : (s.config_taller || l.config_taller),
+    text_customizations: localCanOverrideCatalogs ? { ...(s.text_customizations || {}), ...(l.text_customizations || {}) } : (s.text_customizations || l.text_customizations),
+    finanzas_categorias: localCanOverrideCatalogs ? (l.finanzas_categorias || s.finanzas_categorias) : (s.finanzas_categorias || l.finanzas_categorias),
+    usuarios: localCanOverrideCatalogs ? mergeArrayByKey(s.usuarios, l.usuarios, (x) => x && x.id_usuario) : s.usuarios,
+    catalogo_servicios: mergedCatServicios,
+    catalogo_destajo: mergedCatDestajo,
     clientes: mergeArrayByKey(s.clientes, l.clientes, (x) => x && x.id_cliente),
     ordenes: mergeArrayByKey(s.ordenes, l.ordenes, (x) => x && x.id_orden),
     subtareas: mergeArrayByKey(s.subtareas, l.subtareas, (x) => x && x.id_subtarea),
     bitacora: mergeArrayByKey(s.bitacora, l.bitacora, (x) => x && x.id_mensaje),
     finanzas_movimientos: mergeArrayByKey(s.finanzas_movimientos, l.finanzas_movimientos, (x) => x && (x.id_mov || x.id_movimiento)),
-    cuentas_por_pagar: mergeArrayByKey(s.cuentas_por_pagar, l.cuentas_por_pagar, (x) => x && x.id_cxp),
+    cuentas_por_pagar: localCanOverrideCatalogs ? mergeArrayByKey(s.cuentas_por_pagar, l.cuentas_por_pagar, (x) => x && x.id_cxp) : s.cuentas_por_pagar,
     inventario_repuestos: mergeArrayByKey(s.inventario_repuestos, l.inventario_repuestos, (x) => x && (x.id_repuesto || x.id)),
     movimientos_inventario: mergeArrayByKey(s.movimientos_inventario, l.movimientos_inventario, (x) => x && (x.id_mov || x.id)),
     asistencias: mergeArrayByKey(s.asistencias, l.asistencias, (x) => x && (x.id_asist || x.id_asistencia)),
-    vouchers_nomina: mergeArrayByKey(s.vouchers_nomina, l.vouchers_nomina, (x) => x && x.id_voucher)
+    vouchers_nomina: mergeArrayByKey(s.vouchers_nomina, l.vouchers_nomina, (x) => x && x.id_voucher),
+    papelera_respaldo: mergeArrayByKey(s.papelera_respaldo, l.papelera_respaldo, (x) => x && x.id_eliminado)
   });
 }
 
@@ -1916,6 +2382,25 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
   let conflictRetries = 0;
 
   try {
+    // BLINDAJE v43: Si un teléfono de técnico/recepción aún NO ha sincronizado desde la nube en esta sesión,
+    // leer y fusionar PRIMERO los catálogos/config del servidor para JAMÁS pisar Lista A/Lista B con caché viejo.
+    if (!hasSyncedFromCloudOnce && !opts.force && currentUser && !isUserCatalogAdmin(currentUser)) {
+      try {
+        const preRes = await fetch(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`);
+        const preJson = await preRes.json();
+        if (preJson && preJson.success && preJson.data) {
+          const preHydrated = hydrateDatabaseFromSheets(preJson.data);
+          db = mergeDatabasesNonDestructive(preHydrated, db);
+          saveLocalOnly();
+          if (typeof preJson.data.revision === "number") {
+            lastKnownCloudRevision = preJson.data.revision;
+            try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+          }
+          hasSyncedFromCloudOnce = true;
+        }
+      } catch (preErr) {}
+    }
+
     do {
       cloudPushPending = false;
       const pushSnapshotTs = lastLocalMutationTs;
@@ -1940,6 +2425,7 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
       if (json && json.success) {
         const data = json.data || {};
         if (data.backupsSupported) cloudBackupsSupported = true;
+        if (data.dedicatedTabsSupported) cloudDedicatedTabsSupported = true;
 
         // Si el servidor reporta conflicto (otro equipo guardó cambios más nuevos), fusionamos sin perder nada y reintentamos
         if (data.conflict && data.serverState && conflictRetries < 2) {
@@ -2110,15 +2596,18 @@ async function syncFromGoogleSheets(silent = false) {
 
       hasSyncedFromCloudOnce = true;
       if (json.data.backupsSupported) cloudBackupsSupported = true;
+      if (json.data.dedicatedTabsSupported) cloudDedicatedTabsSupported = true;
       if (typeof json.data.revision === "number") {
         lastKnownCloudRevision = json.data.revision;
         try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
       }
 
-      // Verificación de actualización remota obligatoria para todos los equipos (soporta config directo y SYS-META-STATE)
+      // Verificación de actualización remota obligatoria para todos los equipos (soporta config directo, Config_Sistema y SYS-META-STATE)
       const metaFromCloud = extractCloudMetaState(json.data);
+      const cfgTabFromCloud = extractCloudConfigSistemaMap(json.data);
       const remoteForcedVer =
         (json.data.config && json.data.config.forzar_actualizacion_version) ||
+        (cfgTabFromCloud && cfgTabFromCloud.config && cfgTabFromCloud.config.forzar_actualizacion_version) ||
         (metaFromCloud && metaFromCloud.config && metaFromCloud.config.forzar_actualizacion_version) ||
         "";
       if (remoteForcedVer) {
@@ -2135,17 +2624,22 @@ async function syncFromGoogleSheets(silent = false) {
       const cloudHasAnyData =
         (Array.isArray(json.data.usuarios) && json.data.usuarios.length > 0) ||
         (Array.isArray(json.data.catalogo) && json.data.catalogo.length > 0) ||
+        (Array.isArray(json.data.catalogo_destajo) && json.data.catalogo_destajo.length > 0) ||
         (Array.isArray(json.data.clientes) && json.data.clientes.length > 0) ||
         (Array.isArray(json.data.ordenes) && json.data.ordenes.length > 0) ||
         (Array.isArray(json.data.finanzas) && json.data.finanzas.length > 0);
 
       if (cloudHasAnyData) {
-        const hadJavierInventario = Array.isArray(json.data.usuarios) &&
-          json.data.usuarios.some((u) => u && u.id_usuario === "USR-JAVIER" && u.rol === "inventario");
-        const hadMetaState = Boolean(metaFromCloud);
+        const hadDedicatedDestajo = Array.isArray(json.data.catalogo_destajo) && json.data.catalogo_destajo.length > 0;
+        const needsInitialDedicatedTabSeed =
+          Boolean(json.data.dedicatedTabsSupported) &&
+          !hadDedicatedDestajo &&
+          Boolean(metaFromCloud && Array.isArray(metaFromCloud.catalogo_destajo) && metaFromCloud.catalogo_destajo.length > 0) &&
+          isUserCatalogAdmin(currentUser);
 
         db = hydrateDatabaseFromSheets(json.data);
         saveLocalOnly();
+        saveCatalogsSafetyVault(db);
         populateLoginSelect();
         if (currentUser) {
           const updatedMe = db.usuarios.find((u) => u.id_usuario === currentUser.id_usuario);
@@ -2154,9 +2648,10 @@ async function syncFromGoogleSheets(silent = false) {
         }
         updateCloudSyncBadge("online", json.data.serverTime || new Date().toLocaleTimeString());
 
-        // Si acabamos de aplicar la migración de Javier a Gerencia o aún no existía SYS-META-STATE, respaldar automáticamente en Sheets
-        if (hadJavierInventario || !hadMetaState) {
-          queueCloudPush(true, { reason: "Actualización estructura v38 (Gerencia Javier y Metadatos)" });
+        // BLINDAJE v43: JAMÁS auto-sobrescribir la nube si faltó metaFromCloud.
+        // Solo poblar pestañas dedicadas nuevas si el usuario es Admin/Gerencia y acabamos de leer meta válido de Sheets.
+        if (needsInitialDedicatedTabSeed) {
+          queueCloudPush(true, { reason: "Migración automática a pestañas dedicadas v43 (Lista B, Config, Papelera)" });
         }
 
         if (!silent) showToast(`Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
@@ -2247,6 +2742,7 @@ async function openCloudBackupsModal() {
       </div>
     `,
     footer: `
+      <button type="button" class="btn btn--warning" onclick="openRecycleBinModal()"><i class="fas fa-trash-restore"></i> Papelera (${(db.papelera_respaldo || []).length})</button>
       <button type="button" class="btn btn--ghost" onclick="openPdfArchiveAndExportModal()"><i class="fas fa-file-pdf"></i> Archivo PDFs (Drive)</button>
       <button type="button" class="btn btn--ghost" onclick="exportFullBackupJson()"><i class="fas fa-download"></i> Descargar Archivo JSON</button>
       <button type="button" class="btn btn--gold" onclick="createCloudBackupNow()"><i class="fas fa-shield-halved"></i> Crear Respaldo Ahora</button>
@@ -2443,6 +2939,162 @@ function triggerImportBackupJson() {
   inp.click();
 }
 
+function openRecycleBinModal() {
+  const items = Array.isArray(db.papelera_respaldo) ? db.papelera_respaldo : [];
+  const typeMeta = {
+    orden: { label: "Orden / Troquel", icon: "fa-clipboard-list", color: "#f59e0b" },
+    cliente: { label: "Cliente", icon: "fa-user", color: "#38bdf8" },
+    catalogo_a: { label: "Lista A (Cliente)", icon: "fa-tags", color: "#eab308" },
+    catalogo_b: { label: "Lista B (Destajo)", icon: "fa-hammer", color: "#22c55e" },
+    usuario: { label: "Personal / Perfil", icon: "fa-user-cog", color: "#a855f7" },
+    cuenta_por_pagar: { label: "Cuenta por Pagar", icon: "fa-file-invoice-dollar", color: "#ef4444" },
+    cuenta_bancaria: { label: "Cuenta / Banco", icon: "fa-building-columns", color: "#0284c7" },
+    voucher: { label: "Voucher Nómina", icon: "fa-receipt", color: "#8b5cf6" },
+    movimiento_finanzas: { label: "Libro Diario", icon: "fa-wallet", color: "#10b981" },
+    asistencia: { label: "Asistencia", icon: "fa-calendar-check", color: "#6366f1" },
+    limpieza_lote: { label: "Limpieza Masiva", icon: "fa-broom", color: "#f97316" }
+  };
+
+  openModal({
+    title: `Papelera de Recuperación Permanente (${items.length})`,
+    icon: "fa-trash-restore",
+    wide: true,
+    body: `
+      <div style="background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.35); border-radius:12px; padding:11px 14px; margin-bottom:12px; font-size:12.5px;">
+        <strong><i class="fas fa-shield-halved" style="color:#22c55e;"></i> Protección Total v43:</strong> Cada registro eliminado en la aplicación queda archivado aquí y en la pestaña <code>Papelera_Respaldo</code> de Google Sheets para poder recuperarlo en cualquier momento con 1 clic.
+      </div>
+      ${
+        items.length
+          ? `<div style="max-height:380px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px;">
+              ${items
+                .map((it) => {
+                  const tm = typeMeta[it.tipo_entidad] || { label: it.tipo_entidad || "Registro", icon: "fa-database", color: "#94a3b8" };
+                  return `
+                    <div class="backup-item-row">
+                      <div style="min-width:0; flex:1;">
+                        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                          <span style="font-size:10px; font-weight:900; padding:2px 7px; border-radius:99px; background:rgba(255,255,255,0.08); color:${tm.color}; border:1px solid ${tm.color};">
+                            <i class="fas ${tm.icon}"></i> ${tm.label}
+                          </span>
+                          <strong style="font-size:13px;">${escapeHtml(it.etiqueta || it.id_entidad)}</strong>
+                        </div>
+                        <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px;">
+                          Eliminado el <strong>${escapeHtml(it.fecha_eliminacion || "-")}</strong> · Por: <strong>${escapeHtml(it.eliminado_por || "Sistema")}</strong>${it.motivo ? ` · ${escapeHtml(it.motivo)}` : ""}
+                        </div>
+                      </div>
+                      <button type="button" class="btn btn--gold btn--xs" onclick="restoreFromRecycleBin('${escapeHtml(it.id_eliminado)}')">
+                        <i class="fas fa-rotate-left"></i> Recuperar
+                      </button>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>`
+          : `<div style="text-align:center; padding:30px 16px; color:var(--text-muted); font-size:13px;">
+               <i class="fas fa-check-circle" style="font-size:28px; color:#22c55e; display:block; margin-bottom:8px;"></i>
+               La Papelera de Recuperación está vacía. Cualquier elemento que se elimine en el sistema quedará respaldado aquí automáticamente.
+             </div>`
+      }
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="openCloudBackupsModal()"><i class="fas fa-clock-rotate-left"></i> Ver Respaldos Completos</button>
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>
+    `
+  });
+}
+
+async function restoreFromRecycleBin(delId) {
+  const entry = (db.papelera_respaldo || []).find((x) => x.id_eliminado === delId);
+  if (!entry || !entry.datos) {
+    showToast("No se encontraron los datos respaldados de este elemento.", "error");
+    return;
+  }
+  const conf = await Swal.fire({
+    title: `¿Recuperar "${entry.etiqueta}"?`,
+    text: "El registro se restaurará de inmediato a su módulo original y se sincronizará con Google Sheets.",
+    icon: "question",
+    showCancelButton: true,
+    confirmButtonColor: "#182254",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, recuperar ahora"
+  });
+  if (!conf.isConfirmed) return;
+
+  const d = entry.datos;
+  const upsertByKey = (arr, item, keyFn) => {
+    const k = keyFn(item);
+    const filtered = (Array.isArray(arr) ? arr : []).filter((x) => keyFn(x) !== k);
+    filtered.push(item);
+    return filtered;
+  };
+
+  switch (entry.tipo_entidad) {
+    case "orden":
+      if (d.orden) db.ordenes = upsertByKey(db.ordenes, d.orden, (x) => x.id_orden);
+      if (Array.isArray(d.subtareas)) {
+        d.subtareas.forEach((s) => { db.subtareas = upsertByKey(db.subtareas, s, (x) => x.id_subtarea); });
+      }
+      if (Array.isArray(d.bitacora)) {
+        d.bitacora.forEach((b) => { db.bitacora = upsertByKey(db.bitacora, b, (x) => x.id_mensaje); });
+      }
+      if (Array.isArray(d.finanzas)) {
+        d.finanzas.forEach((f) => { db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, f, (x) => x.id_mov || x.id_movimiento); });
+      }
+      break;
+    case "cliente":
+      db.clientes = upsertByKey(db.clientes, d, (x) => x.id_cliente);
+      break;
+    case "catalogo_a":
+      db.catalogo_servicios = upsertByKey(db.catalogo_servicios, d, (x) => x.id_cat || x.id_servicio);
+      break;
+    case "catalogo_b":
+      db.catalogo_destajo = upsertByKey(db.catalogo_destajo, d, (x) => x.id_destajo);
+      break;
+    case "usuario":
+      db.usuarios = upsertByKey(db.usuarios, d, (x) => x.id_usuario);
+      break;
+    case "cuenta_por_pagar":
+      if (d.cxp) db.cuentas_por_pagar = upsertByKey(db.cuentas_por_pagar, d.cxp, (x) => x.id_cxp);
+      if (Array.isArray(d.linkedMovs)) {
+        d.linkedMovs.forEach((m) => { db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, m, (x) => x.id_mov || x.id_movimiento); });
+      }
+      break;
+    case "cuenta_bancaria": {
+      if (!db.config) db.config = {};
+      const curList = getConfiguredBankAccounts();
+      db.config.bancos_cuentas = upsertByKey(curList, d, (x) => x.id);
+      break;
+    }
+    case "voucher":
+      db.vouchers_nomina = upsertByKey(db.vouchers_nomina, d, (x) => x.id_voucher);
+      break;
+    case "movimiento_finanzas":
+      db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, d, (x) => x.id_mov || x.id_movimiento);
+      break;
+    case "asistencia":
+      db.asistencias = upsertByKey(db.asistencias, d, (x) => x.id_asist || x.id_asistencia);
+      break;
+    case "limpieza_lote":
+      if (Array.isArray(d.ordenes)) d.ordenes.forEach((o) => { db.ordenes = upsertByKey(db.ordenes, o, (x) => x.id_orden); });
+      if (Array.isArray(d.subtareas)) d.subtareas.forEach((s) => { db.subtareas = upsertByKey(db.subtareas, s, (x) => x.id_subtarea); });
+      if (Array.isArray(d.bitacora)) d.bitacora.forEach((b) => { db.bitacora = upsertByKey(db.bitacora, b, (x) => x.id_mensaje); });
+      if (Array.isArray(d.finanzas_movimientos)) d.finanzas_movimientos.forEach((f) => { db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, f, (x) => x.id_mov || x.id_movimiento); });
+      if (Array.isArray(d.cuentas_por_pagar)) d.cuentas_por_pagar.forEach((c) => { db.cuentas_por_pagar = upsertByKey(db.cuentas_por_pagar, c, (x) => x.id_cxp); });
+      break;
+    default:
+      showToast("Tipo de respaldo no reconocido.", "warning");
+      return;
+  }
+
+  db = normalizeDatabaseSchema(db);
+  saveDatabase(`Recuperado desde Papelera: ${entry.etiqueta}`);
+  await flushCloudPush(false, { forceBackup: true, reason: `Recuperación desde Papelera: ${entry.etiqueta}` });
+  populateLoginSelect();
+  openRecycleBinModal();
+  renderApp();
+  showToast(`"${entry.etiqueta}" recuperado con éxito y respaldado en Google Sheets.`);
+}
+
 function openCloudSyncModal() {
   const statusBg = hasUnsyncedLocalChanges ? "rgba(239,68,68,0.12)" : "rgba(22,163,74,0.1)";
   const statusBorder = hasUnsyncedLocalChanges ? "rgba(239,68,68,0.45)" : "rgba(22,163,74,0.4)";
@@ -2459,7 +3111,7 @@ function openCloudSyncModal() {
             ${hasUnsyncedLocalChanges ? "Hay cambios locales esperando conexión para subir a la nube" : "Conectado y Respaldado en Google Sheets"}
           </div>
           <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
-            Última sincronización: <strong>${lastCloudSyncTime}</strong> · Rev: <strong>#${lastKnownCloudRevision}</strong> · Órdenes: <strong>${db.ordenes.length}</strong> · Servicios: <strong>${(db.catalogo_servicios || []).length}</strong> · CxP: <strong>${(db.cuentas_por_pagar || []).length}</strong>
+            Última sincronización: <strong>${lastCloudSyncTime}</strong> · Rev: <strong>#${lastKnownCloudRevision}</strong> · Órdenes: <strong>${db.ordenes.length}</strong> · Lista A: <strong>${(db.catalogo_servicios || []).length}</strong> · Lista B: <strong>${(db.catalogo_destajo || []).length}</strong> · Papelera: <strong>${(db.papelera_respaldo || []).length}</strong>
           </div>
         </div>
         <span class="state-badge ${hasUnsyncedLocalChanges ? "state-badge--wait" : "state-badge--done"}">${hasUnsyncedLocalChanges ? "PENDIENTE" : cloudSyncStatus === "online" ? "RESPALDADO" : cloudSyncStatus === "syncing" ? "GUARDANDO" : "LOCAL"}</span>
@@ -2495,6 +3147,9 @@ function openCloudSyncModal() {
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <button type="button" class="btn btn--primary btn--sm" onclick="openCloudBackupsModal()">
             <i class="fas fa-clock-rotate-left"></i> Ver / Restaurar Respaldos
+          </button>
+          <button type="button" class="btn btn--warning btn--sm" onclick="openRecycleBinModal()">
+            <i class="fas fa-trash-restore"></i> Papelera / Recuperar Borrados (${(db.papelera_respaldo || []).length})
           </button>
           <button type="button" class="btn btn--gold btn--sm" onclick="createCloudBackupNow()">
             <i class="fas fa-cloud-arrow-up"></i> Crear Respaldo Ahora
@@ -2556,6 +3211,19 @@ function clearAllTestOrders() {
     confirmButtonText: "Sí, dejar en cero real"
   }).then(async (res) => {
     if (res.isConfirmed) {
+      archiveToRecycleBin(
+        "limpieza_lote",
+        "CLEAR-" + Date.now(),
+        `Limpieza masiva (${(db.ordenes || []).length} órdenes · ${(db.finanzas_movimientos || []).length} movs)`,
+        {
+          ordenes: db.ordenes || [],
+          subtareas: db.subtareas || [],
+          bitacora: db.bitacora || [],
+          finanzas_movimientos: db.finanzas_movimientos || [],
+          cuentas_por_pagar: db.cuentas_por_pagar || []
+        },
+        "Limpieza de pedidos de prueba (respaldado antes de limpiar)"
+      );
       db.ordenes = [];
       db.subtareas = [];
       db.bitacora = [];
@@ -2573,7 +3241,7 @@ function clearAllTestOrders() {
       await flushCloudPush(false, { force: true, forceBackup: true, reason: "Limpieza de pedidos de prueba" });
       closeModal();
       if (currentUser) renderApp();
-      showToast("Sistema en cero real sincronizado con Google Sheets.");
+      showToast("Sistema en cero real sincronizado con Google Sheets (respaldo guardado en Papelera).");
     }
   });
 }
@@ -2583,7 +3251,7 @@ function deleteOrder(orderId) {
   if (!ord) return;
   Swal.fire({
     title: `¿Eliminar Troquel #${ord.codigo_troquel}?`,
-    text: `Se eliminará la orden de ${ord.nombre_cliente} (${ord.datos_motor.marca} ${ord.datos_motor.modelo}) junto con sus subtareas y bitácora.`,
+    text: `Se eliminará la orden de ${ord.nombre_cliente} (${ord.datos_motor.marca} ${ord.datos_motor.modelo}) junto con sus subtareas y bitácora. Quedará una copia recuperable en la Papelera de Respaldo.`,
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#dc2626",
@@ -2592,6 +3260,18 @@ function deleteOrder(orderId) {
     confirmButtonText: "Sí, eliminar orden"
   }).then(async (res) => {
     if (res.isConfirmed) {
+      archiveToRecycleBin(
+        "orden",
+        ord.id_orden,
+        `Troquel #${ord.codigo_troquel} — ${ord.nombre_cliente || "Cliente"} (${ord.datos_motor?.marca || ""} ${ord.datos_motor?.modelo || ""})`,
+        {
+          orden: ord,
+          subtareas: (db.subtareas || []).filter((s) => s.orden_id === orderId),
+          bitacora: (db.bitacora || []).filter((b) => b.orden_id === orderId),
+          finanzas: (db.finanzas_movimientos || []).filter((f) => f.orden_id === orderId)
+        },
+        `Eliminación de orden #${ord.codigo_troquel}`
+      );
       db.ordenes = db.ordenes.filter((o) => o.id_orden !== orderId);
       db.subtareas = db.subtareas.filter((s) => s.orden_id !== orderId);
       db.bitacora = db.bitacora.filter((b) => b.orden_id !== orderId);
@@ -2604,7 +3284,7 @@ function deleteOrder(orderId) {
       closeModal();
       renderApp();
       await flushCloudPush(true, { reason: `Orden #${ord.codigo_troquel} eliminada` });
-      showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada y sincronizada.`);
+      showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada (recuperable desde Papelera).`);
     }
   });
 }
@@ -2637,6 +3317,7 @@ function loadDatabase() {
 function saveLocalOnly() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    saveCatalogsSafetyVault(db);
   } catch (e) {
     console.error("Error al guardar en localStorage (posible exceso de cuota):", e);
     try {
@@ -2713,6 +3394,14 @@ function updateThemeIcon(theme) {
   const icon = document.getElementById("theme-icon");
   if (icon) {
     icon.className = theme === "dark" ? "fas fa-sun" : "fas fa-moon";
+  }
+  const sbIcon = document.getElementById("sidebar-theme-icon");
+  if (sbIcon) {
+    sbIcon.className = theme === "dark" ? "fas fa-sun" : "fas fa-moon";
+  }
+  const sbLbl = document.getElementById("sidebar-theme-label");
+  if (sbLbl) {
+    sbLbl.textContent = theme === "dark" ? "Claro" : "Oscuro";
   }
 }
 
@@ -3078,6 +3767,354 @@ function sendPushNotification(title, options = {}) {
   }
 }
 
+/* ============================================================================
+   CENTRO DE NOTIFICACIONES Y CONTADORES DE BITÁCORAS ESTILO WHATSAPP (v43)
+   - Campana desplegable en barra superior (PC y Teléfono) agrupada por orden
+   - Contador numérico amarillo por orden sin revisar (Gerencia y Técnicos)
+   - Botón directo "Responder" que salta a la bitácora y marca como leída
+   ============================================================================ */
+function getBitacoraMessageSortTs(m) {
+  if (!m) return 0;
+  const idMatch = String(m.id_mensaje || "").match(/(\d{12,15})/);
+  if (idMatch) {
+    const n = Number(idMatch[1]);
+    if (Number.isFinite(n) && n > 1000000000000) return n;
+  }
+  const rawDate = String(m.fecha_hora || "").trim();
+  if (rawDate) {
+    const t = Date.parse(rawDate.replace(" ", "T"));
+    if (Number.isFinite(t)) return t;
+  }
+  return 0;
+}
+
+function getUserBitacoraReadMap(userId) {
+  const uid = String(userId || (currentUser && currentUser.id_usuario) || "").trim();
+  if (!uid) return {};
+  const localAll = safeJsonParse(localStorage.getItem(BITACORA_READS_KEY), {}) || {};
+  const cloudAll = (db && db.config && db.config.bitacora_lecturas) || {};
+  const merged = mergeBitacoraReadsMaps(cloudAll, localAll);
+  return merged[uid] || {};
+}
+
+function saveUserBitacoraReadTimestamp(userId, orderId, tsValue, syncCloud = false) {
+  const uid = String(userId || "").trim();
+  const oid = String(orderId || "").trim();
+  if (!uid || !oid) return;
+  const val = Number(tsValue) || Date.now();
+  try {
+    const localAll = safeJsonParse(localStorage.getItem(BITACORA_READS_KEY), {}) || {};
+    if (!localAll[uid] || typeof localAll[uid] !== "object") localAll[uid] = {};
+    if (!localAll[uid][oid] || val > localAll[uid][oid]) {
+      localAll[uid][oid] = val;
+      localStorage.setItem(BITACORA_READS_KEY, JSON.stringify(localAll));
+    }
+  } catch (e) {}
+
+  if (db) {
+    if (!db.config) db.config = {};
+    if (!db.config.bitacora_lecturas || typeof db.config.bitacora_lecturas !== "object") {
+      db.config.bitacora_lecturas = {};
+    }
+    if (!db.config.bitacora_lecturas[uid] || typeof db.config.bitacora_lecturas[uid] !== "object") {
+      db.config.bitacora_lecturas[uid] = {};
+    }
+    if (!db.config.bitacora_lecturas[uid][oid] || val > db.config.bitacora_lecturas[uid][oid]) {
+      db.config.bitacora_lecturas[uid][oid] = val;
+      saveLocalOnly();
+      if (syncCloud && hasSyncedFromCloudOnce) {
+        markLocalChangesDirty();
+        queueCloudPush(true, { reason: "Lectura de bitácora sincronizada" });
+      }
+    }
+  }
+}
+
+function isBitacoraMessageVisibleToUser(m, user) {
+  if (!m || !user) return false;
+  if (m.id_mensaje === "SYS-META-STATE" || m.orden_id === "__SYSTEM__") return false;
+  if (!m.orden_id || m.orden_id === "-") return false;
+  const isPriv = user.rol === "admin" || user.rol === "jefe_taller";
+  if (isPriv) return true;
+
+  if (user.rol === "tecnico") {
+    const assignedToOrder = (db.subtareas || []).some(
+      (s) => s.orden_id === m.orden_id && s.tecnico_id === user.id_usuario
+    );
+    if (!assignedToOrder) return false;
+  }
+  const txt = String(m.mensaje || "").toLowerCase();
+  if (m.tipo_evento === "cobro_resto" || m.tipo_evento === "abono" || m.tipo_evento === "pago" || m.tipo_evento === "finanzas") {
+    return false;
+  }
+  if (
+    txt.includes("presupuesto inicial:") ||
+    txt.includes("pago recibido") ||
+    txt.includes("saldo pendiente") ||
+    txt.includes("resto pendiente") ||
+    txt.includes("abono")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function getUnreadBitacoraMessagesForOrder(orderId, user) {
+  const u = user || currentUser;
+  if (!u || !orderId) return [];
+  const ord = (db.ordenes || []).find((o) => o.id_orden === orderId);
+  if (!ord) return [];
+
+  const readMap = getUserBitacoraReadMap(u.id_usuario);
+  const lastReadTs = Number(readMap[orderId]) || 0;
+  // No saturar con órdenes históricas ya archivadas/anuladas si nunca se marcaron antes
+  if ((ord.estado_actual === "archivado" || ord.estado_actual === "anulado") && lastReadTs === 0) {
+    return [];
+  }
+
+  return (db.bitacora || []).filter((m) => {
+    if (!m || m.orden_id !== orderId) return false;
+    if (!isBitacoraMessageVisibleToUser(m, u)) return false;
+    if (String(m.autor_id || "") === String(u.id_usuario || "")) return false;
+    const msgTs = getBitacoraMessageSortTs(m);
+    if (lastReadTs > 0) {
+      return msgTs > lastReadTs;
+    }
+    return true;
+  });
+}
+
+function getAllUnreadBitacoraGroups(user) {
+  const u = user || currentUser;
+  if (!u) return { totalUnread: 0, groups: [] };
+  const groups = [];
+  let totalUnread = 0;
+
+  (db.ordenes || []).forEach((ord) => {
+    const unreadMsgs = getUnreadBitacoraMessagesForOrder(ord.id_orden, u);
+    if (!unreadMsgs.length) return;
+    unreadMsgs.sort((a, b) => getBitacoraMessageSortTs(b) - getBitacoraMessageSortTs(a));
+    const latestMsg = unreadMsgs[0];
+    const latestTs = getBitacoraMessageSortTs(latestMsg);
+    totalUnread += unreadMsgs.length;
+    groups.push({
+      order: ord,
+      orderId: ord.id_orden,
+      codigo_troquel: ord.codigo_troquel,
+      unreadCount: unreadMsgs.length,
+      latestMsg,
+      latestTs
+    });
+  });
+
+  groups.sort((a, b) => b.latestTs - a.latestTs);
+  return { totalUnread, groups };
+}
+
+function markOrderBitacoraAsRead(orderId, syncCloud = true) {
+  if (!currentUser || !orderId) return;
+  const msgs = (db.bitacora || []).filter((m) => m && m.orden_id === orderId);
+  let maxTs = 0;
+  msgs.forEach((m) => {
+    const ts = getBitacoraMessageSortTs(m);
+    if (ts > maxTs) maxTs = ts;
+  });
+  const stamp = maxTs > 0 ? maxTs : Date.now();
+  saveUserBitacoraReadTimestamp(currentUser.id_usuario, orderId, stamp, syncCloud);
+  renderBitacoraBellBadge();
+}
+
+function markAllBitacorasAsRead() {
+  if (!currentUser) return;
+  const { groups } = getAllUnreadBitacoraGroups(currentUser);
+  groups.forEach((g) => {
+    markOrderBitacoraAsRead(g.orderId, false);
+  });
+  if (groups.length > 0 && hasSyncedFromCloudOnce) {
+    markLocalChangesDirty();
+    queueCloudPush(true, { reason: "Todas las bitácoras marcadas como leídas" });
+  }
+  renderBitacoraBellBadge();
+  renderBitacoraNotificationsDropdown();
+  renderScreen();
+  showToast("Todas las novedades de bitácoras marcadas como revisadas.");
+}
+
+function renderBitacoraUnreadBadgeHtml(orderId, extraClass = "") {
+  if (!currentUser || !orderId) return "";
+  const unread = getUnreadBitacoraMessagesForOrder(orderId, currentUser).length;
+  if (unread <= 0) return "";
+  const label = unread > 99 ? "99+" : String(unread);
+  return `<span class="bitacora-unread-badge ${extraClass}" title="${unread} novedad(es) sin revisar en esta bitácora">${label}</span>`;
+}
+
+function renderBitacoraBellBadge() {
+  const badgeEl = document.getElementById("bitacora-bell-badge");
+  const bellBtn = document.getElementById("btn-push-notifications");
+  if (!badgeEl || !bellBtn) return;
+  if (!currentUser) {
+    badgeEl.classList.add("hidden");
+    bellBtn.classList.remove("has-unread-bitacora");
+    return;
+  }
+  const { totalUnread } = getAllUnreadBitacoraGroups(currentUser);
+  if (totalUnread > 0) {
+    badgeEl.textContent = totalUnread > 99 ? "99+" : String(totalUnread);
+    badgeEl.classList.remove("hidden");
+    bellBtn.classList.add("has-unread-bitacora");
+    bellBtn.title = `${totalUnread} mensaje(s) nuevo(s) en bitácoras · Haz clic para ver y responder`;
+  } else {
+    badgeEl.textContent = "0";
+    badgeEl.classList.add("hidden");
+    bellBtn.classList.remove("has-unread-bitacora");
+    bellBtn.title = "Novedades en Bitácoras (Sin mensajes pendientes)";
+  }
+}
+
+function renderBitacoraNotificationsDropdown() {
+  const dropdown = document.getElementById("bitacora-notif-dropdown");
+  if (!dropdown || !currentUser) return;
+
+  const { totalUnread, groups } = getAllUnreadBitacoraGroups(currentUser);
+  const pushGranted = ("Notification" in window) && Notification.permission === "granted";
+
+  // Si no hay no leídos, mostrar accesos rápidos a las últimas 3 bitácoras activas con mensajes
+  let recentFallbackHtml = "";
+  if (groups.length === 0) {
+    const recentByOrder = new Map();
+    (db.bitacora || [])
+      .filter((m) => isBitacoraMessageVisibleToUser(m, currentUser))
+      .sort((a, b) => getBitacoraMessageSortTs(b) - getBitacoraMessageSortTs(a))
+      .forEach((m) => {
+        if (!recentByOrder.has(m.orden_id) && recentByOrder.size < 3) {
+          const ord = (db.ordenes || []).find((o) => o.id_orden === m.orden_id);
+          if (ord) recentByOrder.set(m.orden_id, { ord, msg: m });
+        }
+      });
+    const recArr = Array.from(recentByOrder.values());
+    if (recArr.length > 0) {
+      recentFallbackHtml = `
+        <div class="bitacora-notif-section-lbl">Últimas bitácoras activas</div>
+        ${recArr
+          .map(
+            ({ ord, msg }) => `
+            <div class="bitacora-notif-item bitacora-notif-item--read" onclick="openBitacoraFromNotification('${ord.id_orden}')">
+              <div class="bitacora-notif-item-top">
+                <span class="bitacora-notif-troquel"><i class="fas fa-barcode"></i> #${escapeHtml(ord.codigo_troquel)}</span>
+                <span class="bitacora-notif-vehicle">${escapeHtml(ord.datos_motor?.marca || "")} ${escapeHtml(ord.datos_motor?.modelo || "")}</span>
+                <span class="bitacora-notif-time">${formatDateHuman(msg.fecha_hora, true)}</span>
+              </div>
+              <div class="bitacora-notif-preview">
+                <strong>${escapeHtml(msg.autor_nombre || "Sistema")}:</strong> ${escapeHtml(String(msg.mensaje || "").slice(0, 75))}${String(msg.mensaje || "").length > 75 ? "..." : ""}
+              </div>
+            </div>
+          `
+          )
+          .join("")}
+      `;
+    }
+  }
+
+  const listHtml = groups.length
+    ? groups
+        .map((g) => {
+          const msg = g.latestMsg || {};
+          const previewRaw = String(msg.mensaje || "");
+          const preview = previewRaw.length > 90 ? previewRaw.slice(0, 90) + "..." : previewRaw;
+          const hasPhoto = Boolean(msg.foto_adjunta_url);
+          return `
+            <div class="bitacora-notif-item" onclick="openBitacoraFromNotification('${g.orderId}')">
+              <div class="bitacora-notif-item-top">
+                <div style="display:flex; align-items:center; gap:6px; min-width:0; flex:1;">
+                  <span class="bitacora-notif-troquel"><i class="fas fa-barcode"></i> #${escapeHtml(g.codigo_troquel)}</span>
+                  <span class="bitacora-notif-vehicle">${escapeHtml(g.order.datos_motor?.marca || "")} ${escapeHtml(g.order.datos_motor?.modelo || "")}</span>
+                </div>
+                <span class="bitacora-notif-count-pill">${g.unreadCount} ${g.unreadCount === 1 ? "nuevo" : "nuevos"}</span>
+              </div>
+              <div class="bitacora-notif-preview">
+                <strong>${escapeHtml(msg.autor_nombre || "Taller")}:</strong>
+                ${hasPhoto ? '<i class="fas fa-camera" style="color:#38bdf8; margin-right:3px;"></i>' : ""}
+                ${escapeHtml(preview || "Foto adjunta en bitácora")}
+              </div>
+              <div class="bitacora-notif-item-bottom">
+                <span class="bitacora-notif-time"><i class="far fa-clock"></i> ${formatDateHuman(msg.fecha_hora, true)}</span>
+                <button type="button" class="btn btn--gold btn--xs bitacora-notif-reply-btn" onclick="event.stopPropagation(); openBitacoraFromNotification('${g.orderId}')">
+                  <i class="fas fa-reply"></i> Responder
+                </button>
+              </div>
+            </div>
+          `;
+        })
+        .join("")
+    : `
+      <div class="bitacora-notif-empty">
+        <i class="fas fa-check-double"></i>
+        <strong>¡Bitácoras al día!</strong>
+        <span>No tienes mensajes nuevos sin revisar.</span>
+      </div>
+      ${recentFallbackHtml}
+    `;
+
+  dropdown.innerHTML = `
+    <div class="bitacora-notif-header">
+      <div>
+        <strong><i class="fas fa-bell" style="color:var(--renacer-gold);"></i> Novedades en Bitácoras</strong>
+        <span>${totalUnread > 0 ? `${totalUnread} sin revisar en ${groups.length} orden(es)` : "Todo revisado"}</span>
+      </div>
+      ${
+        totalUnread > 0
+          ? `<button type="button" class="btn btn--ghost btn--xs" onclick="event.stopPropagation(); markAllBitacorasAsRead()" title="Marcar todas como revisadas">
+               <i class="fas fa-check-double"></i> Leer todo
+             </button>`
+          : ""
+      }
+    </div>
+    <div class="bitacora-notif-list">
+      ${listHtml}
+    </div>
+    <div class="bitacora-notif-footer">
+      <button type="button" class="btn-clean-link" style="font-size:11.5px; color:${pushGranted ? "#22c55e" : "#cbd5e1"};" onclick="event.stopPropagation(); togglePushNotifications();">
+        <i class="fas ${pushGranted ? "fa-bell" : "fa-bell-slash"}"></i> ${pushGranted ? "Alertas Push activas (Probar)" : "Activar Alertas Push del navegador"}
+      </button>
+    </div>
+  `;
+}
+
+function toggleBitacoraNotificationsDropdown(event) {
+  if (event && event.stopPropagation) event.stopPropagation();
+  const dropdown = document.getElementById("bitacora-notif-dropdown");
+  if (!dropdown) return;
+  const isOpen = !dropdown.classList.contains("hidden");
+  if (isOpen) {
+    dropdown.classList.add("hidden");
+  } else {
+    renderBitacoraNotificationsDropdown();
+    dropdown.classList.remove("hidden");
+  }
+}
+
+function closeBitacoraNotificationsDropdown() {
+  const dropdown = document.getElementById("bitacora-notif-dropdown");
+  if (dropdown) dropdown.classList.add("hidden");
+}
+
+function openBitacoraFromNotification(orderId) {
+  closeBitacoraNotificationsDropdown();
+  openOrderCrmModal(orderId);
+  setTimeout(() => {
+    const inp = document.getElementById("crm-new-msg-text");
+    if (inp) inp.focus();
+  }, 180);
+}
+
+document.addEventListener("click", (ev) => {
+  const wrap = document.querySelector(".bitacora-bell-wrapper");
+  const dd = document.getElementById("bitacora-notif-dropdown");
+  if (dd && !dd.classList.contains("hidden") && wrap && !wrap.contains(ev.target)) {
+    dd.classList.add("hidden");
+  }
+});
+
 /* ---------- Perfil Interactivo y Configuración Personal ---------- */
 function openInteractiveProfileModal(userId) {
   const targetId = userId || (currentUser ? currentUser.id_usuario : "USR-MOISES");
@@ -3246,8 +4283,10 @@ function loginSuccess(user) {
     // Asistencia presencial: El inicio de sesión NO registra asistencia automática.
     // La asistencia se registra exclusivamente mediante escaneo de QR en el Kiosco del taller o marcado presencial.
 
-    // Seleccionar pestaña inicial según el rol
-    if (user.rol === "tecnico") {
+    // Seleccionar pestaña inicial según el rol y perfil específico (Javier Andrade restringido a 3 ventanas)
+    if (isJavierRestrictedUser(user)) {
+      currentTab = "inventario";
+    } else if (user.rol === "tecnico") {
       currentTab = "worker_panel";
     } else {
       currentTab = "pipeline";
@@ -3400,7 +4439,17 @@ function attemptSwitchUserWithPin(userId) {
 
 /* ---------- Pestañas Limpias por Rol (Diseño Oficial de Barra Lateral - Jesús Andrade) ---------- */
 function getTabsForRole(role) {
-  const countAR = db.ordenes.filter((o) => Number(o.saldo_pendiente) > 0).length;
+  const countAR = db.ordenes.filter((o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado").length;
+  const lowStockCount = (db.inventario_repuestos || []).filter((r) => Number(r.stock_actual) <= Number(r.stock_minimo)).length;
+
+  // PERFIL ESPECÍFICO JAVIER ANDRADE (v43): Solo 3 ventanas completas (Inventario, Personal y Comisiones, Facturas por Cobrar)
+  if (isJavierRestrictedUser(currentUser)) {
+    return [
+      { id: "inventario", label: "Inventario Repuestos", shortLabel: "Inventario", icon: "fa-boxes-stacked", badge: lowStockCount || undefined },
+      { id: "commissions_hr", label: "Personal y Comisiones", shortLabel: "Personal", icon: "fa-user-check" },
+      { id: "accounts_receivable", label: "Facturas por cobrar", shortLabel: "Cobrar", icon: "fa-file-invoice-dollar", badge: countAR }
+    ];
+  }
 
   if (role === "tecnico") {
     const myTasks = db.subtareas.filter((s) => s.tecnico_id === currentUser.id_usuario && s.estado_subtarea !== "terminado").length;
@@ -3423,7 +4472,6 @@ function getTabsForRole(role) {
   }
 
   if (role === "inventario") {
-    const lowStockCount = (db.inventario_repuestos || []).filter((r) => r.stock_actual <= r.stock_minimo).length;
     return [
       { id: "inventario", label: "Inventario Repuestos", shortLabel: "Inventario", icon: "fa-boxes-stacked", badge: lowStockCount || undefined },
       { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length }
@@ -3432,7 +4480,6 @@ function getTabsForRole(role) {
 
   // Administrador (Moisés) y Jefes de Taller (Jesús Andrade y Sr. Enrique)
   // Estructura oficial del boceto WEB RENACER DISEÑO 1
-  const lowStockCount = (db.inventario_repuestos || []).filter((r) => r.stock_actual <= r.stock_minimo).length;
   return [
     { id: "dashboard", label: "Inicio", shortLabel: "Inicio", icon: "fa-home" },
     { id: "clients_dir", label: "Clientes", shortLabel: "Clientes", icon: "fa-users" },
@@ -3478,12 +4525,29 @@ function setDateFilterCurrentWeek() {
   renderScreen();
 }
 
-function toggleSidebarMenu() {
+function toggleSidebarMenu(forceState) {
   const sb = document.getElementById("renacer-sidebar");
-  if (sb) sb.classList.toggle("mobile-open");
+  const backdrop = document.getElementById("sidebar-mobile-backdrop");
+  if (!sb) return;
+  let openNow;
+  if (typeof forceState === "boolean") {
+    sb.classList.toggle("mobile-open", forceState);
+    openNow = forceState;
+  } else {
+    openNow = sb.classList.toggle("mobile-open");
+  }
+  if (backdrop) backdrop.classList.toggle("active", openNow);
 }
 
 function navigateTab(tabId) {
+  if (isJavierRestrictedUser(currentUser)) {
+    const allowedForJavier = ["inventario", "commissions_hr", "accounts_receivable", "default"];
+    if (!allowedForJavier.includes(tabId)) {
+      showToast("Tu perfil tiene acceso a Inventario de Repuestos, Personal y Comisiones, y Facturas por Cobrar.", "warning");
+      tabId = "inventario";
+    }
+    if (tabId === "default") tabId = "inventario";
+  }
   if (currentUser && currentUser.rol === "tecnico") {
     const allowedForTech = ["worker_panel", "worker_earnings", "attendance", "default"];
     if (!allowedForTech.includes(tabId)) {
@@ -3499,11 +4563,12 @@ function navigateTab(tabId) {
     }
   }
   if (tabId === "default") {
-    tabId = currentUser && currentUser.rol === "tecnico" ? "worker_panel" : "dashboard";
+    tabId = isJavierRestrictedUser(currentUser)
+      ? "inventario"
+      : (currentUser && currentUser.rol === "tecnico" ? "worker_panel" : "dashboard");
   }
   currentTab = tabId;
-  const sb = document.getElementById("renacer-sidebar");
-  if (sb) sb.classList.remove("mobile-open");
+  toggleSidebarMenu(false);
   renderApp();
   window.scrollTo({ top: 0, behavior: "smooth" });
 
@@ -3521,7 +4586,15 @@ function handleGlobalSearch(val) {
     if (searchQuery.length > 0) clearBtn.classList.remove("hidden");
     else clearBtn.classList.add("hidden");
   }
-  if (currentTab !== "pipeline" && searchQuery.length > 0 && currentUser.rol !== "tecnico") {
+  if (isJavierRestrictedUser(currentUser)) {
+    if (currentTab === "inventario") {
+      filterInventoryTable(searchQuery);
+    } else {
+      renderScreen();
+    }
+    return;
+  }
+  if (currentTab !== "pipeline" && searchQuery.length > 0 && currentUser && currentUser.rol !== "tecnico") {
     currentTab = "pipeline";
   }
   renderScreen();
@@ -3533,12 +4606,23 @@ function clearGlobalSearch() {
   if (globalSearchEl) globalSearchEl.value = "";
   const clearBtn = document.getElementById("clear-search-btn");
   if (clearBtn) clearBtn.classList.add("hidden");
+  if (currentTab === "inventario") {
+    filterInventoryTable("");
+  }
   renderScreen();
 }
 
 /* ---------- Renderizador Principal ---------- */
 function renderApp() {
   if (!currentUser) return;
+
+  // Garantizar que Javier Andrade permanezca en una de sus 3 ventanas autorizadas
+  if (isJavierRestrictedUser(currentUser)) {
+    const allowedJavier = ["inventario", "commissions_hr", "accounts_receivable"];
+    if (!allowedJavier.includes(currentTab)) {
+      currentTab = "inventario";
+    }
+  }
 
   // Garantizar que el buscador no tenga valores residuales si searchQuery está vacío
   const globalSearchEl = document.getElementById("global-search-input");
@@ -3555,6 +4639,12 @@ function renderApp() {
 
   const userLabel = document.getElementById("active-user-label");
   if (userLabel) userLabel.textContent = currentUser.nombre;
+
+  const sbUserName = document.getElementById("sidebar-user-name");
+  if (sbUserName) sbUserName.textContent = currentUser.nombre;
+  const sbUserRole = document.getElementById("sidebar-user-role");
+  if (sbUserRole) sbUserRole.textContent = currentUser.rol_label || currentUser.rol;
+  updateThemeIcon(document.documentElement.getAttribute("data-theme") || "light");
 
   const roleSubtitle = document.getElementById("header-subtitle-role");
   if (roleSubtitle) roleSubtitle.textContent = currentUser.rol_label;
@@ -3575,7 +4665,7 @@ function renderApp() {
 
   const btnNewOrder = document.getElementById("btn-header-new-order");
   if (btnNewOrder) {
-    if (currentUser.rol === "tecnico") btnNewOrder.classList.add("hidden");
+    if (currentUser.rol === "tecnico" || isJavierRestrictedUser(currentUser)) btnNewOrder.classList.add("hidden");
     else btnNewOrder.classList.remove("hidden");
   }
 
@@ -3614,7 +4704,22 @@ function renderApp() {
 
   const mobileNav = document.getElementById("mobile-bottom-nav");
   if (mobileNav) {
-    if (currentUser.rol === "tecnico") {
+    if (isJavierRestrictedUser(currentUser)) {
+      mobileNav.innerHTML = `
+        <button type="button" class="bottom-nav-item ${currentTab === "inventario" ? "active" : ""}" onclick="navigateTab('inventario')">
+          <i class="fas fa-boxes-stacked"></i>
+          <span>Inventario</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "commissions_hr" ? "active" : ""}" onclick="navigateTab('commissions_hr')">
+          <i class="fas fa-user-check"></i>
+          <span>Personal</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "accounts_receivable" ? "active" : ""}" onclick="navigateTab('accounts_receivable')">
+          <i class="fas fa-file-invoice-dollar"></i>
+          <span>Cobrar</span>
+        </button>
+      `;
+    } else if (currentUser.rol === "tecnico") {
       mobileNav.innerHTML = `
         <button type="button" class="bottom-nav-item ${currentTab === "worker_panel" ? "active" : ""}" onclick="navigateTab('worker_panel')">
           <i class="fas fa-hammer"></i>
@@ -3655,6 +4760,7 @@ function renderApp() {
     }
   }
 
+  renderBitacoraBellBadge();
   renderScreen();
 }
 
@@ -5444,6 +6550,7 @@ function deleteAccountPayable(cxpId) {
     confirmButtonText: "Sí, eliminar deuda"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    archiveToRecycleBin("cuenta_por_pagar", cxp.id_cxp, `${cxp.acreedor} — ${cxp.concepto} ($${Number(cxp.monto_total || 0).toFixed(2)})`, { cxp, linkedMovs }, "Eliminación de Cuenta por Pagar");
     db.cuentas_por_pagar = (db.cuentas_por_pagar || []).filter((c) => c.id_cxp !== cxpId);
     if (linkedMovs.length) {
       db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((m) => m.orden_id !== cxpId);
@@ -5451,7 +6558,7 @@ function deleteAccountPayable(cxpId) {
     saveDatabase(`Cuenta por pagar eliminada: ${cxp.acreedor}`);
     renderApp();
     await flushCloudPush(true);
-    showToast(`Deuda "${cxp.acreedor}" eliminada correctamente.`);
+    showToast(`Deuda "${cxp.acreedor}" eliminada (recuperable en Papelera).`);
   });
 }
 
@@ -5671,13 +6778,14 @@ function deleteDynamicBankAccount(accountId) {
     confirmButtonText: "Sí, quitar cuenta"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    archiveToRecycleBin("cuenta_bancaria", acc.id, `${acc.nombre} (${acc.moneda || "USD"})`, acc, "Cuenta bancaria eliminada");
     if (!db.config) db.config = {};
     db.config.bancos_cuentas = list.filter((b) => b.id !== accountId);
     saveDatabase(`Cuenta bancaria eliminada: ${acc.nombre}`);
     renderApp();
     openManageBankAccountsModal();
     await flushCloudPush(true);
-    showToast(`Cuenta "${acc.nombre}" eliminada.`);
+    showToast(`Cuenta "${acc.nombre}" eliminada (recuperable en Papelera).`);
   });
 }
 
@@ -5922,60 +7030,8 @@ function renderPipelineScreen(forcedState) {
       </div>
     `;
 
-  const isAdmin = currentUser && currentUser.rol === "admin";
-  const isJefe = currentUser && currentUser.rol === "jefe_taller";
-
-  const roleContextBar = isAdmin
-    ? `
-      <div class="admin-context-bar">
-        <div class="admin-context-info">
-          <span class="admin-context-badge">
-            <i class="fas fa-user-shield"></i> ADMINISTRADOR (${currentUser.nombre.toUpperCase()})
-          </span>
-          <span class="admin-context-desc">Control total de órdenes, precios, perfiles y auditoría.</span>
-        </div>
-        <div class="admin-context-actions">
-          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('clients_dir')">
-            <i class="fas fa-users"></i> Clientes
-          </button>
-          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('catalog_mgr')">
-            <i class="fas fa-tags"></i> Catálogo de Precios
-          </button>
-          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('commissions_hr')">
-            <i class="fas fa-user-check"></i> Personal y Comisiones
-          </button>
-          <button type="button" class="btn btn--gold btn--xs" onclick="openTextCustomizerModal()" title="Personalizar títulos y avisos de Jesús Andrade">
-            <i class="fas fa-font"></i> Textos Oficiales
-          </button>
-        </div>
-      </div>
-    `
-    : isJefe
-    ? `
-      <div class="admin-context-bar">
-        <div class="admin-context-info">
-          <span class="admin-context-badge">
-            <i class="fas fa-user-tie"></i> JEFE DE TALLER · ${currentUser.nombre.toUpperCase()}
-          </span>
-          <span class="admin-context-desc">Acceso rápido a recepción, asignación, calidad y cobros.</span>
-        </div>
-        <div class="admin-context-actions">
-          <button type="button" class="btn btn--warning btn--xs" onclick="setPhaseFilter('aprobacion')">
-            <i class="fas fa-hourglass-half"></i> Por Aprobar (${counts.aprobacion})
-          </button>
-          <button type="button" class="btn btn--primary btn--xs" onclick="setPhaseFilter('calidad')">
-            <i class="fas fa-shield-alt"></i> Calidad (${counts.calidad})
-          </button>
-          <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('accounts_receivable')">
-            <i class="fas fa-hand-holding-dollar"></i> Por Cobrar
-          </button>
-          <button type="button" class="btn btn--gold btn--xs" onclick="openTextCustomizerModal()" title="Personalizar avisos y textos del taller">
-            <i class="fas fa-font"></i> Textos
-          </button>
-        </div>
-      </div>
-    `
-    : "";
+  // Barra de accesos rápidos redundante retirada en v43 a solicitud de Gerencia (Jesús & Sr. Enrique)
+  const roleContextBar = "";
 
   return `
     ${roleContextBar}
@@ -6168,8 +7224,8 @@ function renderOrdersCompactTable(orders) {
               <button type="button" class="btn btn--ghost btn--xs" onclick="openDualGalleryInspector('${o.id_orden}')" title="Fotos de pieza y repuestos">
                 <i class="fas fa-camera"></i>
               </button>
-              <button type="button" class="btn btn--ghost btn--xs" onclick="openOrderCrmModal('${o.id_orden}')" title="Chat y Bitácora">
-                <i class="fas fa-comments"></i>
+              <button type="button" class="btn btn--ghost btn--xs bitacora-btn-has-badge" onclick="openOrderCrmModal('${o.id_orden}')" title="Chat y Bitácora">
+                <i class="fas fa-comments"></i>${renderBitacoraUnreadBadgeHtml(o.id_orden, "bitacora-unread-badge--sm")}
               </button>
               <button type="button" class="btn btn--ghost btn--xs" style="color:#22c55e;" onclick="openWhatsAppBudgetTextModal('${o.id_orden}')" title="Enviar presupuesto por WhatsApp">
                 <i class="fab fa-whatsapp"></i>
@@ -6677,8 +7733,8 @@ function renderOrderCardTelegramStyle(order) {
             <i class="fas fa-camera"></i> <span>${countFotosPieza + countFotosRepuestos}</span>
           </button>
           <span style="color:#334155;">|</span>
-          <button type="button" class="order-clean-pill-btn" onclick="openOrderCrmModal('${order.id_orden}')" title="Bitácora técnica y chat">
-            <i class="fas fa-comments"></i> <span>${chatMessages.length}</span>
+          <button type="button" class="order-clean-pill-btn bitacora-btn-has-badge" onclick="openOrderCrmModal('${order.id_orden}')" title="Bitácora técnica y chat">
+            <i class="fas fa-comments"></i> <span>${chatMessages.length}</span>${renderBitacoraUnreadBadgeHtml(order.id_orden, "bitacora-unread-badge--card")}
           </button>
           <span style="color:#334155;">|</span>
           <button type="button" class="order-clean-pill-btn order-clean-pill-btn--wa" onclick="openWhatsAppBudgetTextModal('${order.id_orden}')" title="Enviar presupuesto detallado por WhatsApp">
@@ -6732,7 +7788,7 @@ function sendQuickInlineChatMessage(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalDateTimeISO().slice(0, 16);
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
     orden_id: order.id_orden,
@@ -6747,6 +7803,7 @@ function sendQuickInlineChatMessage(orderId) {
   });
 
   inp.value = "";
+  markOrderBitacoraAsRead(order.id_orden, false);
   saveDatabase();
   renderScreen();
   showToast(`Mensaje agregado al chat de Troquel #${order.codigo_troquel}.`);
@@ -8105,12 +9162,16 @@ function quickViewOrderDetails(orderId) {
 
       <!-- Botones de Acción -->
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding-top:12px; border-top:1px solid var(--border-subtle);">
-        <button type="button" class="btn btn--gold" onclick="jumpToOrderInPipeline('${order.id_orden}')">
-          <i class="fas fa-crosshairs"></i> Ir a la Orden en Tablero
-        </button>
+        ${
+          isJavierRestrictedUser(currentUser)
+            ? `<span></span>`
+            : `<button type="button" class="btn btn--gold" onclick="jumpToOrderInPipeline('${order.id_orden}')">
+                 <i class="fas fa-crosshairs"></i> Ir a la Orden en Tablero
+               </button>`
+        }
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--ghost" onclick="openOrderCrmModal('${order.id_orden}')">
-            <i class="fas fa-comments"></i> Bitácora
+          <button type="button" class="btn btn--ghost bitacora-btn-has-badge" onclick="openOrderCrmModal('${order.id_orden}')">
+            <i class="fas fa-comments"></i> Bitácora${renderBitacoraUnreadBadgeHtml(order.id_orden, "bitacora-unread-badge--sm")}
           </button>
           <button type="button" class="btn btn--ghost" onclick="printOrderReceptionTicket('${order.id_orden}')">
             <i class="fas fa-print"></i> Ticket
@@ -11159,9 +12220,13 @@ function confirmSubtaskAssignments(orderId) {
       return;
     }
     if (s.tecnico_id) {
+      const prevSub = (db.subtareas || []).find((orig) => orig.id_subtarea === s.id_subtarea);
       const tech = db.usuarios.find((u) => u.id_usuario === s.tecnico_id);
       s.nombre_tecnico = tech ? tech.nombre : (s.nombre_tecnico || "Asignado");
       s.es_outsourcing = Boolean((tech && isExternalUser(tech)) || s.es_repuesto_externo);
+      if (!s.fecha_asignacion || !prevSub || prevSub.tecnico_id !== s.tecnico_id) {
+        s.fecha_asignacion = new Date().toISOString();
+      }
       if (s.es_outsourcing) {
         enforceExternalSubtaskDirectState(s);
       } else if (!s.estado_subtarea) {
@@ -12354,7 +13419,7 @@ function renderAccountsReceivableScreen() {
     baseSet = allTotalOrders;
   }
 
-  // Filtro por Cliente y Fechas
+  // Filtro por Cliente, Fechas y Búsqueda Global (v43)
   let filtered = baseSet.slice();
   if (arFilterClient !== "all") {
     filtered = filtered.filter((o) => o.cliente_id === arFilterClient);
@@ -12364,6 +13429,12 @@ function renderAccountsReceivableScreen() {
   }
   if (arDateTo) {
     filtered = filtered.filter((o) => cleanDateISO(o.fecha_ingreso) <= arDateTo);
+  }
+  if (searchQuery) {
+    filtered = filtered.filter((o) => {
+      const blob = `${o.id_orden} ${o.codigo_troquel} ${o.nombre_cliente} ${o.documento_cliente} ${o.datos_motor?.marca || ""} ${o.datos_motor?.modelo || ""} ${o.datos_motor?.tipo_pieza || ""}`.toLowerCase();
+      return blob.includes(searchQuery);
+    });
   }
 
   // Agrupar por Cliente
@@ -12869,6 +13940,37 @@ function sendClientStatementWhatsApp(clientId) {
    OPERATIVOS EN TIEMPO REAL Y REQUISITO FOTOGRÁFICO OBLIGATORIO DE CIERRE
    ============================================================================ */
 let selectedWorkerFilterId = null;
+let workerPanelViewTab = "pendientes"; // "pendientes" | "entregados"
+let workerDoneAccordionOpen = false;
+
+function setWorkerPanelViewTab(tab) {
+  workerPanelViewTab = tab === "entregados" ? "entregados" : "pendientes";
+  renderScreen();
+}
+
+function toggleWorkerDoneAccordion() {
+  workerDoneAccordionOpen = !workerDoneAccordionOpen;
+  renderScreen();
+}
+
+function getWorkerGroupSortTimestamp(group) {
+  let maxTs = 0;
+  (group.subtasks || []).forEach((s) => {
+    if (s.fecha_asignacion) {
+      const t = Date.parse(String(s.fecha_asignacion));
+      if (Number.isFinite(t) && t > maxTs) maxTs = t;
+    }
+    const idNum = String(s.id_subtarea || "").match(/(\d{12,15})/);
+    if (idNum) {
+      const t = Number(idNum[1]);
+      if (Number.isFinite(t) && t > maxTs) maxTs = t;
+    }
+  });
+  if (maxTs > 0) return maxTs;
+  const ordDate = group.order && group.order.fecha_ingreso ? Date.parse(String(group.order.fecha_ingreso).replace(" ", "T")) : 0;
+  if (Number.isFinite(ordDate) && ordDate > 0) return ordDate;
+  return Number(group.order && group.order.codigo_troquel) || 0;
+}
 
 function formatLiveWorkerTroquelTimer(orderId, workerId) {
   const subs = (db.subtareas || []).filter((s) => s.orden_id === orderId && s.tecnico_id === workerId);
@@ -12973,7 +14075,7 @@ function renderWorkerPanelScreen() {
     terminado: "TERMINADO (EN CONTROL DE CALIDAD)"
   };
 
-  // AGRUPACIÓN OFICIAL POR TAPA / TROQUEL (FEEDBACK JESÚS ANDRADE: 1 TARJETA POR PIEZA FÍSICA CON CHECKLIST BASE)
+  // AGRUPACIÓN OFICIAL POR TAPA / TROQUEL (v43: Compacta, más recientes primero, parpadeo amarillo sin iniciar, Pendientes vs Entregados)
   const groupedOrdersMap = {};
   visibleSubtasks.forEach((sub) => {
     if (!groupedOrdersMap[sub.orden_id]) {
@@ -12986,329 +14088,358 @@ function renderWorkerPanelScreen() {
     }
     groupedOrdersMap[sub.orden_id].subtasks.push(sub);
   });
-  const orderGroups = Object.values(groupedOrdersMap);
 
-  const tasksHtml = orderGroups.length
-    ? orderGroups
-        .map((group) => {
-          const ord = group.order;
-          const mySubtasks = group.subtasks;
-          const totalTasks = mySubtasks.length;
-          const completedTasks = mySubtasks.filter((s) => s.estado_subtarea === "terminado").length;
-          const isAllDone = totalTasks > 0 && completedTasks === totalTasks;
-          const totalWorkerCommission = mySubtasks.reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
-          const earnedCommission = mySubtasks
-            .filter((s) => s.estado_subtarea === "terminado")
-            .reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
+  let orderGroups = Object.values(groupedOrdersMap);
 
-          const cover = (ord.galeria_fotos_pieza && ord.galeria_fotos_pieza[0]) || DEMO_PHOTOS.camaraCorsa;
-          const sparesCover = (ord.galeria_fotos_repuestos && ord.galeria_fotos_repuestos[0]) || null;
+  // Filtro opcional desde la barra de búsqueda superior (troquel, motor o trabajo)
+  if (searchQuery) {
+    orderGroups = orderGroups.filter((g) => {
+      const o = g.order;
+      const tasksBlob = g.subtasks.map((s) => s.descripcion_servicio || "").join(" ");
+      const blob = `${o.id_orden} ${o.codigo_troquel} ${o.datos_motor?.marca || ""} ${o.datos_motor?.modelo || ""} ${o.datos_motor?.tipo_pieza || ""} ${tasksBlob}`.toLowerCase();
+      return blob.includes(searchQuery);
+    });
+  }
 
-          // Otras tareas en esta misma tapa asignadas a otros maquinistas de taller
-          const otherTasks = db.subtareas.filter((s) => s.orden_id === ord.id_orden && s.tecnico_id !== activeWorkerId);
-          const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  // Separar en 2 apartados: Pendientes en Mesa vs Finalizados / Entregados
+  const pendingGroups = [];
+  const doneGroups = [];
+  orderGroups.forEach((g) => {
+    const allSubsDone = g.subtasks.length > 0 && g.subtasks.every((s) => s.estado_subtarea === "terminado");
+    if (allSubsDone) {
+      doneGroups.push(g);
+    } else {
+      pendingGroups.push(g);
+    }
+  });
 
-          const pendingSubtasks = mySubtasks.filter((s) => s.estado_subtarea !== "terminado");
-          const doneSubtasks = mySubtasks.filter((s) => s.estado_subtarea === "terminado");
-          const hasAnyActive = pendingSubtasks.some((s) => s.estado_subtarea === "empezado");
-          const hasAnyPaused = !hasAnyActive && pendingSubtasks.some((s) => s.estado_subtarea === "pausado");
-          const troquelGeneralPhoto = (doneSubtasks.find((s) => s.foto_terminado_url) || {}).foto_terminado_url || "";
-          const troquelTimerText = formatLiveWorkerTroquelTimer(ord.id_orden, activeWorkerId);
+  // Ordenar: asignadas más recientemente DE PRIMERO (descendente por fecha_asignacion / id / ingreso)
+  pendingGroups.sort((a, b) => getWorkerGroupSortTimestamp(b) - getWorkerGroupSortTimestamp(a));
+  doneGroups.sort((a, b) => getWorkerGroupSortTimestamp(b) - getWorkerGroupSortTimestamp(a));
 
-          const renderChecklistRow = (sub, idx) => {
-            const isTerminado = sub.estado_subtarea === "terminado";
-            const isEmpezado = sub.estado_subtarea === "empezado";
-            const isPausado = sub.estado_subtarea === "pausado";
-            const isPendiente = sub.estado_subtarea === "pendiente";
+  const unstartedCount = pendingGroups.filter((g) => {
+    const pSubs = g.subtasks.filter((s) => s.estado_subtarea !== "terminado");
+    return pSubs.length > 0 && pSubs.every((s) => !s.estado_subtarea || s.estado_subtarea === "pendiente");
+  }).length;
 
-            return `
-              <div class="worker-checklist-row ${isTerminado ? "checklist-row--done" : isEmpezado ? "checklist-row--active" : isPausado ? "checklist-row--paused" : ""}">
-                <!-- Columna izquierda: Número, Nombre y Destajo -->
-                <div class="checklist-row-left">
-                  <span class="checklist-index-badge ${isTerminado ? "badge--done" : isEmpezado ? "badge--active" : ""}">
-                    ${isTerminado ? "✓" : `#${idx + 1}`}
-                  </span>
-                  <div class="checklist-desc-wrap">
-                    <div class="checklist-subtask-name">
-                      ${escapeHtml(formatSubtaskDisplayLabel(sub))}
-                      ${Number(sub.cantidad) > 1 ? `<span class="unit-mode-pill" style="margin-left:5px;"><i class="fas fa-layer-group"></i> x${Number(sub.cantidad)}</span>` : ""}
-                    </div>
-                    <div class="checklist-subtask-meta">
-                      <span class="checklist-comm-tag">+$${Number(sub.comision_base_tecnico).toFixed(2)}</span>
-                      <span class="checklist-substate-pill substate--${sub.estado_subtarea}">
-                        ${
-                          isPendiente
-                            ? '<i class="fas fa-clock"></i> No iniciado'
-                            : isEmpezado
-                            ? '<i class="fas fa-wrench"></i> En proceso'
-                            : isPausado
-                            ? '<i class="fas fa-pause-circle"></i> Pausado'
-                            : '<i class="fas fa-check-circle"></i> Listo'
-                        }
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            `;
-          };
+  const renderWorkerTroquelCard = (group) => {
+    const ord = group.order;
+    const mySubtasks = group.subtasks;
+    const totalTasks = mySubtasks.length;
+    const completedTasks = mySubtasks.filter((s) => s.estado_subtarea === "terminado").length;
+    const isAllDone = totalTasks > 0 && completedTasks === totalTasks;
+    const totalWorkerCommission = mySubtasks.reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
+    const earnedCommission = mySubtasks
+      .filter((s) => s.estado_subtarea === "terminado")
+      .reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
 
-          // Botonera ÚNICA por Troquel (1 solo Iniciar / 1 solo Pausar / 1 solo Terminar con Foto General)
-          let troquelUnifiedControlsHtml = "";
-          if (isAllDone) {
-            troquelUnifiedControlsHtml = `
-              <div class="worker-troquel-done-bar">
-                <span class="checklist-finished-pill">
-                  <i class="fas fa-check-circle" style="color:#22c55e; font-size:15px;"></i>
-                  <span style="font-size:12px; font-weight:900; color:#22c55e;">Troquel Listo (${totalTasks}/${totalTasks})</span>
-                </span>
-                <span class="checklist-stopwatch" title="Tiempo total en este troquel">
-                  <i class="fas fa-stopwatch"></i> ${troquelTimerText}
-                </span>
-                ${
-                  troquelGeneralPhoto
-                    ? `<img src="${troquelGeneralPhoto}" class="checklist-finish-photo" onclick="openPhotoLightbox('${troquelGeneralPhoto}', 'Foto General Terminada · Troquel #${escapeHtml(ord.codigo_troquel)}')" title="Ver foto general del troquel terminado" />`
-                    : ""
-                }
-              </div>
-            `;
-          } else if (hasAnyActive) {
-            troquelUnifiedControlsHtml = `
-              <div class="worker-troquel-controls-group">
-                <span class="checklist-stopwatch stopwatch--live" data-live-troquel-order="${ord.id_orden}" data-live-troquel-worker="${activeWorkerId}">
-                  <i class="fas fa-stopwatch"></i> ${troquelTimerText}
-                </span>
-                <button type="button" class="btn btn--warning btn--sm checklist-btn-action" onclick="openPauseWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Pausar todo el trabajo de este troquel y reportar motivo al chat">
-                  <i class="fas fa-pause"></i> Pausar
-                </button>
-                <button type="button" class="btn btn--success btn--sm checklist-btn-action" onclick="openCompleteWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Subir 1 foto general del troquel y terminar todas tus tareas aquí">
-                  <i class="fas fa-camera"></i> Terminar (Foto)
-                </button>
-              </div>
-            `;
-          } else if (hasAnyPaused) {
-            troquelUnifiedControlsHtml = `
-              <div class="worker-troquel-controls-group">
-                <span class="checklist-stopwatch" data-live-troquel-order="${ord.id_orden}" data-live-troquel-worker="${activeWorkerId}">
-                  <i class="fas fa-stopwatch"></i> ${troquelTimerText}
-                </span>
-                <button type="button" class="btn btn--primary btn--sm checklist-btn-action" onclick="startWorkerTroquelWork('${ord.id_orden}', '${activeWorkerId}')" title="Reanudar el trabajo en este troquel">
-                  <i class="fas fa-play"></i> Reanudar
-                </button>
-                <button type="button" class="btn btn--success btn--sm checklist-btn-action" onclick="openCompleteWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Subir 1 foto general del troquel y terminar todas tus tareas aquí">
-                  <i class="fas fa-camera"></i> Terminar (Foto)
-                </button>
-              </div>
-            `;
-          } else {
-            troquelUnifiedControlsHtml = `
-              <div class="worker-troquel-controls-group">
-                <button type="button" class="btn btn--primary btn--sm checklist-btn-action" onclick="startWorkerTroquelWork('${ord.id_orden}', '${activeWorkerId}')" title="Iniciar todas tus tareas asignadas en este troquel con 1 solo toque">
-                  <i class="fas fa-play"></i> Iniciar Trabajo (${pendingSubtasks.length})
-                </button>
-              </div>
-            `;
-          }
+    const otherTasks = db.subtareas.filter((s) => s.orden_id === ord.id_orden && s.tecnico_id !== activeWorkerId);
+    const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-          return `
-            <div class="worker-tapa-card ${isAllDone ? "worker-tapa-card--done" : ""} ${ord.devuelto_calidad ? "worker-tapa-card--rejected" : ""}">
-              <!-- CABECERA PRINCIPAL DE LA PIEZA / TROQUEL -->
-              <div class="worker-tapa-header">
-                <div class="worker-tapa-brand">
-                  ${
-                    currentUser && currentUser.rol === "tecnico"
-                      ? `<span class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px; cursor:default; pointer-events:none;" title="Troquel asignado">
-                           <i class="fas fa-barcode"></i> TROQUEL #${escapeHtml(ord.codigo_troquel)}
-                         </span>`
-                      : `<button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${ord.id_orden}')" title="Inspeccionar ficha técnica">
-                           <i class="fas fa-barcode"></i> TROQUEL #${escapeHtml(ord.codigo_troquel)}
-                         </button>`
-                  }
-                  <div>
-                    <div class="worker-tapa-title">${ord.datos_motor.tipo_pieza || "Cámara / Culata"} · ${ord.datos_motor.marca} ${ord.datos_motor.modelo}</div>
-                    <div class="worker-tapa-meta">
-                      <span><i class="fas fa-barcode"></i> Serial: <strong>${ord.datos_motor.serial || "S/N"}</strong></span>
-                      <span>·</span>
-                      <span><i class="fas fa-calendar-alt"></i> Ingreso: ${formatDateHuman(ord.fecha_ingreso, false)}</span>
-                    </div>
-                  </div>
-                </div>
+    const pendingSubtasks = mySubtasks.filter((s) => s.estado_subtarea !== "terminado");
+    const doneSubtasks = mySubtasks.filter((s) => s.estado_subtarea === "terminado");
+    const hasAnyActive = pendingSubtasks.some((s) => s.estado_subtarea === "empezado");
+    const hasAnyPaused = !hasAnyActive && pendingSubtasks.some((s) => s.estado_subtarea === "pausado");
+    const isUnstarted = !isAllDone && !hasAnyActive && !hasAnyPaused && pendingSubtasks.length > 0;
+    const troquelGeneralPhoto = (doneSubtasks.find((s) => s.foto_terminado_url) || {}).foto_terminado_url || "";
+    const troquelTimerText = formatLiveWorkerTroquelTimer(ord.id_orden, activeWorkerId);
+    const fotosPiezaCount = (ord.galeria_fotos_pieza || []).length;
+    const fotosRepCount = (ord.galeria_fotos_repuestos || []).length;
 
-                <div class="worker-tapa-comm-box">
-                  <span class="worker-comm-caption">ESTADO EN TU MESA</span>
-                  <div class="worker-comm-total" style="font-size:16px;">
-                    ${completedTasks} de ${totalTasks} Listas
-                  </div>
-                  <span class="worker-comm-status-pill ${isAllDone ? "comm-status--full" : ""}">
-                    ${isAllDone ? `<i class="fas fa-check-circle" style="color:#22c55e;"></i> Completo (+$${earnedCommission.toFixed(2)} destajo)` : `<i class="fas fa-wrench" style="color:#f59e0b;"></i> Destajo: +$${earnedCommission.toFixed(2)} de $${totalWorkerCommission.toFixed(2)}`}
-                  </span>
-                </div>
-              </div>
+    const renderCompactRow = (sub, idx) => {
+      const isTerminado = sub.estado_subtarea === "terminado";
+      const isEmpezado = sub.estado_subtarea === "empezado";
+      const isPausado = sub.estado_subtarea === "pausado";
+      const isPendiente = !isTerminado && !isEmpezado && !isPausado;
 
-              <!-- ALERTA SI LA PIEZA FUE DEVUELTA POR CONTROL DE CALIDAD -->
+      return `
+        <div class="worker-checklist-row worker-checklist-row--compact ${isTerminado ? "checklist-row--done" : isEmpezado ? "checklist-row--active" : isPausado ? "checklist-row--paused" : ""}">
+          <div class="checklist-row-left-compact">
+            <span class="checklist-index-badge checklist-index-badge--compact ${isTerminado ? "badge--done" : isEmpezado ? "badge--active" : ""}">
+              ${isTerminado ? "✓" : `#${idx + 1}`}
+            </span>
+            <span class="checklist-subtask-name-compact">
+              ${escapeHtml(formatSubtaskDisplayLabel(sub))}
+              ${Number(sub.cantidad) > 1 ? `<span class="unit-mode-pill" style="margin-left:4px; font-size:9.5px; padding:1px 5px;"><i class="fas fa-layer-group"></i> x${Number(sub.cantidad)}</span>` : ""}
+            </span>
+          </div>
+          <div class="checklist-subtask-meta-compact">
+            <span class="checklist-comm-tag">+$${Number(sub.comision_base_tecnico).toFixed(2)}</span>
+            <span class="checklist-substate-pill substate--${sub.estado_subtarea || "pendiente"}">
               ${
-                ord.devuelto_calidad && ord.motivo_rechazo_qc
-                  ? `<div class="worker-tapa-qc-alert">
-                      <i class="fas fa-exclamation-triangle"></i>
-                      <div>
-                        <strong>DEVUELTO POR CONTROL DE CALIDAD:</strong> ${ord.motivo_rechazo_qc}
-                      </div>
-                    </div>`
-                  : ""
+                isPendiente
+                  ? '<i class="fas fa-clock"></i> Sin iniciar'
+                  : isEmpezado
+                  ? '<i class="fas fa-wrench"></i> En proceso'
+                  : isPausado
+                  ? '<i class="fas fa-pause-circle"></i> Pausado'
+                  : '<i class="fas fa-check-circle"></i> Listo'
               }
+            </span>
+          </div>
+        </div>
+      `;
+    };
 
-              <!-- SOPORTE VISUAL DE LA PIEZA: FOTOS INICIALES Y REPUESTOS EN MESA -->
-              <div class="worker-tapa-photos-strip">
-                <div class="worker-photo-pill" onclick="openDualGalleryInspector('${ord.id_orden}')" title="Ver fotos de recepción inicial de la pieza">
-                  <img src="${cover}" class="worker-photo-thumb" />
-                  <div class="worker-photo-info">
-                    <strong><i class="fas fa-camera"></i> Inspección Inicial (${(ord.galeria_fotos_pieza || []).length} fotos)</strong>
-                    <span>Toca para ver estado físico previo de la tapa</span>
-                  </div>
-                </div>
+    // Botonera ÚNICA por Troquel (1 solo Iniciar / 1 solo Pausar / 1 solo Terminar con Foto General)
+    let troquelUnifiedControlsHtml = "";
+    if (isAllDone) {
+      troquelUnifiedControlsHtml = `
+        <div class="worker-troquel-done-bar worker-troquel-done-bar--compact">
+          <span class="checklist-finished-pill" style="padding:3px 8px;">
+            <i class="fas fa-check-circle" style="color:#22c55e; font-size:13px;"></i>
+            <span style="font-size:11.5px; font-weight:900; color:#22c55e;">Listo (${totalTasks}/${totalTasks})</span>
+          </span>
+          <span class="checklist-stopwatch" style="font-size:11.5px;" title="Tiempo total en este troquel">
+            <i class="fas fa-stopwatch"></i> ${troquelTimerText}
+          </span>
+          ${
+            troquelGeneralPhoto
+              ? `<img src="${troquelGeneralPhoto}" class="checklist-finish-photo" style="width:34px; height:26px;" onclick="openPhotoLightbox('${troquelGeneralPhoto}', 'Foto General Terminada · Troquel #${escapeHtml(ord.codigo_troquel)}')" title="Ver foto general del troquel terminado" />`
+              : ""
+          }
+        </div>
+      `;
+    } else if (hasAnyActive) {
+      troquelUnifiedControlsHtml = `
+        <div class="worker-troquel-controls-group worker-troquel-controls-group--compact">
+          <span class="checklist-stopwatch stopwatch--live" style="font-size:12px;" data-live-troquel-order="${ord.id_orden}" data-live-troquel-worker="${activeWorkerId}">
+            <i class="fas fa-stopwatch"></i> ${troquelTimerText}
+          </span>
+          <button type="button" class="btn btn--warning btn--xs checklist-btn-action-compact" onclick="openPauseWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Pausar todo el trabajo de este troquel">
+            <i class="fas fa-pause"></i> Pausar
+          </button>
+          <button type="button" class="btn btn--success btn--xs checklist-btn-action-compact" onclick="openCompleteWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Subir 1 foto general y terminar todas tus tareas aquí">
+            <i class="fas fa-camera"></i> Terminar (Foto)
+          </button>
+        </div>
+      `;
+    } else if (hasAnyPaused) {
+      troquelUnifiedControlsHtml = `
+        <div class="worker-troquel-controls-group worker-troquel-controls-group--compact">
+          <span class="checklist-stopwatch" style="font-size:12px;" data-live-troquel-order="${ord.id_orden}" data-live-troquel-worker="${activeWorkerId}">
+            <i class="fas fa-stopwatch"></i> ${troquelTimerText}
+          </span>
+          <button type="button" class="btn btn--primary btn--xs checklist-btn-action-compact" onclick="startWorkerTroquelWork('${ord.id_orden}', '${activeWorkerId}')" title="Reanudar el trabajo en este troquel">
+            <i class="fas fa-play"></i> Reanudar
+          </button>
+          <button type="button" class="btn btn--success btn--xs checklist-btn-action-compact" onclick="openCompleteWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Subir 1 foto general y terminar todas tus tareas aquí">
+            <i class="fas fa-camera"></i> Terminar (Foto)
+          </button>
+        </div>
+      `;
+    } else {
+      troquelUnifiedControlsHtml = `
+        <div class="worker-troquel-controls-group worker-troquel-controls-group--compact worker-troquel-controls-group--unstarted">
+          <button type="button" class="btn btn--gold btn--xs checklist-btn-action-compact worker-start-blink-btn" onclick="startWorkerTroquelWork('${ord.id_orden}', '${activeWorkerId}')" title="Iniciar todas tus tareas asignadas en este troquel con 1 solo toque">
+            <i class="fas fa-play"></i> Iniciar Trabajo (${pendingSubtasks.length})
+          </button>
+        </div>
+      `;
+    }
 
-                <div class="worker-photo-pill ${sparesCover ? "worker-photo-pill--spares" : ""}" onclick="openDualGalleryInspector('${ord.id_orden}')" title="Ver repuestos aportados por el cliente en mesa">
-                  ${
-                    sparesCover
-                      ? `<img src="${sparesCover}" class="worker-photo-thumb" />`
-                      : `<div class="worker-photo-thumb-empty"><i class="fas fa-toolbox"></i></div>`
-                  }
-                  <div class="worker-photo-info">
-                    <strong><i class="fas fa-boxes"></i> Repuestos en Mesa (${(ord.galeria_fotos_repuestos || []).length})</strong>
-                    <span>Válvulas, guías, empacaduras o retenes aportados</span>
-                  </div>
-                </div>
+    const orderedRows = [...pendingSubtasks, ...doneSubtasks];
+
+    return `
+      <div class="worker-tapa-card worker-tapa-card--compact ${isAllDone ? "worker-tapa-card--done" : ""} ${isUnstarted ? "worker-tapa-card--unstarted" : ""} ${ord.devuelto_calidad ? "worker-tapa-card--rejected" : ""}">
+        <!-- CABECERA COMPACTA DEL TROQUEL -->
+        <div class="worker-tapa-header worker-tapa-header--compact">
+          <div class="worker-tapa-brand worker-tapa-brand--compact">
+            ${
+              currentUser && currentUser.rol === "tecnico"
+                ? `<span class="btn-troquel-clickable" style="font-size:12px; padding:2px 8px; cursor:default; pointer-events:none;" title="Troquel asignado">
+                     <i class="fas fa-barcode"></i> #${escapeHtml(ord.codigo_troquel)}
+                   </span>`
+                : `<button type="button" class="btn-troquel-clickable" style="font-size:12px; padding:2px 8px;" onclick="quickViewOrderDetails('${ord.id_orden}')" title="Inspeccionar ficha técnica">
+                     <i class="fas fa-barcode"></i> #${escapeHtml(ord.codigo_troquel)}
+                   </button>`
+            }
+            <div style="min-width:0;">
+              <div class="worker-tapa-title worker-tapa-title--compact">
+                ${escapeHtml(ord.datos_motor?.tipo_pieza || "Cámara / Culata")} · ${escapeHtml(ord.datos_motor?.marca || "")} ${escapeHtml(ord.datos_motor?.modelo || "")}
               </div>
-
-              <!-- BARRA DE PROGRESO DE LA TAPA -->
-              <div class="worker-tapa-progress-bar-wrap">
-                <div class="worker-progress-header">
-                  <span style="font-weight:800; font-size:12px; color:var(--text-secondary);">
-                    <i class="fas fa-tasks"></i> LISTA BASE DE TRABAJOS EN TU MESA (${completedTasks} de ${totalTasks} listos)
-                  </span>
-                  <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:800; color:${isAllDone ? "#16a34a" : "var(--renacer-gold)"};">
-                    ${progressPercent}% COMPLETADO
-                  </span>
-                </div>
-                <div class="worker-progress-track">
-                  <div class="worker-progress-fill" style="width: ${progressPercent}%; background:${isAllDone ? "#22c55e" : "var(--renacer-gold)"};"></div>
-                </div>
-              </div>
-
-              <!-- LISTICA BASE DE SUBTAREAS ASIGNADAS A ESTE TÉCNICO EN ESTA TAPA -->
-              <div class="worker-subtasks-checklist">
-                ${
-                  pendingSubtasks.length
-                    ? `
-                    <div style="font-size:11px; font-weight:900; color:#f59e0b; text-transform:uppercase; margin:4px 0 2px; display:flex; align-items:center; gap:6px;">
-                      <i class="fas fa-wrench"></i> Tareas Pendientes / En Proceso (${pendingSubtasks.length})
-                    </div>
-                    ${pendingSubtasks.map((s, idx) => renderChecklistRow(s, idx)).join("")}
-                  `
-                    : ""
-                }
-
-                ${
-                  doneSubtasks.length
-                    ? `
-                    <div style="font-size:11px; font-weight:900; color:#16a34a; text-transform:uppercase; margin:8px 0 2px; display:flex; align-items:center; gap:6px;">
-                      <i class="fas fa-check-double"></i> Tareas Listas en Mesa (${doneSubtasks.length})
-                    </div>
-                    ${doneSubtasks.map((s, idx) => renderChecklistRow(s, idx)).join("")}
-                  `
-                    : ""
-                }
-              </div>
-
-              <!-- PIE DE TARJETA: CONTROLES ÚNICOS POR TROQUEL (INICIAR / PAUSAR / TERMINAR FOTO) + APOYO -->
-              <div class="worker-tapa-footer">
-                <div class="worker-other-tasks">
-                  ${
-                    otherTasks.length
-                      ? `<i class="fas fa-users-cog"></i> <span>Otras tareas en esta tapa: ${otherTasks
-                          .map((t) => `<strong>${escapeHtml(t.descripcion_servicio)}</strong> (${escapeHtml(t.nombre_tecnico)})`)
-                          .join(" · ")}</span>`
-                      : `<i class="fas fa-user-check"></i> <span>Eres el único técnico asignado a esta tapa física.</span>`
-                  }
-                </div>
-
-                <div class="worker-footer-controls-zone">
-                  ${troquelUnifiedControlsHtml}
-                  <div class="worker-footer-btns">
-                    <button type="button" class="btn btn--ghost btn--sm" onclick="openDualGalleryInspector('${ord.id_orden}')">
-                      <i class="fas fa-images"></i> Fotos Recepción
-                    </button>
-                    <button type="button" class="btn btn--ghost btn--sm" style="border-color:rgba(245,223,0,0.4); color:var(--renacer-gold);" onclick="openOrderCrmModal('${ord.id_orden}')">
-                      <i class="fas fa-comments"></i> Bitácora / Chat Tapa
-                    </button>
-                  </div>
-                </div>
+              <div class="worker-tapa-meta worker-tapa-meta--compact">
+                <span><i class="fas fa-calendar-alt"></i> ${formatDateHuman(ord.fecha_ingreso, false)}</span>
+                <span>·</span>
+                <button type="button" class="worker-inline-photo-chip" onclick="openDualGalleryInspector('${ord.id_orden}')" title="Ver fotos iniciales y repuestos">
+                  <i class="fas fa-camera"></i> Pieza (${fotosPiezaCount}) · <i class="fas fa-boxes"></i> Repuestos (${fotosRepCount})
+                </button>
               </div>
             </div>
-          `;
-        })
-        .join("")
+          </div>
+
+          <div class="worker-tapa-right-compact">
+            ${
+              isUnstarted
+                ? `<span class="worker-unstarted-pill"><i class="fas fa-bolt"></i> SIN INICIAR</span>`
+                : ""
+            }
+            <span class="worker-comm-status-pill ${isAllDone ? "comm-status--full" : ""}" style="margin-top:0; font-size:11px;">
+              ${isAllDone ? `<i class="fas fa-check-circle"></i> ${completedTasks}/${totalTasks} · +$${earnedCommission.toFixed(2)}` : `${completedTasks}/${totalTasks} · $${totalWorkerCommission.toFixed(2)}`}
+            </span>
+          </div>
+        </div>
+
+        ${
+          ord.devuelto_calidad && ord.motivo_rechazo_qc
+            ? `<div class="worker-tapa-qc-alert" style="margin:6px 12px 0; padding:6px 10px; font-size:11.5px;">
+                <i class="fas fa-exclamation-triangle"></i>
+                <div><strong>DEVUELTO POR CALIDAD:</strong> ${escapeHtml(ord.motivo_rechazo_qc)}</div>
+              </div>`
+            : ""
+        }
+
+        <!-- BARRA FINA DE PROGRESO -->
+        <div class="worker-progress-track" style="height:4px; border-radius:0;">
+          <div class="worker-progress-fill" style="width:${progressPercent}%; background:${isAllDone ? "#22c55e" : isUnstarted ? "#f5df00" : "#38bdf8"}; border-radius:0;"></div>
+        </div>
+
+        <!-- LISTA COMPACTA DE TAREAS EN UNA SOLA LÍNEA CADA UNA -->
+        <div class="worker-subtasks-checklist worker-subtasks-checklist--compact">
+          ${orderedRows.map((s, idx) => renderCompactRow(s, idx)).join("")}
+        </div>
+
+        <!-- PIE COMPACTO: BOTONERA ÚNICA + FOTOS + BITÁCORA CON CONTADOR -->
+        <div class="worker-tapa-footer worker-tapa-footer--compact">
+          <div class="worker-other-tasks worker-other-tasks--compact">
+            ${
+              otherTasks.length
+                ? `<i class="fas fa-users-cog"></i> <span>Otros: ${otherTasks
+                    .map((t) => `${escapeHtml(t.descripcion_servicio)} (${escapeHtml(t.nombre_tecnico)})`)
+                    .join(" · ")}</span>`
+                : `<i class="fas fa-user-check"></i> <span>Único técnico en esta pieza</span>`
+            }
+          </div>
+
+          <div class="worker-footer-controls-zone">
+            ${troquelUnifiedControlsHtml}
+            <div class="worker-footer-btns">
+              <button type="button" class="btn btn--ghost btn--xs" onclick="openDualGalleryInspector('${ord.id_orden}')" title="Fotos de recepción y repuestos">
+                <i class="fas fa-images"></i> Fotos
+              </button>
+              <button type="button" class="btn btn--ghost btn--xs bitacora-btn-has-badge" style="border-color:rgba(245,223,0,0.4); color:var(--renacer-gold);" onclick="openOrderCrmModal('${ord.id_orden}')">
+                <i class="fas fa-comments"></i> Bitácora${renderBitacoraUnreadBadgeHtml(ord.id_orden, "bitacora-unread-badge--sm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const pendingCardsHtml = pendingGroups.length
+    ? pendingGroups.map(renderWorkerTroquelCard).join("")
     : `
-      <div style="text-align:center; padding:48px 20px; background:var(--bg-card); border-radius:18px; border:1px solid var(--border-subtle);">
-        <i class="fas fa-mug-hot" style="font-size:40px; color:var(--text-muted); margin-bottom:12px;"></i>
-        <h3 style="font-size:18px; font-weight:800;">No tienes piezas ni subtareas asignadas activas en este momento</h3>
-        <p style="font-size:13px; color:var(--text-muted); max-width:500px; margin:8px auto 0;">
-          Las órdenes en Diagnóstico o Esperando Aprobación permanecen en cola técnica hasta que el Jefe de Taller confirme la Matriz de Asignación.
+      <div style="text-align:center; padding:30px 18px; background:var(--bg-card); border-radius:14px; border:1px dashed var(--border-subtle); margin-bottom:14px;">
+        <i class="fas fa-check-circle" style="font-size:30px; color:#22c55e; margin-bottom:8px;"></i>
+        <h3 style="font-size:16px; font-weight:900;">¡Mesa despejada! No tienes tareas pendientes por iniciar o terminar.</h3>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+          ${doneGroups.length > 0 ? `Tienes <strong>${doneGroups.length}</strong> troquel(es) en el apartado <strong>Finalizados / Entregados</strong>.` : "Cuando Gerencia te asigne nuevas piezas aparecerán aquí arriba primero."}
         </p>
       </div>
     `;
 
+  const doneCardsHtml = doneGroups.length
+    ? doneGroups.map(renderWorkerTroquelCard).join("")
+    : `
+      <div style="text-align:center; padding:28px 18px; background:var(--bg-card); border-radius:14px; border:1px dashed var(--border-subtle);">
+        <i class="fas fa-clipboard-check" style="font-size:28px; color:var(--text-muted); margin-bottom:8px;"></i>
+        <div style="font-size:14px; font-weight:800;">Aún no tienes troqueles finalizados o entregados.</div>
+      </div>
+    `;
+
+  const mainCardsSectionHtml =
+    workerPanelViewTab === "entregados"
+      ? `
+        <div class="worker-section-heading worker-section-heading--done">
+          <span><i class="fas fa-check-double"></i> Finalizados / Entregados (${doneGroups.length})</span>
+          <button type="button" class="btn btn--ghost btn--xs" onclick="setWorkerPanelViewTab('pendientes')">
+            <i class="fas fa-arrow-left"></i> Volver a Pendientes (${pendingGroups.length})
+          </button>
+        </div>
+        ${doneCardsHtml}
+      `
+      : `
+        <div class="worker-section-heading worker-section-heading--pending">
+          <span><i class="fas fa-wrench"></i> Pendientes en Mesa (${pendingGroups.length})${unstartedCount > 0 ? ` · <strong style="color:#f5df00;">${unstartedCount} sin iniciar</strong>` : ""}</span>
+          <span style="font-size:11px; color:var(--text-muted); font-weight:700;">Más recientes primero</span>
+        </div>
+        ${pendingCardsHtml}
+        ${
+          doneGroups.length > 0
+            ? `
+            <div class="worker-done-drawer-wrap">
+              <button type="button" class="worker-done-drawer-toggle" onclick="toggleWorkerDoneAccordion()">
+                <span>
+                  <i class="fas fa-check-double" style="color:#22c55e;"></i>
+                  <strong>Finalizados / Entregados (${doneGroups.length})</strong>
+                  <small style="color:var(--text-muted); margin-left:6px;">${workerDoneAccordionOpen ? "Toca para ocultar" : "Toca para desplegar"}</small>
+                </span>
+                <i class="fas ${workerDoneAccordionOpen ? "fa-chevron-up" : "fa-chevron-down"}"></i>
+              </button>
+              ${workerDoneAccordionOpen ? `<div style="margin-top:10px;">${doneCardsHtml}</div>` : ""}
+            </div>
+          `
+            : ""
+        }
+      `;
+
   return `
     ${workerSelectorBar}
-    <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:16px 20px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px;">
-      <div>
-        <span style="background:var(--renacer-gold); color:#0f1638; font-weight:900; font-size:11px; padding:3px 10px; border-radius:99px;">
-          PANEL DEL TÉCNICO (FASE 3) · ${workerObj.nombre.toUpperCase()}
-        </span>
-        <h2 style="font-size:20px; font-weight:900; margin-top:6px;">Mis Trabajos por Destajo y Sub-estados en Tiempo Real</h2>
-        <p style="font-size:12.5px; color:var(--text-muted);">
-          Usa <strong>En Proceso</strong> al trabajar la pieza en máquina, <strong>Pausado / Imprevisto</strong> para reportar cualquier detención al chat de gerencia, y <strong>Terminar Tarea</strong> adjuntando la foto obligatoria para enviar a Control de Calidad.
-        </p>
-      </div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap;">
-        <div style="background:rgba(22,163,74,0.12); border:1px solid rgba(34,197,94,0.35); padding:10px 16px; border-radius:12px; text-align:right;">
-          <span style="font-size:10px; font-weight:800; color:var(--text-muted); display:block;">PRODUCCIÓN TERMINADA</span>
-          <strong style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#16a34a;">$${earnedCompleted.toFixed(2)}</strong>
-        </div>
-        <div style="background:rgba(245,196,0,0.12); border:1px solid rgba(245,196,0,0.35); padding:10px 16px; border-radius:12px; text-align:right;">
-          <span style="font-size:10px; font-weight:800; color:var(--text-muted); display:block;">ASIGNADO EN MESA</span>
-          <strong style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:900; color:#d97706;">$${pendingToEarn.toFixed(2)}</strong>
+    <!-- CABECERA COMPACTA DEL PANEL TÉCNICO (v43) -->
+    <div class="worker-top-compact-bar">
+      <div style="min-width:0;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span style="background:var(--renacer-gold); color:#0f1638; font-weight:900; font-size:10.5px; padding:2px 9px; border-radius:99px;">
+            MESA TÉCNICA · ${escapeHtml(workerObj.nombre.toUpperCase())}
+          </span>
+          <h2 style="font-size:16.5px; font-weight:900; margin:0;">Mis Trabajos por Destajo</h2>
         </div>
       </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <div class="worker-kpi-mini worker-kpi-mini--done">
+          <span>TERMINADO</span>
+          <strong>$${earnedCompleted.toFixed(2)}</strong>
+        </div>
+        <div class="worker-kpi-mini worker-kpi-mini--pend">
+          <span>EN MESA</span>
+          <strong>$${pendingToEarn.toFixed(2)}</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- PESTAÑAS SEPARADORAS: PENDIENTES EN MESA VS FINALIZADOS / ENTREGADOS -->
+    <div class="worker-section-tabs">
+      <button type="button" class="worker-section-tab-btn ${workerPanelViewTab === "pendientes" ? "active" : ""}" onclick="setWorkerPanelViewTab('pendientes')">
+        <i class="fas fa-wrench"></i> Pendientes en Mesa
+        <span class="worker-tab-count ${unstartedCount > 0 ? "is-alert" : ""}">${pendingGroups.length}</span>
+      </button>
+      <button type="button" class="worker-section-tab-btn ${workerPanelViewTab === "entregados" ? "active" : ""}" onclick="setWorkerPanelViewTab('entregados')">
+        <i class="fas fa-check-double"></i> Finalizados / Entregados
+        <span class="worker-tab-count is-done">${doneGroups.length}</span>
+      </button>
     </div>
 
     ${
       upcomingSubtasks.length
         ? `
-      <div style="background:rgba(56, 189, 248, 0.08); border:1.5px solid rgba(56, 189, 248, 0.35); border-radius:14px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <i class="fas fa-clock" style="color:#38bdf8; font-size:20px;"></i>
-          <div>
-            <strong style="color:#38bdf8; font-size:13px;">${upcomingSubtasks.length} tarea(s) pre-asignadas en Recepción / Diagnóstico</strong>
-            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
-              ${upcomingSubtasks
-                .map((s) => {
-                  const po = db.ordenes.find((o) => o.id_orden === s.orden_id);
-                  return `Troquel #${po ? po.codigo_troquel : "S/N"}: ${s.descripcion_servicio}`;
-                })
-                .join(" · ")}
-            </div>
-          </div>
+      <div style="background:rgba(56, 189, 248, 0.08); border:1px solid rgba(56, 189, 248, 0.35); border-radius:10px; padding:8px 12px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:12px;">
+        <div>
+          <i class="fas fa-clock" style="color:#38bdf8;"></i>
+          <strong style="color:#38bdf8;">${upcomingSubtasks.length} pre-asignada(s) en espera de aprobación:</strong>
+          <span style="color:var(--text-muted);">${upcomingSubtasks
+            .map((s) => {
+              const po = db.ordenes.find((o) => o.id_orden === s.orden_id);
+              return `#${po ? po.codigo_troquel : "S/N"} ${s.descripcion_servicio}`;
+            })
+            .join(" · ")}</span>
         </div>
-        <span style="font-size:11px; font-weight:800; color:var(--text-muted); background:rgba(255,255,255,0.05); padding:4px 10px; border-radius:8px;">
-          Se activarán en mesa al pasar a 4. Servicio
-        </span>
       </div>
     `
         : ""
     }
 
-    ${tasksHtml}
+    ${mainCardsSectionHtml}
   `;
 }
 
@@ -14593,6 +15724,7 @@ function deletePayrollVoucher(voucherId, reopenUserId = "") {
   }).then((res) => {
     if (!res.isConfirmed) return;
     const shouldRevert = Boolean(res.value);
+    archiveToRecycleBin("voucher", voucher.id_voucher, `Voucher ${voucher.id_voucher} · ${voucher.nombre_usuario} ($${Number(voucher.monto_pagado || 0).toFixed(2)})`, voucher, shouldRevert ? "Voucher eliminado con reversión" : "Voucher eliminado");
     db.vouchers_nomina = (db.vouchers_nomina || []).filter((v) => v.id_voucher !== voucherId);
 
     if (shouldRevert) {
@@ -14903,6 +16035,7 @@ function openOrderCrmModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
   tempCrmPhotoUrl = "";
+  markOrderBitacoraAsRead(orderId, true);
 
   const allMessages = db.bitacora.filter((m) => m.orden_id === orderId);
 
@@ -14958,7 +16091,7 @@ function openOrderCrmModal(orderId) {
         `;
         })
         .join("")
-    : `<p style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;"><i class="fas fa-comment-dots" style="font-size:24px; opacity:0.5; display:block; margin-bottom:6px;"></i>${currentCrmFilterMode === "chat" || isTech ? "No hay notas técnicas de trabajadores aún en esta orden." : "Aún no hay registros en la bitácora."}</p>`;
+    : `<p style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;"><i class="fas fa-comment-dots" style="font-size:24px; opacity:0.5; display:block; margin-bottom:6px;"></i>${currentCrmFilterMode === "chat" || isTechOrRecep ? "No hay notas técnicas de trabajadores aún en esta orden." : "Aún no hay registros en la bitácora."}</p>`;
 
   openModal({
     title: `Chat Interno Técnico — ORDEN #${order.codigo_troquel}`,
@@ -15021,6 +16154,9 @@ function openOrderCrmModal(orderId) {
     const feed = document.getElementById("crm-feed-box");
     if (feed) feed.scrollTop = feed.scrollHeight;
   }, 100);
+  // Actualizar contadores en tarjetas/tabla y campana inmediatamente al marcar como revisada
+  renderBitacoraBellBadge();
+  renderScreen();
 }
 
 async function handleCrmPhotoSelect(event) {
@@ -15050,9 +16186,10 @@ function sendCrmMessage(orderId) {
     tipo_evento: "comentario",
     mensaje: txt || "Fotografía de inspección adjuntada a la bitácora.",
     foto_adjunta_url: tempCrmPhotoUrl,
-    fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+    fecha_hora: getLocalDateTimeISO().slice(0, 16)
   });
 
+  markOrderBitacoraAsRead(order.id_orden, false);
   saveDatabase();
   openOrderCrmModal(orderId);
   renderScreen();
@@ -16742,12 +17879,13 @@ function deleteWorker(userId) {
     confirmButtonText: "Sí, eliminar"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    archiveToRecycleBin("usuario", u.id_usuario, `${u.nombre} (${u.rol_label || u.rol})`, u, "Perfil eliminado");
     db.usuarios = db.usuarios.filter((x) => x.id_usuario !== userId);
-    saveDatabase();
+    saveDatabase(`Perfil eliminado: ${u.nombre}`);
     populateLoginSelect();
     renderApp();
     await flushCloudPush(true);
-    showToast(`Perfil ${u.nombre} eliminado permanentemente.`);
+    showToast(`Perfil ${u.nombre} eliminado (recuperable en Papelera).`);
   });
 }
 
@@ -17045,10 +18183,14 @@ function saveActiveDayRecord() {
 }
 
 function deleteAttendanceRecord(asistId) {
+  const rec = (db.asistencias || []).find((a) => a.id_asist === asistId);
+  if (rec) {
+    archiveToRecycleBin("asistencia", rec.id_asist, `${rec.nombre} (${rec.fecha})`, rec, "Registro de asistencia eliminado");
+  }
   db.asistencias = db.asistencias.filter((a) => a.id_asist !== asistId);
   saveDatabase();
   renderApp();
-  showToast("Registro eliminado.");
+  showToast("Registro eliminado (recuperable en Papelera).");
 }
 
 /* ============================================================================
@@ -17402,6 +18544,12 @@ function deleteFinanceMovement(movId) {
     confirmButtonText: "Sí, eliminar"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    const targetMov = (db.finanzas_movimientos || []).find(
+      (m) => (m.id_mov || m.id_movimiento) === movId || m.id_mov === movId || m.id_movimiento === movId
+    );
+    if (targetMov) {
+      archiveToRecycleBin("movimiento_finanzas", movId, `${String(targetMov.tipo || "").toUpperCase()} $${Number(targetMov.monto || 0).toFixed(2)} — ${targetMov.concepto || ""}`, targetMov, "Movimiento financiero eliminado");
+    }
     db.finanzas_movimientos = (db.finanzas_movimientos || []).filter(
       (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
     );
@@ -17410,10 +18558,10 @@ function deleteFinanceMovement(movId) {
         (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
       );
     }
-    saveDatabase();
+    saveDatabase("Movimiento financiero eliminado");
     renderApp();
     await flushCloudPush(true);
-    showToast("Movimiento eliminado del Libro Diario y sincronizado.");
+    showToast("Movimiento eliminado del Libro Diario (recuperable en Papelera).");
   });
 }
 
@@ -18403,11 +19551,12 @@ function deleteClient(clientId) {
     confirmButtonText: "Sí, eliminar cliente"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    archiveToRecycleBin("cliente", c.id_cliente, `${c.nombre_completo} (${c.documento_identidad || "S/D"})`, c, "Cliente eliminado");
     db.clientes = db.clientes.filter((x) => x.id_cliente !== clientId);
-    saveDatabase();
+    saveDatabase(`Cliente eliminado: ${c.nombre_completo}`);
     renderApp();
     await flushCloudPush(true);
-    showToast(`Cliente ${c.nombre_completo} eliminado permanentemente.`);
+    showToast(`Cliente ${c.nombre_completo} eliminado (recuperable en Papelera).`);
   });
 }
 
@@ -18581,11 +19730,12 @@ function deleteCatalogService(catId) {
     confirmButtonText: "Sí, eliminar servicio"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    archiveToRecycleBin("catalogo_a", s.id_cat, `${s.nombre} ($${Number(s.precio_sugerido || 0).toFixed(2)}${s.por_unidad ? " / " + (s.unidad_label || "u") : ""})`, s, "Servicio Lista A eliminado");
     db.catalogo_servicios = db.catalogo_servicios.filter((x) => x.id_cat !== catId);
     saveDatabase(`Servicio cliente eliminado: ${s.nombre}`);
     renderApp();
     await flushCloudPush(true);
-    showToast(`Servicio "${s.nombre}" eliminado de Lista A.`);
+    showToast(`Servicio "${s.nombre}" eliminado de Lista A (recuperable en Papelera).`);
   });
 }
 
@@ -18779,11 +19929,12 @@ function deleteDestajoWork(destajoId) {
     confirmButtonText: "Sí, eliminar trabajo"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
+    archiveToRecycleBin("catalogo_b", w.id_destajo, `${w.nombre} ($${Number(w.pago_destajo || 0).toFixed(2)}${w.por_unidad ? " / " + (w.unidad_label || "u") : ""})`, w, "Trabajo Lista B eliminado");
     db.catalogo_destajo = (db.catalogo_destajo || []).filter((x) => x.id_destajo !== destajoId);
     saveDatabase(`Trabajo destajo eliminado: ${w.nombre}`);
     renderApp();
     await flushCloudPush(true);
-    showToast(`Trabajo "${w.nombre}" eliminado de Lista B.`);
+    showToast(`Trabajo "${w.nombre}" eliminado de Lista B (recuperable en Papelera).`);
   });
 }
 
@@ -20726,6 +21877,8 @@ window.addEventListener("DOMContentLoaded", () => {
     const user = (db.usuarios || []).find((u) => u.id_usuario === savedUserId);
     if (user && user.activo !== false && !isExternalUser(user)) {
       currentUser = user;
+      if (isJavierRestrictedUser(user)) currentTab = "inventario";
+      else if (user.rol === "tecnico") currentTab = "worker_panel";
       document.getElementById("login-view")?.classList.add("hidden");
       document.getElementById("workspace")?.classList.remove("hidden");
       renderApp();
