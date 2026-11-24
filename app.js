@@ -51,7 +51,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.23.v44";
+const CURRENT_APP_VERSION = "2026.11.24.v45";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -1113,23 +1113,58 @@ function normalizeDatabaseSchema(d) {
         datos: p.datos && typeof p.datos === "object" ? p.datos : safeJsonParse(p.datos_json, {})
       }));
   }
-  if (!d.finanzas_categorias) {
+  const DEFAULT_FIN_INGRESOS_AUTO = [
+    "Liquidación Total de Orden",
+    "Abono de Orden",
+    "Cobro de Cuenta por Cobrar (Resto)",
+    "Finiquito en Entrega Final"
+  ];
+  const DEFAULT_FIN_INGRESOS_EXTRA = [
+    "Ingresos Extra",
+    "Venta de Mercancía",
+    "Cobro de Préstamo"
+  ];
+  const DEFAULT_FIN_EGRESOS = [
+    "Pago de Nómina / Comisiones",
+    "Pago a Talleres Externos (Solteca / Outsourcing)",
+    "Compra de Insumos y Químicos",
+    "Herramientas y Piedras de Rectificar",
+    "Servicios Básicos e Internet",
+    "Mantenimiento de Maquinaria",
+    "Préstamos"
+  ];
+  if (!d.finanzas_categorias || typeof d.finanzas_categorias !== "object") {
     d.finanzas_categorias = {
-      ingresos: [
-        "Liquidación Total de Orden",
-        "Abono de Orden",
-        "Cobro de Cuenta por Cobrar (Resto)",
-        "Ingreso Extra de Taller"
-      ],
-      egresos: [
-        "Pago de Nómina / Comisiones",
-        "Pago a Talleres Externos (Solteca / Outsourcing)",
-        "Compra de Insumos y Químicos",
-        "Herramientas y Piedras de Rectificar",
-        "Servicios Básicos e Internet",
-        "Mantenimiento de Maquinaria"
-      ]
+      _v45_cats_init: true,
+      ingresos_extra: DEFAULT_FIN_INGRESOS_EXTRA.slice(),
+      ingresos_automaticos: DEFAULT_FIN_INGRESOS_AUTO.slice(),
+      ingresos: [...new Set([...DEFAULT_FIN_INGRESOS_AUTO, ...DEFAULT_FIN_INGRESOS_EXTRA])],
+      egresos: DEFAULT_FIN_EGRESOS.slice()
     };
+  } else {
+    const fc = d.finanzas_categorias;
+    const autoSet = new Set(DEFAULT_FIN_INGRESOS_AUTO.map((x) => x.toLowerCase()));
+    if (!Array.isArray(fc.egresos)) {
+      fc.egresos = DEFAULT_FIN_EGRESOS.slice();
+    } else if (!fc._v45_cats_init) {
+      if (!fc.egresos.some((c) => String(c || "").toLowerCase() === "préstamos" || String(c || "").toLowerCase() === "prestamos")) {
+        fc.egresos.push("Préstamos");
+      }
+    }
+    if (!Array.isArray(fc.ingresos_extra)) {
+      const legacyCustom = Array.isArray(fc.ingresos)
+        ? fc.ingresos.filter((c) => {
+            const low = String(c || "").trim().toLowerCase();
+            return low && !autoSet.has(low) && low !== "ingreso extra de taller";
+          })
+        : [];
+      fc.ingresos_extra = [...new Set([...DEFAULT_FIN_INGRESOS_EXTRA, ...legacyCustom])];
+    }
+    fc.ingresos_extra = fc.ingresos_extra.map((x) => String(x || "").trim()).filter(Boolean);
+    fc.egresos = fc.egresos.map((x) => String(x || "").trim()).filter(Boolean);
+    fc.ingresos_automaticos = DEFAULT_FIN_INGRESOS_AUTO.slice();
+    fc.ingresos = [...new Set([...DEFAULT_FIN_INGRESOS_AUTO, ...fc.ingresos_extra])];
+    fc._v45_cats_init = true;
   }
   if (!Array.isArray(d.finanzas_movimientos)) {
     d.finanzas_movimientos = (d.finanzas || [])
@@ -1145,11 +1180,21 @@ function normalizeDatabaseSchema(d) {
         cuenta: f.cuenta || "",
         referencia: f.referencia || "",
         orden_id: f.orden_id || "-",
-        codigo_troquel: f.codigo_troquel || "-"
+        codigo_troquel: f.codigo_troquel || "-",
+        es_transferencia: Boolean(f.es_transferencia || f.transfer_group_id || String(f.categoria_cuenta || f.categoria || "").toLowerCase() === "transferencia entre cuentas"),
+        transfer_group_id: String(f.transfer_group_id || ""),
+        comprobante_foto_2: String(f.comprobante_foto_2 || ""),
+        comprobantes_fotos: Array.isArray(f.comprobantes_fotos) ? f.comprobantes_fotos.filter(Boolean) : undefined
       }));
   } else {
     d.finanzas_movimientos.forEach((f) => {
       f.fecha = cleanDateISO(f.fecha, false);
+      if (f.es_transferencia === undefined) {
+        f.es_transferencia = Boolean(f.transfer_group_id || String(f.categoria || "").toLowerCase() === "transferencia entre cuentas");
+      }
+      if (!f.comprobante_foto_2 && Array.isArray(f.comprobantes_fotos) && f.comprobantes_fotos.length > 1) {
+        f.comprobante_foto_2 = String(f.comprobantes_fotos[1] || "");
+      }
     });
   }
 
@@ -1400,13 +1445,23 @@ function prepareSheetsPayload(sourceDb) {
   (d.finanzas_movimientos || []).forEach((m) => {
     const mid = m.id_mov || m.id_movimiento;
     if (!mid) return;
-    finanzasExtras[mid] = {
+    const rawPhoto2 = m.comprobante_foto_2 || (Array.isArray(m.comprobantes_fotos) && m.comprobantes_fotos[1]) || "";
+    const safePhoto2 = rawPhoto2 && !String(rawPhoto2).startsWith("data:") ? String(rawPhoto2) : "";
+    const entry = {
       cuenta: m.cuenta || "",
       referencia: m.referencia || "",
       usuario_id: m.usuario_id || "",
       voucher_id: m.voucher_id || "",
       liquidado_en_nomina: Boolean(m.liquidado_en_nomina)
     };
+    if (m.es_transferencia || m.transfer_group_id) {
+      entry.es_transferencia = true;
+      entry.transfer_group_id = String(m.transfer_group_id || "");
+    }
+    if (safePhoto2) {
+      entry.comprobante_foto_2 = safePhoto2;
+    }
+    finanzasExtras[mid] = entry;
   });
 
   const asistenciaExtras = {};
@@ -1667,6 +1722,7 @@ function prepareSheetsPayload(sourceDb) {
     { clave: "config_taller", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.config_taller || {}), 44000), ultima_actualizacion: nowStr },
     { clave: "text_customizations", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.text_customizations || {}), 44000), ultima_actualizacion: nowStr },
     { clave: "finanzas_categorias", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.finanzas_categorias || {}), 44000), ultima_actualizacion: nowStr },
+    { clave: "finanzas_extras", valor_json: sanitizeSheetsCellStr(JSON.stringify(finanzasExtras || {}), 44000), ultima_actualizacion: nowStr },
     { clave: "usuarios_extras", valor_json: sanitizeSheetsCellStr(JSON.stringify(usuariosExtras || {}), 44000), ultima_actualizacion: nowStr },
     { clave: "movimientos_inventario", valor_json: sanitizeSheetsCellStr(JSON.stringify((d.movimientos_inventario || []).slice(-180)), 44000), ultima_actualizacion: nowStr }
   ];
@@ -1731,7 +1787,7 @@ function hydrateDatabaseFromSheets(cloudData) {
   const vault = loadCatalogsSafetyVault() || {};
   const uExtras = cfgTab.usuarios_extras || meta.usuarios_extras || {};
   const cExtras = meta.catalogo_extras || {};
-  const fExtras = meta.finanzas_extras || {};
+  const fExtras = { ...(meta.finanzas_extras || {}), ...(cfgTab.finanzas_extras || {}) };
   const aExtras = meta.asistencia_extras || {};
 
   // Índices de respaldo en memoria/bóveda para JAMÁS perder por_unidad ni Lista B si faltara meta
@@ -2005,11 +2061,15 @@ function hydrateDatabaseFromSheets(cloudData) {
   const finanzas_movimientos = validFinanzas.map((f) => {
     const mid = String(f.id_movimiento || f.id_mov || ("MOV-" + Math.random().toString(36).slice(2, 7)));
     const extra = fExtras[mid] || {};
+    const catStr = String(f.categoria_cuenta || f.categoria || "General");
+    const photo1 = String(f.comprobante_foto || "");
+    const photo2 = String(extra.comprobante_foto_2 || f.comprobante_foto_2 || "");
+    const fotosList = [photo1, photo2].filter(Boolean);
     return {
       id_mov: mid,
       fecha: cleanDateISO(f.fecha_hora || f.fecha || new Date().toISOString(), false),
       tipo: String(f.tipo_movimiento || f.tipo || "ingreso").toLowerCase(),
-      categoria: String(f.categoria_cuenta || f.categoria || "General"),
+      categoria: catStr,
       concepto: String(f.concepto || ""),
       monto: Number(f.monto_usd ?? f.monto ?? 0),
       metodo: String(f.metodo_pago || f.metodo || "efectivo"),
@@ -2018,7 +2078,11 @@ function hydrateDatabaseFromSheets(cloudData) {
       usuario_id: String((hasNativeCol(f, "usuario_id") ? f.usuario_id : "") || extra.usuario_id || ""),
       voucher_id: String((hasNativeCol(f, "voucher_id") ? f.voucher_id : "") || extra.voucher_id || ""),
       liquidado_en_nomina: hasNativeCol(f, "liquidado_en_nomina") ? parseBoolSheet(f.liquidado_en_nomina) : Boolean(extra.liquidado_en_nomina),
-      comprobante_foto: String(f.comprobante_foto || ""),
+      comprobante_foto: photo1,
+      comprobante_foto_2: photo2,
+      comprobantes_fotos: fotosList.length ? fotosList : undefined,
+      es_transferencia: Boolean(extra.es_transferencia || extra.transfer_group_id || catStr.toLowerCase() === "transferencia entre cuentas"),
+      transfer_group_id: String(extra.transfer_group_id || ""),
       registrado_por: String(f.registrado_por || ""),
       orden_id: String(f.orden_id || "-"),
       codigo_troquel: String(f.codigo_troquel || "-")
@@ -5852,13 +5916,13 @@ function renderDashboardScreen() {
   const balances = balancesInfo.balances;
   const cajaDisponible = balancesInfo.totalLiquido;
 
-  // 1. Ingresos y Egresos Reales desde el Libro Diario
+  // 1. Ingresos y Egresos Operativos Reales desde el Libro Diario (excluyendo Transferencias internas entre cuentas)
   const totalIngresos = (db.finanzas_movimientos || [])
-    .filter((m) => m.tipo === "ingreso")
+    .filter((m) => m.tipo === "ingreso" && !isTransferMovement(m))
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
   const totalEgresos = (db.finanzas_movimientos || [])
-    .filter((m) => m.tipo === "egreso")
+    .filter((m) => m.tipo === "egreso" && !isTransferMovement(m))
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
   // 2. Cuentas por Cobrar Independientes (Órdenes en Taller con saldo + Facturas entregadas a crédito)
@@ -6061,10 +6125,13 @@ function renderDashboardScreen() {
           <i class="fas fa-plus-circle"></i> Nueva Orden
         </button>
         <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-plus-circle"></i> Registrar Ingreso
+          <i class="fas fa-plus-circle"></i> Ingreso Extra
+        </button>
+        <button type="button" class="btn btn--transfer-sky" onclick="openTransferBetweenAccountsModal()" style="padding:10px 18px; border-radius:99px;">
+          <i class="fas fa-right-left"></i> Transferencia
         </button>
         <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-minus-circle"></i> Registrar Egreso
+          <i class="fas fa-minus-circle"></i> Registrar Gasto
         </button>
         <button type="button" class="btn btn--ghost" onclick="openManageBankAccountsModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(56, 189, 248, 0.45); color:#38bdf8;">
           <i class="fas fa-building-columns"></i> Gestionar Cuentas / Bancos
@@ -6346,18 +6413,10 @@ function openRegisterPartnerAdvanceModal(preselectedUserId) {
             <input type="number" step="1" min="1" id="adv-partner-amount" placeholder="Ej: 30" required oninput="previewPartnerBsConversion(this.value)" />
             <div id="adv-bs-preview" style="font-size:11.5px; color:#fde047; margin-top:3px; font-weight:800;"></div>
           </div>
-          <div class="form-field">
-            <label><i class="fas fa-money-bill-wave"></i> Método de Entrega / Retiro *</label>
-            <select id="adv-partner-method">
-              <option value="efectivo">Efectivo (Dólares en Caja)</option>
-              <option value="pago_movil">Pago Móvil (Transferencia en Bolívares)</option>
-              <option value="mixto">Mixto</option>
-            </select>
-          </div>
-          <div class="form-field">
+          <div class="form-field" style="grid-column:1/-1;">
             <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
             <select id="adv-partner-account" style="font-weight:800;">
-              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
+              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`).join("")}
             </select>
           </div>
           <div class="form-field" style="grid-column:1/-1;">
@@ -6419,8 +6478,8 @@ function previewPartnerBsConversion(val) {
 function savePartnerAdvance() {
   const userId = document.getElementById("adv-partner-user")?.value;
   const amount = Number(document.getElementById("adv-partner-amount")?.value) || 0;
-  const method = document.getElementById("adv-partner-method")?.value || "efectivo";
-  const cuenta = document.getElementById("adv-partner-account")?.value || (method === "efectivo" ? "efectivo" : "mercantil");
+  const cuenta = document.getElementById("adv-partner-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
+  const method = suggestMethodForBankAccount(cuenta);
   const concept = (document.getElementById("adv-partner-concept")?.value || "").trim() || "Adelanto personal de jefe";
 
   if (amount <= 0) {
@@ -6822,23 +6881,15 @@ function openPayAccountPayableModal(cxpId) {
           </div>
         </div>
 
-        <div class="form-grid-3">
+        <div class="form-grid-2">
           <div class="form-field">
             <label><i class="fas fa-dollar-sign"></i> Monto a Abonar ($ USD) *</label>
             <input type="number" step="5" min="1" max="${cxp.saldo_pendiente}" id="pay-cxp-amount" value="${cxp.saldo_pendiente}" required />
           </div>
           <div class="form-field">
-            <label><i class="fas fa-money-bill-wave"></i> Método de Pago *</label>
-            <select id="pay-cxp-method">
-              <option value="efectivo">Efectivo ($ USD)</option>
-              <option value="pago_movil">Pago Móvil (Bs.)</option>
-              <option value="transferencia">Transferencia Bancaria</option>
-            </select>
-          </div>
-          <div class="form-field">
             <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
             <select id="pay-cxp-account" style="font-weight:800;">
-              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)}</option>`).join("")}
+              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`).join("")}
             </select>
           </div>
           <div class="form-field" style="grid-column:1/-1;">
@@ -6863,8 +6914,8 @@ function saveAccountPayableAbono(cxpId) {
   if (!cxp) return;
 
   const amount = Number(document.getElementById("pay-cxp-amount")?.value) || 0;
-  const method = document.getElementById("pay-cxp-method")?.value || "efectivo";
-  const cuenta = document.getElementById("pay-cxp-account")?.value || (method === "efectivo" ? "efectivo" : "mercantil");
+  const cuenta = document.getElementById("pay-cxp-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
+  const method = suggestMethodForBankAccount(cuenta);
   const ref = (document.getElementById("pay-cxp-ref")?.value || "").trim();
 
   if (amount <= 0) {
@@ -7332,6 +7383,30 @@ function renderEnriqueHub() {
 
 /* ---------- 2. TABLERO DE LOS 6 ESTADOS OFICIALES DEL TALLER RENACER (JESÚS ANDRADE) ---------- */
 let pipelineWarrantySubfilter = "all"; // "all" | "active_warranty"
+let pipelineSortOrder = (function () {
+  try {
+    const saved = localStorage.getItem("RENACER_PIPELINE_SORT");
+    return saved === "desc" ? "desc" : "asc";
+  } catch (e) {
+    return "asc";
+  }
+})();
+
+function getOrderNumericCode(order) {
+  if (!order) return 0;
+  const raw = String(order.codigo_troquel || order.numero_troquel || order.id_orden || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  const num = parseInt(digits, 10);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function togglePipelineSortOrder() {
+  pipelineSortOrder = pipelineSortOrder === "asc" ? "desc" : "asc";
+  try {
+    localStorage.setItem("RENACER_PIPELINE_SORT", pipelineSortOrder);
+  } catch (e) {}
+  renderScreen();
+}
 
 function setWarrantySubfilter(sub) {
   pipelineWarrantySubfilter = sub;
@@ -7389,11 +7464,14 @@ function renderPipelineScreen(forcedState) {
     });
   }
 
-  // Ordenar: Devueltas por calidad y Prioridad Alta primero
+  // Ordenamiento numérico estricto por Código de Troquel (Menor→Mayor por defecto o Mayor→Menor)
   filteredOrders.sort((a, b) => {
-    const scoreA = (a.garantia_activa ? 3 : 0) + (a.devuelto_calidad ? 2 : 0) + (a.prioridad_alta ? 1 : 0);
-    const scoreB = (b.garantia_activa ? 3 : 0) + (b.devuelto_calidad ? 2 : 0) + (b.prioridad_alta ? 1 : 0);
-    return scoreB - scoreA;
+    const numA = getOrderNumericCode(a);
+    const numB = getOrderNumericCode(b);
+    if (numA !== numB) {
+      return pipelineSortOrder === "asc" ? numA - numB : numB - numA;
+    }
+    return String(a.id_orden || "").localeCompare(String(b.id_orden || ""));
   });
 
   const cardsHtml = filteredOrders.length
@@ -7437,6 +7515,18 @@ function renderPipelineScreen(forcedState) {
             <i class="fas fa-table-list"></i> Lista Compacta
           </button>
         </div>
+
+        <button
+          type="button"
+          class="btn btn--ghost btn--sm"
+          id="btn-pipeline-sort-order"
+          onclick="togglePipelineSortOrder()"
+          title="Alternar orden numérico de las órdenes por Código de Troquel"
+          style="border-color:rgba(245,223,0,0.45); color:var(--renacer-gold); font-weight:800;"
+        >
+          <i class="fas ${pipelineSortOrder === "asc" ? "fa-arrow-up-1-9" : "fa-arrow-down-9-1"}"></i>
+          ${pipelineSortOrder === "asc" ? "Menor → Mayor" : "Mayor → Menor"}
+        </button>
 
         <button type="button" class="btn ${activeFilter === "all" ? "btn--primary" : "btn--ghost"}" onclick="setPhaseFilter('all')">
           Activas en Taller (${counts.all})
@@ -8620,12 +8710,6 @@ function renderMultiPaymentWidget(containerId) {
               </select>
             </div>
             <div class="form-field">
-              <label style="font-size:11.5px;">Método de Pago *</label>
-              <select id="mp-met-${r.uid}" onchange="onMultiPayFieldInput('${r.uid}', 'metodo', this.value)" style="font-weight:700;">
-                ${methodOptionsHtml(r.metodo)}
-              </select>
-            </div>
-            <div class="form-field">
               <label style="font-size:11.5px; display:flex; justify-content:space-between; align-items:center; gap:6px;">
                 <span>Monto (USD $) *</span>
                 <button
@@ -8649,7 +8733,7 @@ function renderMultiPaymentWidget(containerId) {
                 ≈ Bs. ${valBs.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             </div>
-            <div class="form-field">
+            <div class="form-field" style="grid-column:1/-1;">
               <label style="font-size:11.5px;">Referencia / Serial Billete</label>
               <input
                 type="text"
@@ -9532,6 +9616,68 @@ function quickViewOrderDetails(orderId) {
         </div>
         ${tasksHtml}
       </div>
+
+      ${(function () {
+        const showProfitAnalysis = Boolean(
+          currentUser &&
+          (currentUser.rol === "admin" || currentUser.rol === "jefe_taller") &&
+          !isJavierRestrictedUser(currentUser)
+        );
+        if (!showProfitAnalysis) return "";
+        const totalFacturado = Number(order.monto_total) || 0;
+        const destajoInterno = subtasks
+          .filter((s) => !s.es_outsourcing)
+          .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+        const destajoExterno = subtasks
+          .filter((s) => Boolean(s.es_outsourcing))
+          .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+        const totalDestajo = destajoInterno + destajoExterno;
+        const gananciaNeta = totalFacturado - totalDestajo;
+        const margenPct = totalFacturado > 0 ? (gananciaNeta / totalFacturado) * 100 : 0;
+        const destajoPct = totalFacturado > 0 ? Math.min(100, Math.max(0, (totalDestajo / totalFacturado) * 100)) : 0;
+        const gananciaBarPct = totalFacturado > 0 ? Math.max(0, 100 - destajoPct) : 0;
+        const profitColor = gananciaNeta >= 0 ? "#22c55e" : "#ef4444";
+        const splitSubtext = destajoExterno > 0
+          ? `Interno: $${destajoInterno.toFixed(2)} · Externo: $${destajoExterno.toFixed(2)}`
+          : (subtasks.length ? `${subtasks.length} trabajo(s) asignado(s)` : "Sin destajo asignado aún");
+        return `
+          <!-- Cruce Financiero: Servicio Facturado vs Destajo = Rentabilidad Taller -->
+          <div class="order-profit-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+              <div style="font-size:11.5px; font-weight:900; color:#22c55e; text-transform:uppercase; letter-spacing:0.4px;">
+                <i class="fas fa-chart-line"></i> Cruce Financiero y Rentabilidad de la Orden
+              </div>
+              <span style="font-size:11px; font-weight:900; padding:2px 9px; border-radius:99px; background:${gananciaNeta >= 0 ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"}; color:${profitColor}; border:1px solid ${gananciaNeta >= 0 ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"};">
+                Margen Taller: ${margenPct.toFixed(1)}%
+              </span>
+            </div>
+            <div class="order-profit-grid">
+              <div class="order-profit-cell">
+                <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Facturado (Lista A)</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:var(--renacer-gold); margin-top:2px;">$${totalFacturado.toFixed(2)}</div>
+              </div>
+              <div class="order-profit-cell">
+                <div style="font-size:10px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Costo Destajo (Lista B)</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:#f59e0b; margin-top:2px;">-$${totalDestajo.toFixed(2)}</div>
+                <div style="font-size:9.5px; color:var(--text-muted); margin-top:2px;">${splitSubtext}</div>
+              </div>
+              <div class="order-profit-cell" style="border-color:${gananciaNeta >= 0 ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"};">
+                <div style="font-size:10px; font-weight:800; color:${profitColor}; text-transform:uppercase;">Ganancia Neta Taller</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:900; color:${profitColor}; margin-top:2px;">${gananciaNeta >= 0 ? "+" : "-"}$${Math.abs(gananciaNeta).toFixed(2)}</div>
+                <div style="font-size:9.5px; color:var(--text-muted); margin-top:2px;">≈ Bs. ${(Math.abs(gananciaNeta) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              </div>
+            </div>
+            <div class="order-profit-bar" title="Destajo ${destajoPct.toFixed(1)}% vs Ganancia Taller ${gananciaBarPct.toFixed(1)}%">
+              <div style="width:${destajoPct}%; background:#f59e0b; transition:width 0.3s ease;"></div>
+              <div style="width:${gananciaBarPct}%; background:${profitColor}; transition:width 0.3s ease;"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:10px; color:var(--text-muted); margin-top:4px; font-weight:700;">
+              <span><i class="fas fa-square" style="color:#f59e0b;"></i> Destajo: ${destajoPct.toFixed(1)}%</span>
+              <span><i class="fas fa-square" style="color:${profitColor};"></i> Utilidad Neta Taller: ${margenPct.toFixed(1)}%</span>
+            </div>
+          </div>
+        `;
+      })()}
 
       <!-- Fotos -->
       <div style="margin-bottom:14px;">
@@ -11534,7 +11680,7 @@ function openFinancialApprovalModal(orderId) {
         <div id="fin-card-abono" class="fin-option-card" onclick="selectFinCondition('abono', ${order.monto_total})">
           <span class="fin-option-badge" style="background:rgba(217,119,6,0.18); color:#b45309;">OPCIÓN B · ADELANTO / ABONO</span>
           <h4>Abono (50% u otro monto)</h4>
-          <p>Registra el monto abonado acumulado (ej. $${(order.monto_total * 0.5).toFixed(2)}), método de pago con foto y calcula el Resto.</p>
+          <p>Registra el monto abonado acumulado (ej. $${(order.monto_total * 0.5).toFixed(2)}), cuenta de ingreso con foto y calcula el Resto.</p>
         </div>
 
         <div id="fin-card-credito" class="fin-option-card" onclick="selectFinCondition('credito', ${order.monto_total})">
@@ -11620,18 +11766,10 @@ function selectFinCondition(optionKey, montoTotal) {
           <label>Resto Pendiente en Cuenta por Cobrar ($)</label>
           <input type="text" id="fin-input-saldo" value="$${curSaldo.toFixed(2)}" readonly style="font-weight:900; font-size:16px; color:${curSaldo > 0 ? "#dc2626" : "#16a34a"};" />
         </div>
-        <div class="form-field">
+        <div class="form-field" style="grid-column:1/-1;">
           <label>Cuenta / Banco de Ingreso (si hay pago)</label>
-          <select id="fin-input-cuenta">
+          <select id="fin-input-cuenta" style="font-weight:800;">
             ${bankOptionsHtml}
-          </select>
-        </div>
-        <div class="form-field">
-          <label>Método de Pago (si hay pago)</label>
-          <select id="fin-input-metodo">
-            <option value="pago_movil">Transferencia / Pago Móvil</option>
-            <option value="efectivo">Efectivo (Billetes Físicos)</option>
-            <option value="transferencia">Zelle / Transferencia Digital</option>
           </select>
         </div>
       </div>
@@ -11672,18 +11810,10 @@ function selectFinCondition(optionKey, montoTotal) {
           style="font-weight:900; font-size:16px; color:${defaultSaldo > 0 ? "#dc2626" : "#16a34a"};"
         />
       </div>
-      <div class="form-field">
+      <div class="form-field" style="grid-column:1/-1;">
         <label>Cuenta / Banco de Ingreso *</label>
-        <select id="fin-input-cuenta">
+        <select id="fin-input-cuenta" style="font-weight:800;">
           ${bankOptionsHtml}
-        </select>
-      </div>
-      <div class="form-field">
-        <label>Método de Pago *</label>
-        <select id="fin-input-metodo">
-          <option value="pago_movil">Transferencia / Pago Móvil</option>
-          <option value="efectivo">Efectivo (Billetes Físicos)</option>
-          <option value="transferencia">Zelle / Transferencia Digital</option>
         </select>
       </div>
     </div>
@@ -11717,7 +11847,6 @@ function confirmFinancialCondition() {
 
   const opt = tempFinConditionState.selectedOption;
   const abonoInput = document.getElementById("fin-input-abono");
-  const metodoInput = document.getElementById("fin-input-metodo");
   const cuentaInput = document.getElementById("fin-input-cuenta")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
   const nuevoAbono = opt === "pago_total" ? Number(order.monto_total) : Math.max(0, Number(abonoInput?.value) || 0);
   const diferenciaAbono = Math.max(0, nuevoAbono - (Number(order.monto_abonado) || 0));
@@ -11730,7 +11859,7 @@ function confirmFinancialCondition() {
   order.tipo_condicion_pago = nuevoAbono >= Number(order.monto_total) && Number(order.monto_total) > 0 ? "pago_total" : opt;
   order.monto_abonado = nuevoAbono;
   order.saldo_pendiente = Math.max(0, Number(order.monto_total) - nuevoAbono);
-  order.metodo_pago = opt === "credito" && nuevoAbono === 0 ? "n/a" : metodoInput?.value || "pago_movil";
+  order.metodo_pago = opt === "credito" && nuevoAbono === 0 ? "n/a" : suggestMethodForBankAccount(cuentaInput);
   order.cuenta_pago = opt === "credito" && nuevoAbono === 0 ? "" : cuentaInput;
   order.comprobante_pago_foto = opt === "credito" && nuevoAbono === 0 ? (order.comprobante_pago_foto || "") : (tempFinConditionState.proofPhotoDataUrl || order.comprobante_pago_foto || "");
   order.prioridad_alta = order.tipo_condicion_pago === "pago_total";
@@ -13405,10 +13534,221 @@ function buildWhatsAppBudgetPlainText(order) {
   );
 }
 
+function getOrderReceptionPhotos(order) {
+  if (!order) return [];
+  const items = [];
+  const piezaArr = Array.isArray(order.galeria_fotos_pieza) ? order.galeria_fotos_pieza.filter(Boolean) : [];
+  const repArr = Array.isArray(order.galeria_fotos_repuestos) ? order.galeria_fotos_repuestos.filter(Boolean) : [];
+  piezaArr.forEach((url, idx) => items.push({ url, label: `Pieza #${idx + 1}`, category: "pieza" }));
+  repArr.forEach((url, idx) => items.push({ url, label: `Repuestos #${idx + 1}`, category: "repuestos" }));
+  if (!items.length && order.foto_pieza_url) {
+    items.push({ url: order.foto_pieza_url, label: "Pieza #1", category: "pieza" });
+  }
+  return items;
+}
+
+async function resolveImageUrlToBlob(url) {
+  const res = await fetch(url, { mode: "cors" });
+  if (!res.ok) throw new Error("No se pudo descargar la imagen");
+  return await res.blob();
+}
+
+async function convertBlobToPngBlob(blob) {
+  if (blob.type === "image/png") return blob;
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const objUrl = URL.createObjectURL(blob);
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth || img.width || 600;
+        canvas.height = img.naturalHeight || img.height || 600;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((pngBlob) => {
+          URL.revokeObjectURL(objUrl);
+          if (pngBlob) resolve(pngBlob);
+          else reject(new Error("Conversión PNG fallida"));
+        }, "image/png");
+      } catch (e) {
+        URL.revokeObjectURL(objUrl);
+        reject(e);
+      }
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(objUrl);
+      reject(e);
+    };
+    img.src = objUrl;
+  });
+}
+
+async function copyOrderPhotoToClipboard(url, label = "Foto Recepción") {
+  try {
+    if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
+      throw new Error("Clipboard de imágenes no soportado");
+    }
+    const rawBlob = await resolveImageUrlToBlob(url);
+    const pngBlob = await convertBlobToPngBlob(rawBlob);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
+    showToast(`✅ ${label} copiada. Pégala (Ctrl+V) directo en el chat de WhatsApp.`);
+  } catch (err) {
+    downloadOrderPhotoFile(url, `${label.replace(/[^a-z0-9]+/gi, "_")}.jpg`);
+    showToast(`Foto descargada (${label}). Adjúntala en WhatsApp desde tu carpeta Descargas.`, "info");
+  }
+}
+
+async function downloadOrderPhotoFile(url, filename = "Foto_Recepcion_Renacer.jpg") {
+  try {
+    const blob = await resolveImageUrlToBlob(url);
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objUrl), 2500);
+  } catch (err) {
+    window.open(url, "_blank", "noopener");
+  }
+}
+
+async function downloadAllOrderReceptionPhotos(orderId) {
+  const order = (db.ordenes || []).find((o) => o.id_orden === orderId);
+  const photos = getOrderReceptionPhotos(order);
+  if (!photos.length) {
+    showToast("Esta orden no tiene fotos iniciales de recepción.", "warning");
+    return;
+  }
+  for (let i = 0; i < photos.length; i++) {
+    const p = photos[i];
+    const safeName = `Orden_${order.codigo_troquel}_${p.label.replace(/[^a-z0-9]+/gi, "_")}.jpg`;
+    await downloadOrderPhotoFile(p.url, safeName);
+    await new Promise((r) => setTimeout(r, 220));
+  }
+  showToast(`Se descargaron ${photos.length} foto(s) iniciales de la Orden #${order.codigo_troquel}.`);
+}
+
+async function shareWhatsAppTextWithReceptionPhotos(orderId, textareaId = "wa-budget-textarea") {
+  const order = (db.ordenes || []).find((o) => o.id_orden === orderId);
+  if (!order) return;
+  const ta = document.getElementById(textareaId);
+  const textMsg = ta ? ta.value : buildWhatsAppTermsOnlyPlainText(order);
+  const photos = getOrderReceptionPhotos(order);
+
+  if (!photos.length) {
+    const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
+    if (intlPhone) window.open(`https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}`, "_blank", "noopener");
+    return;
+  }
+
+  try {
+    if (navigator.share) {
+      const files = [];
+      for (let i = 0; i < photos.length; i++) {
+        try {
+          const blob = await resolveImageUrlToBlob(photos[i].url);
+          const ext = blob.type && blob.type.includes("png") ? "png" : "jpg";
+          const fname = `Orden_${order.codigo_troquel}_${photos[i].label.replace(/[^a-z0-9]+/gi, "_")}.${ext}`;
+          files.push(new File([blob], fname, { type: blob.type || "image/jpeg" }));
+        } catch (e) {}
+      }
+      if (files.length && (!navigator.canShare || navigator.canShare({ files }))) {
+        await navigator.share({
+          title: `Comprobante Recepción Orden #${order.codigo_troquel}`,
+          text: textMsg,
+          files
+        });
+        showToast("Compartido con texto + fotos de recepción.");
+        return;
+      }
+    }
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+  }
+
+  // Fallback para PC / navegadores sin Web Share de archivos: copia texto y descarga las fotos para adjuntar rápido
+  try {
+    await copyTextToClipboard(textMsg);
+  } catch (e) {}
+  await downloadAllOrderReceptionPhotos(orderId);
+  const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
+  if (intlPhone) {
+    window.open(`https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}`, "_blank", "noopener");
+  }
+  showToast("WhatsApp abierto y fotos descargadas: arrástralas al chat del cliente (en móvil se envían juntas automáticamente).", "info");
+}
+
+function renderWhatsAppReceptionPhotosStripHtml(order, textareaId = "wa-budget-textarea") {
+  const photos = getOrderReceptionPhotos(order);
+  if (!photos.length) {
+    return `
+      <div class="wa-reception-photos-card" style="opacity:0.85;">
+        <div style="font-size:11.5px; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+          <i class="fas fa-camera" style="color:#38bdf8;"></i>
+          <span>Esta orden aún no tiene fotos iniciales de <strong>Pieza</strong> o <strong>Repuestos</strong> cargadas en Recepción.</span>
+        </div>
+      </div>
+    `;
+  }
+  const galleryUrls = photos.map((p) => p.url);
+  const galleryAttr = JSON.stringify(galleryUrls).replace(/"/g, "&quot;");
+  const thumbsHtml = photos
+    .map((p, idx) => {
+      const safeUrlJs = String(p.url).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const safeLabelJs = String(p.label).replace(/'/g, "\\'");
+      const safeFileJs = `Orden_${order.codigo_troquel}_${p.label.replace(/[^a-z0-9]+/gi, "_")}.jpg`;
+      return `
+        <div class="wa-reception-photo-item">
+          <img src="${p.url}" alt="${escapeHtml(p.label)}" onclick="openPhotoLightbox('${safeUrlJs}', 'Recepción Orden #${order.codigo_troquel} — ${safeLabelJs}', ${galleryAttr}, ${idx})" title="Clic para ampliar" />
+          <div class="wa-reception-photo-label">${escapeHtml(p.label)}</div>
+          <div style="display:flex; gap:4px; width:100%;">
+            <button type="button" class="btn btn--ghost btn--xs" style="flex:1; padding:2px 4px; font-size:10px;" onclick="copyOrderPhotoToClipboard('${safeUrlJs}', '${safeLabelJs}')" title="Copiar foto para pegar con Ctrl+V en WhatsApp">
+              <i class="fas fa-copy"></i> Copiar
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" style="padding:2px 5px; font-size:10px;" onclick="downloadOrderPhotoFile('${safeUrlJs}', '${safeFileJs}')" title="Descargar imagen">
+              <i class="fas fa-download"></i>
+            </button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="wa-reception-photos-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:4px;">
+        <div style="font-size:12px; font-weight:900; color:#38bdf8; display:flex; align-items:center; gap:6px;">
+          <i class="fas fa-images"></i> Fotos Iniciales de Recepción (Pieza + Repuestos)
+          <span style="background:rgba(56,189,248,0.2); color:#7dd3fc; padding:1px 7px; border-radius:99px; font-size:10.5px;">${photos.length} foto(s)</span>
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--transfer-sky btn--xs" onclick="shareWhatsAppTextWithReceptionPhotos('${order.id_orden}', '${textareaId}')" title="En teléfono envía el texto y todas las fotos juntos a WhatsApp; en PC abre WhatsApp y descarga las fotos">
+            <i class="fas fa-share-nodes"></i> Enviar Texto + Fotos (WhatsApp)
+          </button>
+          <button type="button" class="btn btn--ghost btn--xs" onclick="downloadAllOrderReceptionPhotos('${order.id_orden}')" title="Descargar todas las fotos iniciales para adjuntar en WhatsApp Web">
+            <i class="fas fa-download"></i> Descargar Todas
+          </button>
+        </div>
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">
+        En <strong>celular</strong> pulsa <em>"Enviar Texto + Fotos"</em> para mandar comprobante e imágenes juntas a WhatsApp. En <strong>PC</strong> usa <em>"Copiar"</em> y pega (Ctrl+V) directo en el chat.
+      </div>
+      <div class="wa-reception-photos-strip">${thumbsHtml}</div>
+    </div>
+  `;
+}
+
 function buildWhatsAppTermsOnlyPlainText(order) {
   const troquel = order.codigo_troquel;
   const motor = `${order.datos_motor.tipo_pieza || "Pieza"} — ${order.datos_motor.marca || ""} ${order.datos_motor.modelo || ""}`.trim();
   const fecha = formatDateHuman(order.fecha_ingreso, false);
+  const receptionPhotos = getOrderReceptionPhotos(order);
+  const photosLine = receptionPhotos.length
+    ? `*Soporte Fotográfico de Recepción:* Se adjuntan ${receptionPhotos.length} foto(s) del estado inicial de la pieza y/o repuestos recibidos.\n`
+    : "";
 
   return (
     `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
@@ -13420,6 +13760,7 @@ function buildWhatsAppTermsOnlyPlainText(order) {
     `*Pieza / Motor:* ${motor}\n` +
     `*Fecha de Ingreso:* ${fecha}\n` +
     `*Estado Actual:* Recepción e Inspección Técnica en Proceso\n` +
+    photosLine +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `*TÉRMINOS Y CONDICIONES OBLIGATORIAS DEL SERVICIO:*\n` +
     `1. *Plazo de Aprobación / Retiro:* El cliente dispone de un plazo mínimo de tres (3) días para aprobar el presupuesto o retirar las piezas del taller.\n` +
@@ -13456,12 +13797,14 @@ function openWhatsAppTermsOnlyModal(orderId) {
         </p>
       </div>
 
+      ${renderWhatsAppReceptionPhotosStripHtml(order, "wa-terms-textarea")}
+
       <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
         Mensaje listo para enviar al WhatsApp <strong>${order.telefono_cliente}</strong>:
       </p>
       <textarea
         id="wa-terms-textarea"
-        rows="14"
+        rows="12"
         style="width:100%; padding:12px; border-radius:12px; border:1.5px solid var(--border-color); font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.45; background:var(--bg-input); color:var(--text-main);"
       >${textMsg}</textarea>
     `,
@@ -13585,6 +13928,8 @@ function openWhatsAppBudgetTextModal(orderId, initialMode) {
           <i class="fas fa-file-pdf"></i> Abrir Orden / Presupuesto PDF
         </button>
       </div>
+
+      ${renderWhatsAppReceptionPhotosStripHtml(order, "wa-budget-textarea")}
 
       <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
         Mensaje editable listo para <strong>${order.nombre_cliente} (${order.telefono_cliente})</strong> · <strong>Orden #${order.codigo_troquel}</strong>:
@@ -14159,7 +14504,7 @@ function openCollectReceivableModal(orderId) {
         </div>
       </div>
 
-      <div class="form-grid-3">
+      <div class="form-grid-2">
         <div class="form-field">
           <label>Monto a Abonar / Cobrar ($) *</label>
           <input
@@ -14175,14 +14520,6 @@ function openCollectReceivableModal(orderId) {
           <div id="ar-collect-live-preview" style="font-size:11px; color:#22c55e; font-weight:800; margin-top:3px;">
             ≈ Bs. ${(saldoActual * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · Quedará Resto: $0.00
           </div>
-        </div>
-        <div class="form-field">
-          <label>Método de Pago *</label>
-          <select id="ar-collect-method" onchange="suggestAccountForArMethod(this.value)">
-            <option value="pago_movil">Pago Móvil / Transferencia</option>
-            <option value="efectivo">Efectivo (Divisas)</option>
-            <option value="transferencia">Zelle / Transferencia Ext.</option>
-          </select>
         </div>
         <div class="form-field">
           <label>Cuenta / Caja Destino *</label>
@@ -14243,8 +14580,8 @@ function confirmCollectReceivable(orderId) {
   if (!order) return;
 
   const amount = Math.max(0, Number(document.getElementById("ar-collect-amount")?.value) || 0);
-  const method = document.getElementById("ar-collect-method")?.value || "pago_movil";
   const cuenta = document.getElementById("ar-collect-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
+  const method = suggestMethodForBankAccount(cuenta);
 
   if (amount <= 0) {
     showToast("Ingresa un monto válido.", "error");
@@ -14292,7 +14629,7 @@ function confirmCollectReceivable(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "cobro_resto",
-    mensaje: `Pago recibido por $${amount.toFixed(2)} (${method} - ${nombreCuenta}). Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
+    mensaje: `Pago recibido por $${amount.toFixed(2)} (${nombreCuenta}). Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
     foto_adjunta_url: tempArCollectPhoto || "",
     fecha_hora: nowStr
   });
@@ -15882,7 +16219,6 @@ function openDetailedPayrollVoucherModal(voucherOrId) {
               <div style="background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:10px; padding:9px 11px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
                 <div style="font-size:12px; line-height:1.5; flex:1; min-width:160px;">
                   <div style="font-weight:900; color:var(--renacer-gold);">Pago #${idx + 1}: ${escapeHtml(pd.cuenta_label)}</div>
-                  <div><strong>Método:</strong> ${escapeHtml(pd.metodo_label)}</div>
                   <div><strong>Monto:</strong> <span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#22c55e;">$${Number(pd.monto || 0).toFixed(2)}</span> <span style="font-size:11px; color:#38bdf8;">(≈ Bs. ${Number(pd.monto_bs || (pd.monto * tasaBcv)).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span></div>
                   ${pd.referencia ? `<div><strong>Ref:</strong> <code>${escapeHtml(pd.referencia)}</code></div>` : ""}
                 </div>
@@ -15903,8 +16239,7 @@ function openDetailedPayrollVoucherModal(voucherOrId) {
       <div class="form-section-box" style="margin-bottom:0;">
         <div class="form-section-title"><i class="fas fa-money-check-dollar"></i> Soporte de Pago</div>
         <div style="font-size:12.5px; line-height:1.6;">
-          <div><strong>Método:</strong> ${escapeHtml(voucher.metodo_pago || "-")}</div>
-          ${accountName ? `<div><strong>Cuenta / Caja:</strong> ${escapeHtml(accountName)}</div>` : ""}
+          ${accountName ? `<div><strong>Cuenta / Caja:</strong> ${escapeHtml(accountName)}</div>` : `<div><strong>Cuenta / Caja:</strong> ${escapeHtml(voucher.cuenta || voucher.metodo_pago || "-")}</div>`}
           ${voucher.referencia ? `<div><strong>Referencia:</strong> <code>${escapeHtml(voucher.referencia)}</code></div>` : ""}
           ${voucher.notas ? `<div><strong>Notas:</strong> ${escapeHtml(voucher.notas)}</div>` : ""}
         </div>
@@ -16072,9 +16407,9 @@ function printPayrollVoucherDocument(voucherObj) {
           !v.es_prevoucher && Array.isArray(v.pagos_detalle) && v.pagos_detalle.length > 1
             ? `<div style="margin-top:8px; border-top:1px dashed #cbd5e1; padding-top:6px; font-size:11.5px;">
                  <div style="font-weight:800; color:#0f1638; margin-bottom:4px;">Desglose de Pago (Partida Doble — ${v.pagos_detalle.length} Cuentas):</div>
-                 ${v.pagos_detalle.map((pd, i) => `<div>• <strong>Pago #${i + 1}:</strong> ${escapeHtml(pd.cuenta_label || pd.cuenta)} (${escapeHtml(pd.metodo_label || pd.metodo)}) — <strong>$${Number(pd.monto || 0).toFixed(2)}</strong> (Bs. ${Number(pd.monto_bs || (pd.monto * tasaBcv)).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})${pd.referencia ? ` · Ref: ${escapeHtml(pd.referencia)}` : ""}</div>`).join("")}
+                 ${v.pagos_detalle.map((pd, i) => `<div>• <strong>Pago #${i + 1}:</strong> ${escapeHtml(pd.cuenta_label || pd.cuenta)} — <strong>$${Number(pd.monto || 0).toFixed(2)}</strong> (Bs. ${Number(pd.monto_bs || (pd.monto * tasaBcv)).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})${pd.referencia ? ` · Ref: ${escapeHtml(pd.referencia)}` : ""}</div>`).join("")}
                </div>`
-            : (!v.es_prevoucher ? `<div style="font-size:11.5px; color:#475569; margin-top:6px;">Método: ${escapeHtml(v.metodo_pago || "-")} ${v.referencia ? `· Ref: ${escapeHtml(v.referencia)}` : ""} · Emitido por: ${escapeHtml(v.emitido_por || "Gerencia")}</div>` : "")
+            : (!v.es_prevoucher ? `<div style="font-size:11.5px; color:#475569; margin-top:6px;">Cuenta: ${escapeHtml((v.cuenta ? findBankAccountById(v.cuenta)?.nombre : "") || v.cuenta || v.metodo_pago || "-")} ${v.referencia ? `· Ref: ${escapeHtml(v.referencia)}` : ""} · Emitido por: ${escapeHtml(v.emitido_por || "Gerencia")}</div>` : "")
         }
       </div>
       <div class="sigs">
@@ -18594,33 +18929,120 @@ function deleteAttendanceRecord(asistId) {
 }
 
 /* ============================================================================
-   LIBRO DIARIO DE INGRESOS, GASTOS, HISTORIAL POR CLIENTE Y FLUJO DE CAJA
+   LIBRO DIARIO DE INGRESOS, GASTOS, TRANSFERENCIAS, CATEGORÍAS EDITABLES Y FLUJO DE CAJA (v45)
    ============================================================================ */
 let ledgerClientFilter = "all";
-let ledgerTypeFilter = "all"; // 'all' | 'ingreso' | 'egreso'
-let ledgerAccountFilter = "all"; // 'all' | 'efectivo' | 'mercantil' | 'bnc' | 'banesco' | 'zelle_otro'
+let ledgerTypeFilter = "all"; // 'all' | 'ingreso' | 'egreso' | 'transferencia'
+let ledgerAccountFilter = "all";
 let ledgerCategoryFilter = "all";
 let ledgerDateFrom = "";
 let ledgerDateTo = "";
 
+function isTransferMovement(m) {
+  if (!m) return false;
+  return Boolean(
+    m.es_transferencia ||
+    m.transfer_group_id ||
+    String(m.categoria || "").trim().toLowerCase() === "transferencia entre cuentas"
+  );
+}
+
+function getMovementPhotos(m) {
+  if (!m) return [];
+  const raw = [];
+  if (m.comprobante_foto) raw.push(String(m.comprobante_foto));
+  if (m.comprobante_foto_2) raw.push(String(m.comprobante_foto_2));
+  if (Array.isArray(m.comprobantes_fotos)) {
+    m.comprobantes_fotos.forEach((p) => { if (p) raw.push(String(p)); });
+  }
+  return [...new Set(raw.filter(Boolean))];
+}
+
+function isLedgerCurrentWeekActive() {
+  const wk = getCurrentPayrollWeekRange();
+  return Boolean(ledgerDateFrom && ledgerDateTo && ledgerDateFrom === wk.startIso && ledgerDateTo === wk.endIso);
+}
+
+function toggleLedgerCurrentWeekFilter() {
+  if (isLedgerCurrentWeekActive()) {
+    ledgerDateFrom = "";
+    ledgerDateTo = "";
+  } else {
+    const wk = getCurrentPayrollWeekRange();
+    ledgerDateFrom = wk.startIso;
+    ledgerDateTo = wk.endIso;
+  }
+  renderScreen();
+}
+
+function getFinanceCategoriesForType(tipo) {
+  const fc = db.finanzas_categorias || {};
+  if (tipo === "ingreso" || tipo === "ingresos_extra") {
+    return Array.isArray(fc.ingresos_extra) && fc.ingresos_extra.length
+      ? fc.ingresos_extra.slice()
+      : ["Ingresos Extra", "Venta de Mercancía", "Cobro de Préstamo"];
+  }
+  return Array.isArray(fc.egresos) && fc.egresos.length
+    ? fc.egresos.slice()
+    : [
+        "Pago de Nómina / Comisiones",
+        "Pago a Talleres Externos (Solteca / Outsourcing)",
+        "Compra de Insumos y Químicos",
+        "Herramientas y Piedras de Rectificar",
+        "Servicios Básicos e Internet",
+        "Mantenimiento de Maquinaria",
+        "Préstamos"
+      ];
+}
+
+function syncLegacyFinanzasCategoriasMirror() {
+  if (!db.finanzas_categorias) return;
+  const autoCats = Array.isArray(db.finanzas_categorias.ingresos_automaticos) && db.finanzas_categorias.ingresos_automaticos.length
+    ? db.finanzas_categorias.ingresos_automaticos
+    : ["Liquidación Total de Orden", "Abono de Orden", "Cobro de Cuenta por Cobrar (Resto)", "Finiquito en Entrega Final"];
+  const extraCats = Array.isArray(db.finanzas_categorias.ingresos_extra) ? db.finanzas_categorias.ingresos_extra : [];
+  db.finanzas_categorias.ingresos = [...new Set([...autoCats, ...extraCats])];
+  db.finanzas_categorias._v45_cats_init = true;
+}
+
 function renderFinancesLedgerScreen() {
-  const ingresos = db.finanzas_movimientos
-    .filter((m) => m.tipo === "ingreso")
+  const allMovs = Array.isArray(db.finanzas_movimientos) ? db.finanzas_movimientos : [];
+  const hasDateFilter = Boolean(ledgerDateFrom || ledgerDateTo);
+  const weekRange = getCurrentPayrollWeekRange();
+  const isWeekActive = isLedgerCurrentWeekActive();
+
+  // KPIs de Ingresos y Egresos Operativos: respetan filtro de fecha cuando está activo, excluyen Transferencias internas
+  const kpiPool = hasDateFilter
+    ? allMovs.filter((m) => {
+        const d = cleanDateISO(m.fecha);
+        if (ledgerDateFrom && d < ledgerDateFrom) return false;
+        if (ledgerDateTo && d > ledgerDateTo) return false;
+        return true;
+      })
+    : allMovs;
+
+  const ingresos = kpiPool
+    .filter((m) => m.tipo === "ingreso" && !isTransferMovement(m))
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
-  const egresos = db.finanzas_movimientos
-    .filter((m) => m.tipo === "egreso")
+  const egresos = kpiPool
+    .filter((m) => m.tipo === "egreso" && !isTransferMovement(m))
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
+  // Saldos líquidos reales SIEMPRE globales acumulados (jamás alterados por filtros de fecha)
   const balances = getBalancesPorCuenta();
-  const utilidadNeta = balances.totalLiquido; // Saldo real líquido disponible
+  const utilidadNeta = balances.totalLiquido;
   const cuentasPorCobrar = db.ordenes.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
 
   // Filtrado compuesto avanzado
-  let filteredMovs = (db.finanzas_movimientos || []).slice();
+  let filteredMovs = allMovs.slice();
 
-  if (ledgerTypeFilter !== "all") {
-    filteredMovs = filteredMovs.filter((m) => m.tipo === ledgerTypeFilter);
+  if (ledgerTypeFilter === "transferencia") {
+    filteredMovs = filteredMovs.filter((m) => isTransferMovement(m));
+  } else if (ledgerTypeFilter === "ingreso") {
+    filteredMovs = filteredMovs.filter((m) => m.tipo === "ingreso" && !isTransferMovement(m));
+  } else if (ledgerTypeFilter === "egreso") {
+    filteredMovs = filteredMovs.filter((m) => m.tipo === "egreso" && !isTransferMovement(m));
   }
 
   if (ledgerAccountFilter !== "all") {
@@ -18658,26 +19080,34 @@ function renderFinancesLedgerScreen() {
     filteredMovs = filteredMovs.filter((m) => cleanDateISO(m.fecha) <= ledgerDateTo);
   }
 
+  const filteredIngresosOp = filteredMovs
+    .filter((m) => m.tipo === "ingreso" && !isTransferMovement(m))
+    .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+  const filteredEgresosOp = filteredMovs
+    .filter((m) => m.tipo === "egreso" && !isTransferMovement(m))
+    .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
+
   // Opciones de categorías únicas
   const allCategories = [
     ...new Set([
-      ...(db.finanzas_categorias?.ingresos || []),
+      ...(db.finanzas_categorias?.ingresos_automaticos || []),
+      ...(db.finanzas_categorias?.ingresos_extra || []),
       ...(db.finanzas_categorias?.egresos || []),
-      ...db.finanzas_movimientos.map((m) => m.categoria).filter(Boolean)
+      ...allMovs.map((m) => m.categoria).filter(Boolean)
     ])
   ].sort();
 
   const categoryFilterOptions =
     `<option value="all">Todas las Categorías (${allCategories.length})</option>` +
     allCategories
-      .map((cat) => `<option value="${cat}" ${ledgerCategoryFilter === cat ? "selected" : ""}>${cat}</option>`)
+      .map((cat) => `<option value="${escapeHtml(cat)}" ${ledgerCategoryFilter === cat ? "selected" : ""}>${escapeHtml(cat)}</option>`)
       .join("");
 
   const configuredBanks = getConfiguredBankAccounts();
   const accountFilterOptions =
     `<option value="all">Todas las Cuentas / Bancos (${configuredBanks.length})</option>` +
     configuredBanks.map(
-      (b) => `<option value="${b.id}" ${ledgerAccountFilter === b.id ? "selected" : ""}>${escapeHtml(b.nombre)} ($${(balances[b.id] || 0).toFixed(2)})</option>`
+      (b) => `<option value="${b.id}" ${ledgerAccountFilter === b.id ? "selected" : ""}>${escapeHtml(b.nombre)} ($${(balances.balances[b.id] || 0).toFixed(2)})</option>`
     ).join("");
 
   const clientFilterOptions =
@@ -18685,7 +19115,7 @@ function renderFinancesLedgerScreen() {
     db.clientes
       .map(
         (c) =>
-          `<option value="${c.id_cliente}" ${ledgerClientFilter === c.id_cliente ? "selected" : ""}>${c.nombre_completo || c.nombre_cliente} (${c.documento_identidad})</option>`
+          `<option value="${c.id_cliente}" ${ledgerClientFilter === c.id_cliente ? "selected" : ""}>${escapeHtml(c.nombre_completo || c.nombre_cliente)} (${escapeHtml(c.documento_identidad)})</option>`
       )
       .join("");
 
@@ -18698,47 +19128,51 @@ function renderFinancesLedgerScreen() {
           }
           const bObj = findBankAccountById(cId);
           const isIngreso = m.tipo === "ingreso";
+          const isTrf = isTransferMovement(m);
+          const movPhotos = getMovementPhotos(m);
+          const photoBtnHtml = movPhotos.length
+            ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openPhotoLightbox('${String(movPhotos[0]).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}', 'Comprobante ${escapeHtml(m.id_mov)}', ${JSON.stringify(movPhotos).replace(/"/g, "&quot;")}, 0)" title="Ver ${movPhotos.length} foto(s) soporte"><i class="fas fa-camera"></i>${movPhotos.length > 1 ? ` <span style="font-size:10px; font-weight:900; color:#38bdf8;">${movPhotos.length}</span>` : ""}</button>`
+            : "";
+
+          const typeBadgeHtml = isTrf
+            ? `<span class="state-badge state-badge--transfer">
+                 <i class="fas fa-right-left"></i> ${isIngreso ? "TRF ENTRADA" : "TRF SALIDA"}
+               </span>`
+            : `<span class="state-badge ${isIngreso ? "state-badge--done" : "state-badge--danger"}">
+                 <i class="fas ${isIngreso ? "fa-arrow-up" : "fa-arrow-down"}"></i> ${isIngreso ? "INGRESO" : "EGRESO"}
+               </span>`;
+
+          const amountColor = isTrf ? "#38bdf8" : (isIngreso ? "#16a34a" : "#dc2626");
 
           return `
             <tr>
               <td>
                 <div style="font-weight:800; font-size:12.5px;">${formatDateHuman(m.fecha, false)}</div>
-                ${m.hora ? `<div style="font-size:10.5px; color:var(--text-muted);">${m.hora}</div>` : ""}
+                ${m.hora ? `<div style="font-size:10.5px; color:var(--text-muted);">${escapeHtml(m.hora)}</div>` : ""}
+              </td>
+              <td>${typeBadgeHtml}</td>
+              <td>
+                <span style="font-weight:800; font-size:12.5px; color:var(--text-main);">${escapeHtml(m.categoria || "General")}</span>
               </td>
               <td>
-                <span class="state-badge ${isIngreso ? "state-badge--done" : "state-badge--danger"}">
-                  <i class="fas ${isIngreso ? "fa-arrow-up" : "fa-arrow-down"}"></i> ${isIngreso ? "INGRESO" : "EGRESO"}
-                </span>
-              </td>
-              <td>
-                <span style="font-weight:800; font-size:12.5px; color:var(--text-main);">${m.categoria || "General"}</span>
-              </td>
-              <td>
-                <div style="font-size:12.5px; color:var(--text-main); font-weight:600;">${m.concepto || "Sin descripción"}</div>
+                <div style="font-size:12.5px; color:var(--text-main); font-weight:600;">${escapeHtml(m.concepto || "Sin descripción")}</div>
                 ${
                   m.referencia && m.referencia !== "S/R"
-                    ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fas fa-receipt"></i> Ref: ${m.referencia}</div>`
+                    ? `<div style="font-size:11px; color:var(--text-muted);"><i class="fas fa-receipt"></i> Ref: ${escapeHtml(m.referencia)}</div>`
                     : ""
                 }
               </td>
               <td>
                 <span class="bank-badge ${bObj.badgeCls}">
-                  <i class="fas ${bObj.icono}"></i> ${bObj.nombre}
+                  <i class="fas ${bObj.icono}"></i> ${escapeHtml(bObj.nombre)}
                 </span>
               </td>
-              <td style="font-size:11.5px; color:var(--text-muted); font-weight:700;">
-                ${(m.metodo || "efectivo").toUpperCase().replace(/_/g, " ")}
-              </td>
-              <td style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:${isIngreso ? "#16a34a" : "#dc2626"};">
+              <td style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:${amountColor};">
                 ${isIngreso ? "+" : "-"}$${Number(m.monto).toFixed(2)}
               </td>
               <td style="text-align:right;">
                 <div style="display:flex; justify-content:flex-end; gap:6px;">
-                  ${
-                    m.comprobante_foto
-                      ? `<button type="button" class="btn btn--ghost btn--xs" onclick="openPhotoLightbox('${m.comprobante_foto}', 'Comprobante ${m.id_mov}')" title="Ver foto soporte"><i class="fas fa-camera"></i></button>`
-                      : ""
-                  }
+                  ${photoBtnHtml}
                   <button type="button" class="btn btn--ghost btn--xs" style="color:#dc2626;" onclick="deleteFinanceMovement('${m.id_mov}')" title="Eliminar movimiento">
                     <i class="fas fa-trash-alt"></i>
                   </button>
@@ -18748,25 +19182,40 @@ function renderFinancesLedgerScreen() {
           `;
         })
         .join("")
-    : `<tr><td colspan="8" style="text-align:center; padding:32px; color:var(--text-muted);">No hay movimientos que coincidan con los filtros seleccionados.</td></tr>`;
+    : `<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">No hay movimientos que coincidan con los filtros seleccionados.</td></tr>`;
+
+  const hasAnyFilter = Boolean(
+    ledgerTypeFilter !== "all" ||
+    ledgerAccountFilter !== "all" ||
+    ledgerCategoryFilter !== "all" ||
+    ledgerClientFilter !== "all" ||
+    ledgerDateFrom ||
+    ledgerDateTo
+  );
+
+  const periodLabel = isWeekActive
+    ? `Semana Actual (${weekRange.label})`
+    : hasDateFilter
+    ? `Período (${ledgerDateFrom ? formatDateHuman(ledgerDateFrom, false) : "Inicio"} → ${ledgerDateTo ? formatDateHuman(ledgerDateTo, false) : "Hoy"})`
+    : "Acumulado histórico (sin transferencias internas)";
 
   return `
     <!-- KPI Strip Superior Ejecutivo -->
     <div class="kpi-strip">
       <div class="kpi-card">
-        <span class="kpi-label"><i class="fas fa-arrow-circle-down" style="color:#16a34a;"></i> Ingresos Totales en Caja</span>
+        <span class="kpi-label"><i class="fas fa-arrow-circle-down" style="color:#16a34a;"></i> Ingresos Operativos ${isWeekActive ? "(Semana)" : hasDateFilter ? "(Período)" : "(Total)"}</span>
         <div class="kpi-value" style="color:#16a34a;">$${ingresos.toFixed(2)}</div>
-        <span class="kpi-sub">Pagos Totales 100% + Abonos verificados</span>
+        <span class="kpi-sub">${periodLabel}</span>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label"><i class="fas fa-arrow-circle-up" style="color:#dc2626;"></i> Egresos Totales Operativos</span>
+        <span class="kpi-label"><i class="fas fa-arrow-circle-up" style="color:#dc2626;"></i> Egresos Operativos ${isWeekActive ? "(Semana)" : hasDateFilter ? "(Período)" : "(Total)"}</span>
         <div class="kpi-value" style="color:#dc2626;">$${egresos.toFixed(2)}</div>
-        <span class="kpi-sub">Insumos, destajo, nómina y adelantos</span>
+        <span class="kpi-sub">${hasDateFilter ? periodLabel : "Insumos, destajo, nómina y adelantos"}</span>
       </div>
       <div class="kpi-card" style="border:1.5px solid rgba(245,223,0,0.4);">
         <span class="kpi-label"><i class="fas fa-vault" style="color:var(--renacer-gold);"></i> Disponibilidad Líquida Real</span>
         <div class="kpi-value" style="color:var(--renacer-gold);">$${utilidadNeta.toFixed(2)}</div>
-        <span class="kpi-sub">Total en efectivo físico + bancos</span>
+        <span class="kpi-sub">Acumulado global en efectivo + bancos</span>
       </div>
       <div class="kpi-card" style="cursor:pointer;" onclick="navigateTab('accounts_receivable')">
         <span class="kpi-label"><i class="fas fa-file-invoice-dollar" style="color:#f59e0b;"></i> Cuentas por Cobrar (Resto)</span>
@@ -18775,10 +19224,10 @@ function renderFinancesLedgerScreen() {
       </div>
     </div>
 
-    <!-- Tira de Cuentas y Bancos en Tiempo Real -->
+    <!-- Tira de Cuentas y Bancos en Tiempo Real (SIEMPRE ACUMULADO GLOBAL) -->
     <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:12px 18px; margin-bottom:16px;">
       <div style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-        <span><i class="fas fa-building-columns" style="color:var(--renacer-gold);"></i> SALDOS LÍQUIDOS DISPONIBLES POR CUENTA Y CAJA (BALANCE CON CUENTAS POSITIVAS)</span>
+        <span><i class="fas fa-building-columns" style="color:var(--renacer-gold);"></i> SALDOS LÍQUIDOS DISPONIBLES POR CUENTA Y CAJA (ACUMULADO GLOBAL REAL)</span>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
           <button type="button" class="btn btn--ghost btn--xs" onclick="openManageBankAccountsModal()" style="border-color:rgba(56,189,248,0.45); color:#38bdf8;">
             <i class="fas fa-sliders"></i> Gestionar Cuentas / Sumar o Restar
@@ -18791,7 +19240,7 @@ function renderFinancesLedgerScreen() {
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
         ${configuredBanks.map(
           (b) => {
-            const val = Number(balances[b.id] || 0);
+            const val = Number(balances.balances[b.id] || 0);
             return `
           <div style="background:var(--bg-input); padding:8px 12px; border-radius:10px; border-left:4px solid ${b.color}; display:flex; justify-content:space-between; align-items:center;">
             <div>
@@ -18816,18 +19265,21 @@ function renderFinancesLedgerScreen() {
             <i class="fas fa-book-open" style="color:var(--renacer-gold);"></i> Libro Diario General de Caja y Bancos
           </h2>
           <p style="font-size:12px; color:var(--text-muted); margin-top:2px;">
-            Auditoría de todos los ingresos, egresos operativos, abonos y nóminas por cuenta bancaria.
+            Auditoría de ingresos, egresos operativos, transferencias entre cuentas y nóminas por banco.
           </p>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-          <button type="button" class="btn btn--ghost" onclick="openAddFinanceCategoryModal()">
-            <i class="fas fa-tags"></i> + Categoría
+          <button type="button" class="btn btn--ghost" onclick="openManageFinanceCategoriesModal('egresos')" title="Editar, renombrar, agregar o eliminar categorías de Egresos e Ingresos Extra">
+            <i class="fas fa-tags"></i> Categorías
           </button>
           <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
             <i class="fas fa-minus-circle"></i> Registrar Gasto
           </button>
-          <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')">
-            <i class="fas fa-plus-circle"></i> Registrar Ingreso
+          <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')" title="Registrar ingresos adicionales (venta de mercancía, cobro de préstamos, etc.)">
+            <i class="fas fa-plus-circle"></i> Ingreso Extra
+          </button>
+          <button type="button" class="btn btn--transfer-sky" onclick="openTransferBetweenAccountsModal()" title="Mover saldo entre tus propias cuentas (ej. Efectivo a Mercantil / Banesco) sin alterar ingresos operativos">
+            <i class="fas fa-right-left"></i> Transferencia
           </button>
         </div>
       </div>
@@ -18843,6 +19295,7 @@ function renderFinancesLedgerScreen() {
           <option value="all" ${ledgerTypeFilter === "all" ? "selected" : ""}>Todos los Tipos</option>
           <option value="ingreso" ${ledgerTypeFilter === "ingreso" ? "selected" : ""}>Solo Ingresos (+)</option>
           <option value="egreso" ${ledgerTypeFilter === "egreso" ? "selected" : ""}>Solo Egresos (-)</option>
+          <option value="transferencia" ${ledgerTypeFilter === "transferencia" ? "selected" : ""}>Solo Transferencias (⇄)</option>
         </select>
 
         <select
@@ -18881,15 +19334,42 @@ function renderFinancesLedgerScreen() {
           title="Fecha Hasta"
         />
 
+        <button
+          type="button"
+          id="btn-ledger-current-week"
+          class="btn ${isWeekActive ? "btn--gold" : "btn--ghost"} btn--xs"
+          onclick="toggleLedgerCurrentWeekFilter()"
+          style="padding:6px 10px; font-size:11.5px; font-weight:800; ${isWeekActive ? "" : "border-color:rgba(245,223,0,0.45); color:var(--renacer-gold);"}"
+          title="Filtrar movimientos de la semana actual (${weekRange.label}) sin afectar saldos líquidos de cuentas"
+        >
+          <i class="fas fa-calendar-week"></i> Semana Actual
+        </button>
+
         ${
-          (ledgerTypeFilter !== "all" || ledgerAccountFilter !== "all" || ledgerCategoryFilter !== "all" || ledgerClientFilter !== "all" || ledgerDateFrom || ledgerDateTo)
+          hasAnyFilter
             ? `<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px;" onclick="resetLedgerFilters()" title="Limpiar filtros"><i class="fas fa-undo"></i> Limpiar</button>`
             : ""
         }
       </div>
+
+      ${
+        hasAnyFilter
+          ? `
+            <div style="margin-top:10px; padding:8px 12px; border-radius:10px; background:rgba(245,223,0,0.07); border:1px solid rgba(245,223,0,0.28); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; font-size:11.5px;">
+              <div>
+                <strong>${isWeekActive ? `📅 Semana Actual (${weekRange.label})` : "Vista Filtrada"}:</strong>
+                ${filteredMovs.length} movimiento(s) ·
+                <span style="color:#22c55e; font-weight:800;">Ingresos: +$${filteredIngresosOp.toFixed(2)}</span> ·
+                <span style="color:#ef4444; font-weight:800;">Egresos: -$${filteredEgresosOp.toFixed(2)}</span>
+              </div>
+              <span style="color:var(--text-muted); font-size:11px;"><i class="fas fa-lock" style="color:var(--renacer-gold);"></i> Los saldos por cuenta arriba siguen mostrando el acumulado global real.</span>
+            </div>
+          `
+          : ""
+      }
     </div>
 
-    <!-- Tabla del Libro Diario -->
+    <!-- Tabla del Libro Diario (sin columna Método) -->
     <div class="data-table-wrapper">
       <table class="renacer-table">
         <thead>
@@ -18899,7 +19379,6 @@ function renderFinancesLedgerScreen() {
             <th>Categoría</th>
             <th>Concepto / Detalle</th>
             <th>Cuenta / Banco</th>
-            <th>Método</th>
             <th>Monto ($)</th>
             <th style="text-align:right;">Acciones</th>
           </tr>
@@ -18933,78 +19412,572 @@ function resetLedgerFilters() {
 }
 
 function deleteFinanceMovement(movId) {
+  const targetMov = (db.finanzas_movimientos || []).find(
+    (m) => (m.id_mov || m.id_movimiento) === movId || m.id_mov === movId || m.id_movimiento === movId
+  );
+  const trfGroupId = targetMov && targetMov.transfer_group_id ? String(targetMov.transfer_group_id) : "";
+  const pairedMovs = trfGroupId
+    ? (db.finanzas_movimientos || []).filter((m) => String(m.transfer_group_id || "") === trfGroupId)
+    : (targetMov ? [targetMov] : []);
+  const isPairedTransfer = pairedMovs.length > 1;
+
   Swal.fire({
-    title: "¿Eliminar este movimiento del Libro Diario?",
-    text: "El movimiento se eliminará permanentemente aquí y en Google Sheets.",
+    title: isPairedTransfer
+      ? "¿Eliminar esta Transferencia entre Cuentas?"
+      : "¿Eliminar este movimiento del Libro Diario?",
+    text: isPairedTransfer
+      ? "Se eliminarán ambos asientos vinculados (Salida en cuenta origen + Entrada en cuenta destino) para mantener todos los saldos perfectamente cuadrados."
+      : "El movimiento se eliminará permanentemente aquí y en Google Sheets.",
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#dc2626",
     cancelButtonColor: "#64748b",
     cancelButtonText: "Cancelar",
-    confirmButtonText: "Sí, eliminar"
+    confirmButtonText: isPairedTransfer ? "Sí, eliminar ambos asientos" : "Sí, eliminar"
   }).then(async (res) => {
     if (!res.isConfirmed) return;
-    const targetMov = (db.finanzas_movimientos || []).find(
-      (m) => (m.id_mov || m.id_movimiento) === movId || m.id_mov === movId || m.id_movimiento === movId
-    );
-    if (targetMov) {
-      archiveToRecycleBin("movimiento_finanzas", movId, `${String(targetMov.tipo || "").toUpperCase()} $${Number(targetMov.monto || 0).toFixed(2)} — ${targetMov.concepto || ""}`, targetMov, "Movimiento financiero eliminado");
-    }
-    db.finanzas_movimientos = (db.finanzas_movimientos || []).filter(
-      (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
-    );
-    if (Array.isArray(db.finanzas)) {
-      db.finanzas = db.finanzas.filter(
-        (m) => (m.id_mov || m.id_movimiento) !== movId && m.id_mov !== movId && m.id_movimiento !== movId
+    const idsToDelete = new Set(pairedMovs.map((m) => String(m.id_mov || m.id_movimiento || "")));
+    if (!idsToDelete.size) idsToDelete.add(String(movId));
+
+    pairedMovs.forEach((pm) => {
+      const pid = String(pm.id_mov || pm.id_movimiento || movId);
+      archiveToRecycleBin(
+        "movimiento_finanzas",
+        pid,
+        `${String(pm.tipo || "").toUpperCase()} $${Number(pm.monto || 0).toFixed(2)} — ${pm.concepto || ""}`,
+        pm,
+        isPairedTransfer ? "Transferencia entre cuentas eliminada" : "Movimiento financiero eliminado"
       );
+    });
+
+    db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((m) => {
+      const mid = String(m.id_mov || m.id_movimiento || "");
+      return !idsToDelete.has(mid) && mid !== String(movId);
+    });
+    if (Array.isArray(db.finanzas)) {
+      db.finanzas = db.finanzas.filter((m) => {
+        const mid = String(m.id_mov || m.id_movimiento || "");
+        return !idsToDelete.has(mid) && mid !== String(movId);
+      });
     }
-    saveDatabase("Movimiento financiero eliminado");
+    saveDatabase(isPairedTransfer ? "Transferencia eliminada" : "Movimiento financiero eliminado");
     renderApp();
     await flushCloudPush(true);
-    showToast("Movimiento eliminado del Libro Diario (recuperable en Papelera).");
+    showToast(
+      isPairedTransfer
+        ? "Transferencia (Salida + Entrada) eliminada y saldos restaurados."
+        : "Movimiento eliminado del Libro Diario (recuperable en Papelera)."
+    );
   });
 }
 
-function openAddFinanceCategoryModal() {
+/* ---------- MATRIZ DE CATEGORÍAS FINANCIERAS EDITABLES (v45) ---------- */
+let activeFinanceCatModalTab = "egresos";
+
+function openAddFinanceCategoryModal(tab) {
+  openManageFinanceCategoriesModal(tab || "egresos");
+}
+
+function openManageFinanceCategoriesModal(tab = "egresos") {
+  activeFinanceCatModalTab = tab === "ingresos_extra" ? "ingresos_extra" : "egresos";
+  const egresos = getFinanceCategoriesForType("egreso");
+  const ingresosExtra = getFinanceCategoriesForType("ingreso");
+  const activeList = activeFinanceCatModalTab === "ingresos_extra" ? ingresosExtra : egresos;
+
+  const rowsHtml = activeList.length
+    ? activeList
+        .map((cat, idx) => `
+          <div class="cat-matrix-row">
+            <span style="font-size:11px; font-weight:900; color:var(--text-muted); min-width:22px; text-align:center;">#${idx + 1}</span>
+            <input
+              type="text"
+              id="cat-edit-input-${idx}"
+              value="${escapeHtml(cat)}"
+              onchange="renameFinanceCategoryItem('${activeFinanceCatModalTab}', ${idx}, this.value)"
+            />
+            <button type="button" class="btn btn--ghost btn--xs" onclick="renameFinanceCategoryItem('${activeFinanceCatModalTab}', ${idx}, document.getElementById('cat-edit-input-${idx}')?.value)" title="Guardar cambio de nombre" style="color:#22c55e;">
+              <i class="fas fa-check"></i>
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" onclick="deleteFinanceCategoryItem('${activeFinanceCatModalTab}', ${idx})" title="Eliminar categoría" style="color:#ef4444;">
+              <i class="fas fa-trash-alt"></i>
+            </button>
+          </div>
+        `)
+        .join("")
+    : `<div style="text-align:center; padding:18px; color:var(--text-muted); font-size:12.5px;">No hay categorías en esta lista. Agrega la primera arriba.</div>`;
+
   openModal({
-    title: "Crear Nueva Categoría Financiera Personalizada",
+    title: "Matriz de Categorías Financieras Editables",
     icon: "fa-tags",
+    wide: true,
     body: `
+      <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+        <button type="button" class="btn ${activeFinanceCatModalTab === "egresos" ? "btn--danger" : "btn--ghost"} btn--sm" onclick="openManageFinanceCategoriesModal('egresos')">
+          <i class="fas fa-arrow-down"></i> Categorías de Egresos / Gastos (${egresos.length})
+        </button>
+        <button type="button" class="btn ${activeFinanceCatModalTab === "ingresos_extra" ? "btn--success" : "btn--ghost"} btn--sm" onclick="openManageFinanceCategoriesModal('ingresos_extra')">
+          <i class="fas fa-arrow-up"></i> Categorías de Ingresos Extra (${ingresosExtra.length})
+        </button>
+      </div>
+
+      ${
+        activeFinanceCatModalTab === "ingresos_extra"
+          ? `<div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.3); border-radius:10px; padding:8px 12px; font-size:11.5px; color:var(--text-muted); margin-bottom:12px;">
+               <i class="fas fa-shield-alt" style="color:#22c55e;"></i>
+               Las categorías automáticas de facturación (<strong>Abono de Orden</strong>, <strong>Liquidación Total</strong> y <strong>Cobro de Resto</strong>) se gestionan solas al cobrar órdenes para evitar descuadres en facturas. Aquí editas únicamente las categorías disponibles para el botón <strong>+ Ingreso Extra</strong>.
+             </div>`
+          : `<div style="background:rgba(245,223,0,0.06); border:1px solid rgba(245,223,0,0.28); border-radius:10px; padding:8px 12px; font-size:11.5px; color:var(--text-muted); margin-bottom:12px;">
+               <i class="fas fa-sliders" style="color:var(--renacer-gold);"></i>
+               Edita cualquier nombre directamente en la casilla, agrega nuevas categorías o elimina las que no necesites. Se sincronizan automáticamente con Google Sheets.
+             </div>`
+      }
+
+      <div style="display:flex; gap:8px; margin-bottom:14px;">
+        <input
+          type="text"
+          id="new-cat-matrix-name"
+          placeholder="${activeFinanceCatModalTab === "ingresos_extra" ? "Ej: Venta de Chatarra / Alquiler de Equipo" : "Ej: Combustible / Transporte / Préstamos"}"
+          onkeydown="if(event.key==='Enter'){ event.preventDefault(); addFinanceCategoryItem('${activeFinanceCatModalTab}'); }"
+          style="flex:1;"
+        />
+        <button type="button" class="btn btn--gold btn--sm" onclick="addFinanceCategoryItem('${activeFinanceCatModalTab}')">
+          <i class="fas fa-plus"></i> Agregar
+        </button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:7px; max-height:320px; overflow-y:auto; padding-right:4px;">
+        ${rowsHtml}
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--primary" onclick="closeModal(); renderApp();">Listo</button>
+    `
+  });
+}
+
+function addFinanceCategoryItem(tab) {
+  const input = document.getElementById("new-cat-matrix-name");
+  const name = String(input?.value || "").trim();
+  if (!name) {
+    showToast("Escribe el nombre de la nueva categoría.", "warning");
+    return;
+  }
+  const key = tab === "ingresos_extra" ? "ingresos_extra" : "egresos";
+  if (!db.finanzas_categorias) db.finanzas_categorias = { egresos: [], ingresos_extra: [], ingresos: [], _v45_cats_init: true };
+  if (!Array.isArray(db.finanzas_categorias[key])) db.finanzas_categorias[key] = getFinanceCategoriesForType(key === "ingresos_extra" ? "ingreso" : "egreso");
+
+  if (db.finanzas_categorias[key].some((c) => String(c).toLowerCase() === name.toLowerCase())) {
+    showToast(`La categoría "${name}" ya existe.`, "warning");
+    return;
+  }
+  db.finanzas_categorias[key].push(name);
+  syncLegacyFinanzasCategoriasMirror();
+  saveDatabase(`Categoría financiera agregada: ${name}`);
+  openManageFinanceCategoriesModal(key);
+  showToast(`Categoría "${name}" agregada.`);
+}
+
+function renameFinanceCategoryItem(tab, idx, newNameRaw) {
+  const newName = String(newNameRaw || "").trim();
+  const key = tab === "ingresos_extra" ? "ingresos_extra" : "egresos";
+  const list = db.finanzas_categorias && Array.isArray(db.finanzas_categorias[key]) ? db.finanzas_categorias[key] : [];
+  if (idx < 0 || idx >= list.length) return;
+  const oldName = list[idx];
+  if (!newName) {
+    showToast("El nombre de la categoría no puede quedar vacío.", "warning");
+    openManageFinanceCategoriesModal(key);
+    return;
+  }
+  if (oldName === newName) return;
+  if (list.some((c, i) => i !== idx && String(c).toLowerCase() === newName.toLowerCase())) {
+    showToast(`Ya existe otra categoría llamada "${newName}".`, "warning");
+    openManageFinanceCategoriesModal(key);
+    return;
+  }
+  list[idx] = newName;
+  syncLegacyFinanzasCategoriasMirror();
+  saveDatabase(`Categoría renombrada: ${oldName} → ${newName}`);
+  openManageFinanceCategoriesModal(key);
+  showToast(`Categoría actualizada a "${newName}".`);
+}
+
+function deleteFinanceCategoryItem(tab, idx) {
+  const key = tab === "ingresos_extra" ? "ingresos_extra" : "egresos";
+  const list = db.finanzas_categorias && Array.isArray(db.finanzas_categorias[key]) ? db.finanzas_categorias[key] : [];
+  if (idx < 0 || idx >= list.length) return;
+  const removed = list[idx];
+  list.splice(idx, 1);
+  syncLegacyFinanzasCategoriasMirror();
+  saveDatabase(`Categoría eliminada: ${removed}`);
+  openManageFinanceCategoriesModal(key);
+  showToast(`Categoría "${removed}" eliminada.`);
+}
+
+/* ---------- TRANSFERENCIAS INTERNAS ENTRE CUENTAS (v45 · AZUL CLARO · MÁX. 2 FOTOS OPCIONALES) ---------- */
+let tempTransferPhotos = ["", ""];
+
+function openTransferBetweenAccountsModal() {
+  tempTransferPhotos = ["", ""];
+  const accounts = getConfiguredBankAccounts();
+  if (accounts.length < 2) {
+    showToast("Necesitas al menos 2 cuentas configuradas para registrar una transferencia.", "warning");
+    return;
+  }
+  const balances = getBalancesPorCuenta().balances;
+  const defaultOrigin = accounts[0].id;
+  const defaultDest = (accounts.find((a) => a.id !== defaultOrigin && a.moneda !== accounts[0].moneda) || accounts[1]).id;
+  const tasa = Number(db.config?.tasaBcv) || 45.80;
+
+  const buildAccOpts = (selectedId) =>
+    accounts
+      .map(
+        (b) =>
+          `<option value="${b.id}" ${b.id === selectedId ? "selected" : ""}>${escapeHtml(b.nombre)} (${b.moneda}) — Disp: $${Number(balances[b.id] || 0).toFixed(2)}</option>`
+      )
+      .join("");
+
+  openModal({
+    title: "Transferencia entre Cuentas (Movimiento Interno)",
+    icon: "fa-right-left",
+    wide: true,
+    body: `
+      <div style="background:rgba(14,165,233,0.1); border:1.5px solid rgba(56,189,248,0.4); border-radius:12px; padding:10px 14px; margin-bottom:14px; font-size:12px; color:var(--text-main); line-height:1.45;">
+        <i class="fas fa-info-circle" style="color:#38bdf8;"></i>
+        Registra cambios de divisas o traspasos entre tus propias cuentas (ej. <strong>Efectivo → Banco Mercantil</strong>). Descuenta de la cuenta origen y acredita en la cuenta destino <strong>sin alterar tus Ingresos ni Egresos Operativos</strong>.
+      </div>
+
       <div class="form-grid-2">
         <div class="form-field">
-          <label>Tipo de Categoría</label>
-          <select id="new-cat-type">
-            <option value="egreso">Categoría de Gasto / Egreso</option>
-            <option value="ingreso">Categoría de Ingreso</option>
+          <label><i class="fas fa-arrow-up-from-bracket" style="color:#ef4444;"></i> Cuenta Origen (Sale) *</label>
+          <select id="trf-origin-account" style="font-weight:800;" onchange="validateTransferAccountsSelect()">
+            ${buildAccOpts(defaultOrigin)}
           </select>
         </div>
         <div class="form-field">
-          <label>Nombre de la Categoría *</label>
-          <input type="text" id="new-cat-name" placeholder="Ej: Compra de Piedras de Esmeril / Transporte" required />
+          <label><i class="fas fa-arrow-down-to-bracket" style="color:#22c55e;"></i> Cuenta Destino (Entra) *</label>
+          <select id="trf-dest-account" style="font-weight:800;" onchange="validateTransferAccountsSelect()">
+            ${buildAccOpts(defaultDest)}
+          </select>
+        </div>
+      </div>
+
+      <div class="form-grid-2" style="margin-top:10px;">
+        <div class="form-field">
+          <label><i class="fas fa-dollar-sign"></i> Monto a Transferir ($ USD equivalente) *</label>
+          <input type="number" step="0.01" min="0.01" id="trf-amount" placeholder="Ej: 100.00" oninput="updateTransferPreview()" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:900; color:#38bdf8;" required />
+          <div id="trf-bs-preview" style="font-size:11.5px; color:#fde047; font-weight:800; margin-top:3px;">Tasa BCV ref: ${tasa.toFixed(2)} Bs/$</div>
+        </div>
+        <div class="form-field">
+          <label><i class="fas fa-comment-alt"></i> Descripción / Nota (Opcional)</label>
+          <input type="text" id="trf-concept" placeholder="Ej: Venta de divisas / Compra de bolívares" />
+        </div>
+      </div>
+
+      <div style="margin-top:10px; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:10px; padding:8px 12px;">
+        <label style="display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; cursor:pointer;">
+          <input type="checkbox" id="trf-diff-toggle" onchange="toggleTransferDiffDestAmount(this.checked)" />
+          <span>¿Entró un monto distinto en la cuenta destino (por diferencial de tasa o comisión)?</span>
+        </label>
+        <div id="trf-diff-dest-wrap" style="display:none; margin-top:8px;">
+          <div class="form-field">
+            <label style="font-size:11.5px;">Monto Real que Entra en Cuenta Destino ($ USD equivalente)</label>
+            <input type="number" step="0.01" min="0.01" id="trf-dest-amount" placeholder="Ej: 105.00" style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#22c55e;" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Comprobante Fotográfico Opcional (Máximo 2 imágenes) -->
+      <div style="margin-top:12px;">
+        <div style="font-size:12px; font-weight:800; color:#38bdf8; margin-bottom:8px;">
+          <i class="fas fa-camera"></i> Comprobantes de Transferencia <span style="color:var(--text-muted); font-weight:600;">(Opcional · Máx. 2 imágenes: ej. Capture + Billetes)</span>
+        </div>
+        <div class="form-grid-2" style="gap:10px;">
+          ${[0, 1]
+            .map(
+              (slotIdx) => `
+              <div class="trf-photo-slot" id="trf-photo-slot-${slotIdx}">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span style="font-size:11.5px; font-weight:800;">
+                    <i class="fas fa-image" style="color:#38bdf8;"></i> Comprobante #${slotIdx + 1} ${slotIdx === 0 ? "(Capture / Pago Móvil)" : "(Billetes / 2do Soporte)"}
+                  </span>
+                  <button type="button" id="trf-photo-clear-${slotIdx}" class="btn btn--ghost btn--xs" style="display:none; color:#ef4444; padding:2px 6px;" onclick="clearTransferPhoto(${slotIdx})" title="Quitar imagen"><i class="fas fa-times"></i></button>
+                </div>
+                <input type="file" id="trf-photo-cam-${slotIdx}" accept="image/*" capture="environment" style="display:none;" onchange="handleTransferPhotoUpload(this, ${slotIdx})" />
+                <input type="file" id="trf-photo-gal-${slotIdx}" accept="image/*" style="display:none;" onchange="handleTransferPhotoUpload(this, ${slotIdx})" />
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                  <button type="button" class="btn btn--gold btn--xs" onclick="document.getElementById('trf-photo-cam-${slotIdx}').click()">
+                    <i class="fas fa-camera"></i> Cámara
+                  </button>
+                  <button type="button" class="btn btn--ghost btn--xs" style="border-color:rgba(56,189,248,0.5); color:#38bdf8;" onclick="document.getElementById('trf-photo-gal-${slotIdx}').click()">
+                    <i class="fas fa-images"></i> Galería
+                  </button>
+                </div>
+                <div id="trf-photo-preview-${slotIdx}" style="font-size:11px; color:var(--text-muted); font-style:italic;">Sin imagen (opcional)</div>
+              </div>
+            `
+            )
+            .join("")}
         </div>
       </div>
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
-      <button type="button" class="btn btn--gold" onclick="saveNewFinanceCategory()">Guardar Categoría</button>
+      <button type="button" class="btn btn--transfer-sky" onclick="saveTransferBetweenAccounts()">
+        <i class="fas fa-right-left"></i> Confirmar Transferencia
+      </button>
     `
   });
 }
 
-function saveNewFinanceCategory() {
-  const type = document.getElementById("new-cat-type")?.value || "egreso";
-  const name = (document.getElementById("new-cat-name")?.value || "").trim();
-  if (!name) return;
-  if (!db.finanzas_categorias) db.finanzas_categorias = { ingresos: [], egresos: [] };
-  if (type === "ingreso") db.finanzas_categorias.ingresos.push(name);
-  else db.finanzas_categorias.egresos.push(name);
-  saveDatabase();
-  closeModal();
-  renderApp();
-  showToast(`Categoría "${name}" agregada.`);
+function validateTransferAccountsSelect() {
+  const oEl = document.getElementById("trf-origin-account");
+  const dEl = document.getElementById("trf-dest-account");
+  if (!oEl || !dEl) return;
+  if (oEl.value === dEl.value) {
+    const accounts = getConfiguredBankAccounts();
+    const alt = accounts.find((a) => a.id !== oEl.value);
+    if (alt) dEl.value = alt.id;
+  }
 }
 
+function toggleTransferDiffDestAmount(checked) {
+  const wrap = document.getElementById("trf-diff-dest-wrap");
+  const destAmt = document.getElementById("trf-dest-amount");
+  const origAmt = document.getElementById("trf-amount");
+  if (wrap) wrap.style.display = checked ? "block" : "none";
+  if (checked && destAmt && origAmt && !destAmt.value) {
+    destAmt.value = origAmt.value || "";
+  }
+}
+
+function updateTransferPreview() {
+  const amt = Math.max(0, Number(document.getElementById("trf-amount")?.value) || 0);
+  const tasa = Number(db.config?.tasaBcv) || 45.80;
+  const el = document.getElementById("trf-bs-preview");
+  if (el) {
+    el.textContent = amt > 0
+      ? `≈ Bs. ${(amt * tasa).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (Tasa BCV: ${tasa.toFixed(2)})`
+      : `Tasa BCV ref: ${tasa.toFixed(2)} Bs/$`;
+  }
+}
+
+async function handleTransferPhotoUpload(input, slotIdx) {
+  const file = input && input.files && input.files[0];
+  if (!file || (slotIdx !== 0 && slotIdx !== 1)) return;
+  const prevEl = document.getElementById(`trf-photo-preview-${slotIdx}`);
+  if (prevEl) prevEl.innerHTML = `<span style="color:#38bdf8;"><i class="fas fa-spinner fa-spin"></i> Optimizando y subiendo imagen...</span>`;
+  const compressed = await compressImageForSheets(file, 700, 34000);
+  tempTransferPhotos[slotIdx] = compressed;
+  const slotEl = document.getElementById(`trf-photo-slot-${slotIdx}`);
+  const clrBtn = document.getElementById(`trf-photo-clear-${slotIdx}`);
+  if (slotEl) slotEl.classList.add("has-photo");
+  if (clrBtn) clrBtn.style.display = "inline-flex";
+  if (prevEl) {
+    prevEl.innerHTML = `<img src="${compressed}" style="max-height:82px; border-radius:7px; border:1.5px solid #38bdf8; cursor:zoom-in;" onclick="openPhotoLightbox('${String(compressed).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}', 'Comprobante Transferencia #${slotIdx + 1}')" />`;
+  }
+}
+
+function clearTransferPhoto(slotIdx) {
+  if (slotIdx !== 0 && slotIdx !== 1) return;
+  tempTransferPhotos[slotIdx] = "";
+  const slotEl = document.getElementById(`trf-photo-slot-${slotIdx}`);
+  const clrBtn = document.getElementById(`trf-photo-clear-${slotIdx}`);
+  const prevEl = document.getElementById(`trf-photo-preview-${slotIdx}`);
+  if (slotEl) slotEl.classList.remove("has-photo");
+  if (clrBtn) clrBtn.style.display = "none";
+  if (prevEl) prevEl.textContent = "Sin imagen (opcional)";
+}
+
+function saveTransferBetweenAccounts() {
+  const originId = document.getElementById("trf-origin-account")?.value;
+  const destId = document.getElementById("trf-dest-account")?.value;
+  const amountOut = Math.max(0, Number(document.getElementById("trf-amount")?.value) || 0);
+  const diffChecked = Boolean(document.getElementById("trf-diff-toggle")?.checked);
+  const amountIn = diffChecked
+    ? Math.max(0, Number(document.getElementById("trf-dest-amount")?.value) || 0)
+    : amountOut;
+  const note = (document.getElementById("trf-concept")?.value || "").trim();
+
+  if (!originId || !destId || originId === destId) {
+    showToast("Selecciona una cuenta origen y una cuenta destino distintas.", "error");
+    return;
+  }
+  if (amountOut <= 0 || amountIn <= 0) {
+    showToast("Ingresa un monto válido mayor a cero.", "error");
+    return;
+  }
+
+  const originAcc = findBankAccountById(originId);
+  const destAcc = findBankAccountById(destId);
+  const now = new Date();
+  const dateIso = now.toISOString().slice(0, 10);
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const baseTs = Date.now();
+  const trfGroupId = "TRF-" + baseTs;
+  const fotosArr = tempTransferPhotos.filter(Boolean).slice(0, 2);
+  const descBase = `⇄ Transferencia: ${originAcc.nombre} → ${destAcc.nombre}${note ? " · " + note : ""}`;
+  const authorName = currentUser ? currentUser.nombre : "Sistema";
+
+  if (!Array.isArray(db.finanzas_movimientos)) db.finanzas_movimientos = [];
+
+  // Asiento 2 (Entrada en Destino) y Asiento 1 (Salida en Origen) — vinculados por transfer_group_id
+  db.finanzas_movimientos.unshift(
+    {
+      id_mov: "MOV-TRF-IN-" + (baseTs + 1),
+      fecha: dateIso,
+      hora: timeStr,
+      tipo: "ingreso",
+      categoria: "Transferencia entre Cuentas",
+      concepto: descBase,
+      monto: amountIn,
+      metodo: suggestMethodForBankAccount(destId),
+      cuenta: destId,
+      comprobante_foto: fotosArr[0] || "",
+      comprobante_foto_2: fotosArr[1] || "",
+      comprobantes_fotos: fotosArr.slice(),
+      es_transferencia: true,
+      transfer_group_id: trfGroupId,
+      orden_id: "-",
+      codigo_troquel: "-",
+      registrado_por: authorName
+    },
+    {
+      id_mov: "MOV-TRF-OUT-" + baseTs,
+      fecha: dateIso,
+      hora: timeStr,
+      tipo: "egreso",
+      categoria: "Transferencia entre Cuentas",
+      concepto: descBase,
+      monto: amountOut,
+      metodo: suggestMethodForBankAccount(originId),
+      cuenta: originId,
+      comprobante_foto: fotosArr[0] || "",
+      comprobante_foto_2: fotosArr[1] || "",
+      comprobantes_fotos: fotosArr.slice(),
+      es_transferencia: true,
+      transfer_group_id: trfGroupId,
+      orden_id: "-",
+      codigo_troquel: "-",
+      registrado_por: authorName
+    }
+  );
+
+  tempTransferPhotos = ["", ""];
+  saveDatabase(`Transferencia ${originAcc.nombre} → ${destAcc.nombre}`);
+  closeModal();
+  renderApp();
+  showToast(`Transferencia registrada: $${amountOut.toFixed(2)} de ${originAcc.nombre} → ${destAcc.nombre}.`);
+}
+
+/* ---------- REGISTRO DE GASTOS E INGRESOS EXTRA CON BUSCADOR DE CATEGORÍAS (v45) ---------- */
 let tempMovementPhoto = "";
+
+function normalizeSearchToken(str) {
+  return String(str || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function renderFinanceCatDropdownOptions(tipo, query = "") {
+  const dd = document.getElementById("mov-cat-dropdown");
+  if (!dd) return;
+  const cats = getFinanceCategoriesForType(tipo);
+  const qNorm = normalizeSearchToken(query);
+  const filtered = qNorm
+    ? cats.filter((c) => normalizeSearchToken(c).includes(qNorm))
+    : cats;
+  const exactExists = cats.some((c) => normalizeSearchToken(c) === qNorm);
+  const curVal = document.getElementById("mov-cat")?.value || "";
+
+  let html = filtered
+    .map((c) => {
+      const safeJs = String(c).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const isSelected = c === curVal;
+      return `
+        <div class="fin-cat-option ${isSelected ? "active" : ""}" onmousedown="event.preventDefault(); selectFinanceCatOption('${safeJs}')">
+          <span>${escapeHtml(c)}</span>
+          ${isSelected ? `<i class="fas fa-check" style="font-size:11px;"></i>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  if (query.trim().length >= 2 && !exactExists) {
+    const safeNewJs = query.trim().replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    html += `
+      <div class="fin-cat-option fin-cat-option--create" onmousedown="event.preventDefault(); quickAddAndSelectFinanceCat('${tipo}', '${safeNewJs}')">
+        <span><i class="fas fa-plus-circle"></i> Crear y usar "${escapeHtml(query.trim())}"</span>
+      </div>
+    `;
+  }
+
+  if (!html) {
+    html = `<div style="padding:10px 12px; font-size:12px; color:var(--text-muted); text-align:center;">Sin coincidencias. Escribe para crear una categoría nueva.</div>`;
+  }
+
+  dd.innerHTML = html;
+  dd.classList.add("open");
+}
+
+function openFinanceCatDropdown(tipo, showAll = false) {
+  const searchEl = document.getElementById("mov-cat-search");
+  const curSelected = document.getElementById("mov-cat")?.value || "";
+  const rawQuery = searchEl ? searchEl.value : "";
+  const queryToUse = showAll && rawQuery === curSelected ? "" : rawQuery;
+  renderFinanceCatDropdownOptions(tipo, queryToUse);
+}
+
+function filterFinanceCatDropdown(tipo, value) {
+  const hiddenEl = document.getElementById("mov-cat");
+  const cats = getFinanceCategoriesForType(tipo);
+  const exact = cats.find((c) => normalizeSearchToken(c) === normalizeSearchToken(value));
+  if (hiddenEl) hiddenEl.value = exact || String(value || "").trim();
+  renderFinanceCatDropdownOptions(tipo, value);
+}
+
+function selectFinanceCatOption(catName) {
+  const hiddenEl = document.getElementById("mov-cat");
+  const searchEl = document.getElementById("mov-cat-search");
+  const dd = document.getElementById("mov-cat-dropdown");
+  if (hiddenEl) hiddenEl.value = catName;
+  if (searchEl) searchEl.value = catName;
+  if (dd) dd.classList.remove("open");
+}
+
+function clearFinanceCatSearch(tipo) {
+  const hiddenEl = document.getElementById("mov-cat");
+  const searchEl = document.getElementById("mov-cat-search");
+  if (hiddenEl) hiddenEl.value = "";
+  if (searchEl) {
+    searchEl.value = "";
+    searchEl.focus();
+  }
+  renderFinanceCatDropdownOptions(tipo, "");
+}
+
+function closeFinanceCatDropdownSoon() {
+  setTimeout(() => {
+    const dd = document.getElementById("mov-cat-dropdown");
+    if (dd) dd.classList.remove("open");
+  }, 160);
+}
+
+function quickAddAndSelectFinanceCat(tipo, catName) {
+  const cleanName = String(catName || "").trim();
+  if (!cleanName) return;
+  const key = tipo === "ingreso" ? "ingresos_extra" : "egresos";
+  if (!db.finanzas_categorias) db.finanzas_categorias = { egresos: [], ingresos_extra: [], ingresos: [], _v45_cats_init: true };
+  if (!Array.isArray(db.finanzas_categorias[key])) db.finanzas_categorias[key] = getFinanceCategoriesForType(tipo);
+  if (!db.finanzas_categorias[key].some((c) => normalizeSearchToken(c) === normalizeSearchToken(cleanName))) {
+    db.finanzas_categorias[key].push(cleanName);
+    syncLegacyFinanzasCategoriasMirror();
+    saveDatabase(`Categoría rápida agregada: ${cleanName}`);
+  }
+  selectFinanceCatOption(cleanName);
+  showToast(`Categoría "${cleanName}" guardada y seleccionada.`);
+}
 
 async function handleMovementPhotoUpload(input) {
   const file = input.files && input.files[0];
@@ -19020,18 +19993,49 @@ async function handleMovementPhotoUpload(input) {
 
 function openNewFinanceMovementModal(tipo) {
   tempMovementPhoto = "";
-  const cats = tipo === "ingreso" ? (db.finanzas_categorias?.ingresos || []) : (db.finanzas_categorias?.egresos || []);
-  const catOptions = cats.map((c) => `<option value="${c}">${c}</option>`).join("");
-  const bankOptions = getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`).join("");
+  const isIngreso = tipo === "ingreso";
+  const cats = getFinanceCategoriesForType(tipo);
+  const defaultCat = cats[0] || (isIngreso ? "Ingresos Extra" : "General");
+  const bankOptions = getConfiguredBankAccounts()
+    .map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`)
+    .join("");
+
+  const extraIngresoBanner = isIngreso
+    ? `
+      <div style="background:rgba(34,197,94,0.09); border:1px solid rgba(34,197,94,0.35); border-radius:10px; padding:9px 12px; margin-bottom:12px; font-size:12px; color:var(--text-main); line-height:1.4;">
+        <i class="fas fa-circle-info" style="color:#22c55e;"></i>
+        <strong>Solo Ingresos Extra</strong> (venta de mercancía, cobro de préstamos u otros). Los abonos y liquidaciones de clientes se registran en <strong>Seguimiento de Órdenes</strong> o <strong>Facturas por Cobrar</strong> para descontar la deuda automáticamente.
+      </div>
+    `
+    : "";
 
   openModal({
-    title: tipo === "ingreso" ? "Registrar Nuevo Ingreso en Caja / Bancos" : "Registrar Gasto / Egreso Operativo",
-    icon: tipo === "ingreso" ? "fa-arrow-up" : "fa-arrow-down",
+    title: isIngreso ? "Registrar Ingreso Extra en Caja / Bancos" : "Registrar Gasto / Egreso Operativo",
+    icon: isIngreso ? "fa-arrow-up" : "fa-arrow-down",
     body: `
+      ${extraIngresoBanner}
       <div class="form-grid-2">
         <div class="form-field">
-          <label>Categoría *</label>
-          <select id="mov-cat">${catOptions}</select>
+          <label>Categoría * <span style="font-size:10.5px; color:var(--text-muted); font-weight:600;">(Escribe para filtrar)</span></label>
+          <div class="fin-cat-combobox">
+            <input type="hidden" id="mov-cat" value="${escapeHtml(defaultCat)}" />
+            <div class="fin-cat-combobox-input-wrap">
+              <input
+                type="text"
+                id="mov-cat-search"
+                value="${escapeHtml(defaultCat)}"
+                autocomplete="off"
+                placeholder="Escribe 2-3 letras para buscar..."
+                onfocus="openFinanceCatDropdown('${tipo}', true)"
+                oninput="filterFinanceCatDropdown('${tipo}', this.value)"
+                onblur="closeFinanceCatDropdownSoon()"
+              />
+              <button type="button" class="fin-cat-combobox-clear" onclick="clearFinanceCatSearch('${tipo}')" title="Borrar y ver todas las categorías">
+                <i class="fas fa-times"></i>
+              </button>
+            </div>
+            <div id="mov-cat-dropdown" class="fin-cat-combobox-dropdown"></div>
+          </div>
         </div>
         <div class="form-field">
           <label>Monto ($ USD) *</label>
@@ -19039,31 +20043,20 @@ function openNewFinanceMovementModal(tipo) {
         </div>
       </div>
 
-      <div class="form-grid-2" style="margin-top:10px;">
-        <div class="form-field">
-          <label>Cuenta / Caja ${tipo === "ingreso" ? "Destino" : "Origen"} *</label>
-          <select id="mov-account" style="font-weight:800;">
-            ${bankOptions}
-          </select>
-        </div>
-        <div class="form-field">
-          <label>Método de Pago</label>
-          <select id="mov-method">
-            <option value="efectivo">Efectivo Físico (Divisas / Caja)</option>
-            <option value="pago_movil">Pago Móvil (Bs)</option>
-            <option value="transferencia">Transferencia Bancaria</option>
-            <option value="zelle">Zelle / Transferencia Internacional</option>
-          </select>
-        </div>
+      <div class="form-field" style="margin-top:10px;">
+        <label>Cuenta / Caja ${isIngreso ? "Destino" : "Origen"} *</label>
+        <select id="mov-account" style="font-weight:800;">
+          ${bankOptions}
+        </select>
       </div>
 
       <div class="form-field" style="margin-top:10px;">
         <label>Concepto / Descripción Detallada *</label>
-        <input type="text" id="mov-concept" placeholder="Ej: Compra de líquido desengrasante para tanque químico" required />
+        <input type="text" id="mov-concept" placeholder="${isIngreso ? "Ej: Venta de repuesto / Cobro de préstamo" : "Ej: Compra de líquido desengrasante para tanque químico"}" required />
       </div>
 
       <div class="form-field" style="margin-top:10px;">
-        <label><i class="fas fa-camera"></i> Foto del Comprobante / Factura / Recibo ${tipo === 'egreso' ? '(OBLIGATORIO para egresos) *' : '(Opcional)'}</label>
+        <label><i class="fas fa-camera"></i> Foto del Comprobante / Factura / Recibo ${tipo === "egreso" ? "(OBLIGATORIO para egresos) *" : "(Opcional)"}</label>
         <input type="file" id="mov-photo-file-cam" accept="image/*" capture="environment" style="display:none;" onchange="handleMovementPhotoUpload(this)" />
         <input type="file" id="mov-photo-file-gal" accept="image/*" style="display:none;" onchange="handleMovementPhotoUpload(this)" />
         <div style="display:flex; gap:8px; align-items:center; margin-top:4px; flex-wrap:wrap;">
@@ -19086,12 +20079,17 @@ function openNewFinanceMovementModal(tipo) {
 }
 
 function saveNewFinanceMovement(tipo) {
-  const cat = document.getElementById("mov-cat")?.value || "General";
+  const typedCat = (document.getElementById("mov-cat-search")?.value || "").trim();
+  const cat = (document.getElementById("mov-cat")?.value || typedCat || "").trim();
   const amount = Math.max(0, Number(document.getElementById("mov-amount")?.value) || 0);
-  const cuenta = document.getElementById("mov-account")?.value || "efectivo";
-  const method = document.getElementById("mov-method")?.value || "efectivo";
+  const cuenta = document.getElementById("mov-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
+  const method = suggestMethodForBankAccount(cuenta);
   const concept = (document.getElementById("mov-concept")?.value || "").trim();
 
+  if (!cat) {
+    showToast("Selecciona o escribe una categoría válida.", "error");
+    return;
+  }
   if (!amount || !concept) {
     showToast("Ingresa monto y concepto del movimiento.", "error");
     return;
@@ -19119,13 +20117,15 @@ function saveNewFinanceMovement(tipo) {
     metodo: method,
     cuenta: cuenta,
     comprobante_foto: tempMovementPhoto,
-    orden_id: "-"
+    orden_id: "-",
+    codigo_troquel: "-",
+    registrado_por: currentUser ? currentUser.nombre : "Sistema"
   });
 
   saveDatabase();
   closeModal();
   renderApp();
-  showToast("Movimiento registrado en el Libro Diario.");
+  showToast(tipo === "ingreso" ? "Ingreso Extra registrado en el Libro Diario." : "Gasto registrado en el Libro Diario.");
 }
 
 /* ============================================================================
@@ -19707,17 +20707,18 @@ function openClientHistoryModal(clientId) {
 
   const paymentsRows = clientMovs.length
     ? clientMovs
-        .map(
-          (m) => `
+        .map((m) => {
+          const bAcc = findBankAccountById(m.cuenta || ((m.metodo === "pago_movil" || m.metodo === "transferencia") ? "mercantil" : "efectivo"));
+          return `
           <tr>
             <td><strong>${formatDateHuman(m.fecha, false)}</strong></td>
-            <td>${m.categoria}</td>
-            <td>${m.concepto}</td>
-            <td>${(m.metodo || "efectivo").toUpperCase()}</td>
+            <td>${escapeHtml(m.categoria || "General")}</td>
+            <td>${escapeHtml(m.concepto || "")}</td>
+            <td><span class="bank-badge ${bAcc.badgeCls}"><i class="fas ${bAcc.icono}"></i> ${escapeHtml(bAcc.nombre)}</span></td>
             <td style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">+$${Number(m.monto).toFixed(2)}</td>
           </tr>
-        `
-        )
+        `;
+        })
         .join("")
     : `<tr><td colspan="5" style="text-align:center; padding:16px; color:var(--text-muted);">No hay pagos individuales registrados en el Libro Diario para este cliente.</td></tr>`;
 
@@ -19779,7 +20780,7 @@ function openClientHistoryModal(clientId) {
                 <th>Fecha Pago</th>
                 <th>Categoría</th>
                 <th>Detalle / Orden</th>
-                <th>Método</th>
+                <th>Cuenta / Banco</th>
                 <th>Monto Pagado</th>
               </tr>
             </thead>
@@ -21322,12 +22323,76 @@ function quickAttendanceByProfile(userId) {
   });
 }
 
-function openTechnicianQrScanModal() {
-  if (html5QrCodeScannerInstance) {
-    try {
-      html5QrCodeScannerInstance.stop().catch(() => {});
-    } catch (e) {}
+function resolveHtml5QrcodeCtor() {
+  if (typeof window !== "undefined") {
+    if (typeof window.Html5Qrcode === "function") return window.Html5Qrcode;
+    if (window.__Html5QrcodeLibrary__ && typeof window.__Html5QrcodeLibrary__.Html5Qrcode === "function") {
+      window.Html5Qrcode = window.__Html5QrcodeLibrary__.Html5Qrcode;
+      return window.Html5Qrcode;
+    }
   }
+  if (typeof Html5Qrcode === "function") return Html5Qrcode;
+  return null;
+}
+
+function loadExternalScriptOnce(src, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    if (typeof document === "undefined") return resolve(false);
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    script.onload = () => {
+      clearTimeout(timer);
+      finish(true);
+    };
+    script.onerror = () => {
+      clearTimeout(timer);
+      finish(false);
+    };
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureHtml5QrcodeLoaded() {
+  let ctor = resolveHtml5QrcodeCtor();
+  if (ctor) return ctor;
+  const sources = [
+    `./html5-qrcode.min.js?v=20261124_v45`,
+    "https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js",
+    "https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"
+  ];
+  for (let i = 0; i < sources.length; i++) {
+    await loadExternalScriptOnce(sources[i], 7000);
+    ctor = resolveHtml5QrcodeCtor();
+    if (ctor) return ctor;
+  }
+  return null;
+}
+
+function stopActiveQrScannerSafely() {
+  if (!html5QrCodeScannerInstance) return;
+  const inst = html5QrCodeScannerInstance;
+  html5QrCodeScannerInstance = null;
+  try {
+    Promise.resolve(inst.stop())
+      .then(() => {
+        try { inst.clear(); } catch (e) {}
+      })
+      .catch(() => {
+        try { inst.clear(); } catch (e) {}
+      });
+  } catch (e) {}
+}
+
+function openTechnicianQrScanModal() {
+  stopActiveQrScannerSafely();
 
   openModal({
     title: "Escanear QR de Asistencia Presencial",
@@ -21342,44 +22407,76 @@ function openTechnicianQrScanModal() {
         <div id="tech-qr-reader" class="attendance-scanner-box"></div>
 
         <div id="tech-scan-status" style="font-size:12px; font-weight:800; color:var(--text-main); margin-top:12px;">
-          <i class="fas fa-camera"></i> Iniciando cámara...
+          <i class="fas fa-spinner fa-spin"></i> Iniciando lector QR y cámara...
         </div>
 
-        <div style="margin-top:14px;">
-          <button type="button" class="btn btn--ghost btn--sm" onclick="promptManualPinAttendance()">
-            ¿Problemas con la cámara? Registrar con PIN / Perfil
+        <div style="margin-top:14px; display:flex; justify-content:center; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--ghost btn--sm" onclick="stopActiveQrScannerSafely(); promptManualPinAttendance();">
+            ¿Problemas con la cámara? Registrar con PIN
           </button>
         </div>
       </div>
     `
   });
 
-  setTimeout(() => {
-    if (typeof Html5Qrcode === "undefined") {
-      const statusEl = document.getElementById("tech-scan-status");
-      if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;">Error: Librería Html5Qrcode no encontrada.</span>`;
+  setTimeout(async () => {
+    const statusEl = document.getElementById("tech-scan-status");
+    const readerEl = document.getElementById("tech-qr-reader");
+    if (!readerEl) return;
+
+    if (typeof window !== "undefined" && window.isSecureContext === false) {
+      if (statusEl) {
+        statusEl.innerHTML = `<span style="color:#f59e0b;"><i class="fas fa-lock"></i> La cámara requiere conexión segura (HTTPS). Abre la app desde el enlace oficial o usa tu PIN.</span>`;
+      }
       return;
     }
 
-    html5QrCodeScannerInstance = new Html5Qrcode("tech-qr-reader");
-    html5QrCodeScannerInstance
-      .start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 220, height: 220 } },
-        (decodedText) => {
-          handleScannedAttendanceToken(decodedText);
-        },
-        () => {}
-      )
-      .then(() => {
-        const statusEl = document.getElementById("tech-scan-status");
-        if (statusEl) statusEl.innerHTML = `<span style="color:#22c55e;"><i class="fas fa-check-circle"></i> Cámara lista. Escaneando código en pantalla...</span>`;
-      })
-      .catch((err) => {
-        const statusEl = document.getElementById("tech-scan-status");
-        if (statusEl) statusEl.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> No se pudo activar la cámara (${err}). Usa la opción de PIN.</span>`;
-      });
-  }, 350);
+    const QrCtor = await ensureHtml5QrcodeLoaded();
+    if (!QrCtor) {
+      if (statusEl) {
+        statusEl.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-wifi"></i> No se pudo cargar el lector QR (verifica tu conexión a internet). Usa la opción de PIN abajo.</span>`;
+      }
+      return;
+    }
+
+    if (!document.getElementById("tech-qr-reader")) return;
+
+    const onScanSuccess = (decodedText) => handleScannedAttendanceToken(decodedText);
+    const scanCfg = { fps: 10, qrbox: { width: 220, height: 220 } };
+
+    try {
+      html5QrCodeScannerInstance = new QrCtor("tech-qr-reader");
+      await html5QrCodeScannerInstance.start({ facingMode: "environment" }, scanCfg, onScanSuccess, () => {});
+      if (statusEl) {
+        statusEl.innerHTML = `<span style="color:#22c55e;"><i class="fas fa-check-circle"></i> Cámara lista. Apunta al código QR en pantalla...</span>`;
+      }
+    } catch (firstErr) {
+      // Segundo intento: seleccionar explícitamente cámara trasera o primera disponible
+      try {
+        const cams = typeof QrCtor.getCameras === "function" ? await QrCtor.getCameras() : [];
+        if (cams && cams.length > 0 && document.getElementById("tech-qr-reader")) {
+          const backCam = cams.find((c) => /back|rear|traser|environment/i.test(String(c.label || ""))) || cams[cams.length - 1];
+          await html5QrCodeScannerInstance.start(backCam.id, scanCfg, onScanSuccess, () => {});
+          if (statusEl) {
+            statusEl.innerHTML = `<span style="color:#22c55e;"><i class="fas fa-check-circle"></i> Cámara lista. Apunta al código QR en pantalla...</span>`;
+          }
+          return;
+        }
+        throw firstErr;
+      } catch (err) {
+        stopActiveQrScannerSafely();
+        const errMsg = String(err && err.message ? err.message : err || "");
+        const friendly = /NotAllowedError|Permission/i.test(errMsg)
+          ? "Permiso de cámara denegado. Permite el acceso a la cámara en tu navegador o usa el registro con PIN."
+          : /NotFoundError|Requested device not found/i.test(errMsg)
+          ? "No se detectó cámara disponible en este dispositivo. Usa el registro con PIN."
+          : `No se pudo activar la cámara (${escapeHtml(errMsg || "error de dispositivo")}). Usa la opción de PIN.`;
+        if (statusEl) {
+          statusEl.innerHTML = `<span style="color:#ef4444;"><i class="fas fa-exclamation-triangle"></i> ${friendly}</span>`;
+        }
+      }
+    }
+  }, 300);
 }
 
 function handleScannedAttendanceToken(token) {
@@ -21402,10 +22499,7 @@ function handleScannedAttendanceToken(token) {
     return;
   }
 
-  if (html5QrCodeScannerInstance) {
-    html5QrCodeScannerInstance.stop().catch(() => {});
-  }
-
+  stopActiveQrScannerSafely();
   closeModal();
 
   const user = currentUser || db.usuarios.find((u) => u.rol === "tecnico") || db.usuarios[0];
@@ -21413,19 +22507,40 @@ function handleScannedAttendanceToken(token) {
 }
 
 function promptManualPinAttendance() {
-  const users = (db.usuarios || []).filter((u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "admin" || u.rol === "jefe_taller"));
-  const optionsHtml = users.map((u) => `<option value="${u.id_usuario}">${u.nombre} (${u.rol_label || u.rol})</option>`).join("");
+  stopActiveQrScannerSafely();
+  const isLockedToSelf = Boolean(currentUser && currentUser.rol !== "admin" && currentUser.rol !== "jefe_taller");
+  const users = isLockedToSelf
+    ? [currentUser]
+    : (db.usuarios || []).filter((u) => u.activo && (u.rol === "tecnico" || u.rol === "inventario" || u.rol === "recepcion" || u.rol === "admin" || u.rol === "jefe_taller"));
+  const defaultSelId = currentUser ? currentUser.id_usuario : (users[0] ? users[0].id_usuario : "");
+  const optionsHtml = users
+    .map((u) => `<option value="${u.id_usuario}" ${u.id_usuario === defaultSelId ? "selected" : ""}>${escapeHtml(u.nombre)} (${escapeHtml(u.rol_label || u.rol)})</option>`)
+    .join("");
 
-  Swal.fire({
-    title: "Registro de Asistencia con PIN",
-    html: `
-      <div style="text-align:left; font-size:13px; display:grid; gap:10px;">
+  const userFieldHtml = isLockedToSelf
+    ? `
+        <div>
+          <label style="font-weight:700;">Trabajador Activo:</label>
+          <div style="margin:6px 0 8px 0; padding:10px 12px; border-radius:8px; background:rgba(245,223,0,0.12); border:1px solid rgba(245,223,0,0.4); font-weight:800; color:var(--renacer-gold, #f5c400);">
+            <i class="fas fa-user-check"></i> ${escapeHtml(currentUser.nombre)} (${escapeHtml(currentUser.rol_label || currentUser.rol)})
+          </div>
+          <input type="hidden" id="swal-pin-user" value="${escapeHtml(currentUser.id_usuario)}" />
+        </div>
+      `
+    : `
         <div>
           <label style="font-weight:700;">Selecciona tu Nombre:</label>
           <select id="swal-pin-user" class="swal2-input" style="width:100%; margin:4px 0 10px 0; font-size:13px;">
             ${optionsHtml}
           </select>
         </div>
+      `;
+
+  Swal.fire({
+    title: "Registro de Asistencia con PIN",
+    html: `
+      <div style="text-align:left; font-size:13px; display:grid; gap:10px;">
+        ${userFieldHtml}
         <div>
           <label style="font-weight:700;">PIN Numérico:</label>
           <input type="password" id="swal-pin-code" class="swal2-input" inputmode="numeric" placeholder="Ingresa tu PIN" style="width:100%; margin:4px 0 0 0;" />
