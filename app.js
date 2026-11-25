@@ -68,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.25.v46";
+const CURRENT_APP_VERSION = "2026.11.25.v46.1";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -3274,11 +3274,41 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
       );
       const json = await res.json();
 
+      if (json && json.busy) {
+        if (busyRetries < 2) {
+          busyRetries++;
+          await new Promise((r) => setTimeout(r, 1800 * busyRetries));
+          cloudPushPending = true;
+          continue;
+        }
+        throw new Error("Servidor ocupado guardando otro equipo; reintentando en segundos");
+      }
+
       if (json && json.success) {
         const data = json.data || {};
         if (data.backupsSupported) cloudBackupsSupported = true;
         if (data.dedicatedTabsSupported) cloudDedicatedTabsSupported = true;
         if (data.turboSyncSupported) cloudTurboSyncSupported = true;
+
+        // Si el servidor activó protección anti-borrado masivo, restaurar de inmediato el estado real del servidor sin pisar nada
+        if (data.blockedWipe && data.serverState) {
+          const serverHydrated = hydrateDatabaseFromSheets(data.serverState);
+          db = serverHydrated;
+          lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(serverHydrated));
+          captureSyncedRecordDigests(serverHydrated);
+          saveLocalOnly();
+          if (typeof data.revision === "number") {
+            lastKnownCloudRevision = data.revision;
+            try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+          }
+          clearLocalChangesDirtyIfUpToDate(Date.now());
+          if (currentUser && !isAnyModalOpen()) {
+            try { renderApp(); } catch (e) {}
+          }
+          updateCloudSyncBadge("online", data.savedAt || lastCloudSyncTime);
+          lastOk = true;
+          break;
+        }
 
         // Si otro teléfono estaba terminando de escribir justo en este segundo, esperar brevemente y reintentar sin alarmar
         if (data.busy && data.retryable && busyRetries < 2) {
@@ -3504,6 +3534,10 @@ async function syncFromGoogleSheets(silent = false, opts = {}) {
 
     const res = await fetchWithTimeout(syncUrl, {}, 28000);
     const json = await res.json();
+    if (json && json.busy) {
+      if (!silent) showToast("Otro equipo está guardando en este instante; reintenta en un segundo.", "info");
+      return false;
+    }
     if (json && json.success && json.data) {
       if (json.data.turboSyncSupported) cloudTurboSyncSupported = true;
       if (json.data.backupsSupported) cloudBackupsSupported = true;
@@ -3602,9 +3636,20 @@ async function syncFromGoogleSheets(silent = false, opts = {}) {
         if (!silent) showToast(`Sincronizado desde Google Sheets (${db.ordenes.length} órdenes activas).`);
         return true;
       } else {
-        // Solo sembrar la nube si Google Sheets está 100% virgen (sin usuarios, ni catálogo, ni clientes, ni órdenes)
-        await flushCloudPush(silent, { force: true, forceFull: true, reason: "Inicialización inicial de base de datos" });
-        return true;
+        // BLINDAJE ANTI-BORRADO (v46.1): Solo sembrar si es una respuesta completa confirmada de hoja 100% virgen (revision === 0).
+        // JAMÁS auto-sobrescribir con force:true si la nube ya tiene revision > 0 o faltan arrays en la respuesta!
+        const isConfirmedVirginSheet =
+          Number(json.data.revision || 0) === 0 &&
+          Array.isArray(json.data.usuarios) &&
+          Array.isArray(json.data.ordenes) &&
+          Array.isArray(json.data.clientes);
+        if (isConfirmedVirginSheet) {
+          await flushCloudPush(silent, { force: true, forceFull: true, reason: "Inicialización inicial de base de datos" });
+          return true;
+        }
+        console.warn("sync_all devolvió estado vacío con revision > 0 o incompleto; se bloqueó el auto-sembrado destructivo.");
+        updateCloudSyncBadge("online", json.data.serverTime || lastCloudSyncTime);
+        return false;
       }
     }
     throw new Error((json && json.error) || "Error al leer Google Sheets");
