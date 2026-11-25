@@ -17,6 +17,7 @@ const STORAGE_KEY = "RECTIFICADORA_RENACER_DB_V8";
 const SESSION_KEY = "RECTIFICADORA_RENACER_SESSION_V6";
 const DIRTY_FLAG_KEY = "RECTIFICADORA_RENACER_DIRTY_V8";
 const CLOUD_REV_KEY = "RECTIFICADORA_RENACER_CLOUD_REV_V8";
+const SYNC_BASE_DIGESTS_KEY = "RECTIFICADORA_RENACER_SYNC_BASE_V1";
 const LOCAL_BACKUPS_KEY = "RECTIFICADORA_RENACER_LOCAL_BACKUPS_V8";
 const CATALOGS_VAULT_KEY = "RECTIFICADORA_RENACER_CATALOGS_VAULT_V1";
 const BITACORA_READS_KEY = "RECTIFICADORA_RENACER_BITACORA_READS_V1";
@@ -39,6 +40,22 @@ let cloudBackupsSupported = false;
 let cloudDedicatedTabsSupported = false;
 let cloudTurboSyncSupported = false;
 let lastSyncedTabHashes = {};
+let lastSyncedRecordDigests = (function () {
+  try {
+    const raw = localStorage.getItem(SYNC_BASE_DIGESTS_KEY);
+    return raw ? JSON.parse(raw) || {} : {};
+  } catch (e) {
+    return {};
+  }
+})();
+const __actionSubmitGuards = {};
+function isDoubleActionGuard(actionKey, windowMs = 1800) {
+  const now = Date.now();
+  const prev = Number(__actionSubmitGuards[actionKey] || 0);
+  if (now - prev < windowMs) return true;
+  __actionSubmitGuards[actionKey] = now;
+  return false;
+}
 let lastLocalBackupSaveTs = 0;
 let lastLocalMutationTs = Number(localStorage.getItem(DIRTY_FLAG_KEY) || "0") || 0;
 let lastCloudPushDoneTs = 0;
@@ -51,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.24.v45";
+const CURRENT_APP_VERSION = "2026.11.25.v46";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -487,6 +504,24 @@ async function triggerRemoteUpdateForAll() {
   }
 }
 
+/* ---------- Fechas y Horas en Zona Horaria Local Real (Evita saltos de día UTC-4 después de las 8 PM) ---------- */
+function getLocalIsoDate(d = new Date()) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt.getTime())) return "";
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getLocalIsoDateTime(d = new Date()) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt.getTime())) return "";
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const min = String(dt.getMinutes()).padStart(2, "0");
+  return `${getLocalIsoDate(dt)} ${hh}:${min}`;
+}
+
 /* ---------- Formateadores de Fecha y Hora Legibles (Sin formato GMT/ISO T04:00:00.000Z) ---------- */
 function cleanDateISO(raw, includeTime = false) {
   if (!raw) return "";
@@ -550,11 +585,20 @@ function formatLiveSubtaskTimer(sub) {
 }
 
 function accumulateSubtaskActiveTime(sub) {
-  if (!sub.inicio_activo_ts) return;
-  const elapsedSec = Math.max(0, Math.floor((Date.now() - Number(sub.inicio_activo_ts)) / 1000));
-  sub.segundos_acumulados = (Number(sub.segundos_acumulados) || (Number(sub.minutos_acumulados) || 0) * 60) + elapsedSec;
-  sub.minutos_acumulados = Math.floor(sub.segundos_acumulados / 60);
+  if (!sub) return;
+  const baseSec = Math.max(0, Number(sub.segundos_acumulados) || ((Number(sub.minutos_acumulados) || Number(sub.tiempo_neto_min) || 0) * 60));
+  if (!sub.inicio_activo_ts) {
+    sub.segundos_acumulados = baseSec;
+    sub.minutos_acumulados = Math.floor(baseSec / 60);
+    return;
+  }
+  const startTs = Number(sub.inicio_activo_ts) || 0;
+  const elapsedSec = startTs > 0 ? Math.max(0, Math.floor((Date.now() - startTs) / 1000)) : 0;
+  sub.segundos_acumulados = baseSec + elapsedSec;
+  sub.minutos_acumulados = Math.max(0, Math.round(sub.segundos_acumulados / 60));
+  sub.tiempo_neto_min = sub.minutos_acumulados;
   sub.inicio_activo_ts = null;
+  sub.updated_at = Date.now();
 }
 
 /* ---------- Placeholder Visual Limpio (Sin texto de relleno superpuesto) ---------- */
@@ -1242,10 +1286,13 @@ function normalizeDatabaseSchema(d) {
       const baseDate = o.fecha_entrega
         ? new Date(o.fecha_entrega)
         : (o.fecha_archivado ? new Date(o.fecha_archivado) : new Date());
-      o.fecha_garantia_hasta = new Date(baseDate.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      o.fecha_garantia_hasta = getLocalIsoDate(new Date(baseDate.getTime() + 365 * 24 * 60 * 60 * 1000));
     }
     if (o.repuestos_comprados_taller === undefined) o.repuestos_comprados_taller = false;
     if (!Array.isArray(o.items_repuestos)) o.items_repuestos = [];
+    if (o.updated_at === undefined) o.updated_at = 0;
+    if (o.fin_updated_at === undefined) o.fin_updated_at = 0;
+    if (o.stage_updated_at === undefined) o.stage_updated_at = 0;
   });
 
   const validOrderIds = new Set(d.ordenes.map((o) => o.id_orden));
@@ -1256,6 +1303,16 @@ function normalizeDatabaseSchema(d) {
 
   d.subtareas.forEach((s) => {
     if (s.minutos_acumulados === undefined) s.minutos_acumulados = Number(s.tiempo_neto_min || 0);
+    if (s.segundos_acumulados === undefined || !Number.isFinite(Number(s.segundos_acumulados))) {
+      s.segundos_acumulados = Math.max(0, Number(s.minutos_acumulados || 0) * 60);
+    }
+    if (s.estado_subtarea === "empezado") {
+      s.inicio_activo_ts = s.inicio_activo_ts ? Number(s.inicio_activo_ts) : null;
+    } else {
+      s.inicio_activo_ts = null;
+    }
+    if (s.updated_at === undefined) s.updated_at = 0;
+    if (s.qc_reset_ts === undefined) s.qc_reset_ts = 0;
     if (s.foto_terminado_url === undefined) s.foto_terminado_url = s.foto_evidencia_terminado || "";
     if (s.fecha_terminado) s.fecha_terminado = cleanDateISO(s.fecha_terminado, false);
     // Talleres Externos / Outsourcing y Repuestos Externos: adjudicación directa a liquidación, sin estados ni tiempos
@@ -1372,7 +1429,11 @@ function prepareSheetsPayload(sourceDb) {
       qc_checklist_json: JSON.stringify({
         factura_bloqueada: Boolean(o.factura_bloqueada),
         devuelto_calidad: Boolean(o.devuelto_calidad),
-        motivo_rechazo_qc: o.motivo_rechazo_qc || ""
+        motivo_rechazo_qc: o.motivo_rechazo_qc || "",
+        cuenta_pago: o.cuenta_pago || "",
+        updated_at: Number(o.updated_at) || 0,
+        fin_updated_at: Number(o.fin_updated_at) || 0,
+        stage_updated_at: Number(o.stage_updated_at) || 0
       }),
       foto_entrega_final: sanitizeSheetsCellStr(o.foto_entrega_final || "", 44000),
       ultima_actualizacion: nowStr
@@ -1381,6 +1442,8 @@ function prepareSheetsPayload(sourceDb) {
 
   const subtareas = (d.subtareas || []).map((s) => {
     const parentOrd = (d.ordenes || []).find((o) => o.id_orden === s.orden_id);
+    const activeStartTs = s.estado_subtarea === "empezado" && s.inicio_activo_ts ? Number(s.inicio_activo_ts) : null;
+    const savedSecs = Math.max(0, Number(s.segundos_acumulados) || ((Number(s.minutos_acumulados ?? s.tiempo_neto_min ?? 0)) * 60));
     const checklistPayload = {
       ...(s.checklist_salida && typeof s.checklist_salida === "object" ? s.checklist_salida : {}),
       _unidad_meta: {
@@ -1390,7 +1453,11 @@ function prepareSheetsPayload(sourceDb) {
         unidad_label: s.unidad_label || "",
         es_outsourcing: Boolean(s.es_outsourcing),
         es_repuesto_externo: Boolean(s.es_repuesto_externo),
-        fecha_asignacion: s.fecha_asignacion || ""
+        fecha_asignacion: s.fecha_asignacion || "",
+        inicio_activo_ts: activeStartTs,
+        segundos_acumulados: savedSecs,
+        updated_at: Number(s.updated_at) || 0,
+        qc_reset_ts: Number(s.qc_reset_ts) || 0
       }
     };
     return {
@@ -1928,7 +1995,11 @@ function hydrateDatabaseFromSheets(cloudData) {
       fecha_archivado: cleanDateISO(motorObj.fecha_archivado || "", true),
       foto_entrega_final: String(o.foto_entrega_final || ""),
       tiempo_neto_minutos: Number(o.tiempo_neto_minutos) || 0,
-      qc_aprobado: o.qc_aprobado === true || String(o.qc_aprobado).toLowerCase() === "true" || isEntregado || isArchivado
+      qc_aprobado: o.qc_aprobado === true || String(o.qc_aprobado).toLowerCase() === "true" || isEntregado || isArchivado,
+      cuenta_pago: String(qcMeta.cuenta_pago || o.cuenta_pago || ""),
+      updated_at: Number(qcMeta.updated_at) || 0,
+      fin_updated_at: Number(qcMeta.fin_updated_at) || 0,
+      stage_updated_at: Number(qcMeta.stage_updated_at) || 0
     };
   });
 
@@ -1940,6 +2011,16 @@ function hydrateDatabaseFromSheets(cloudData) {
     const uMeta = (parsedChk && typeof parsedChk === "object" && parsedChk._unidad_meta) ? parsedChk._unidad_meta : {};
     const qty = Math.max(1, Number(uMeta.cantidad) || 1);
     const totalComm = Number(s.comision_base_tecnico) || 0;
+    const estadoSub = String(s.estado_subtarea || "pendiente");
+    const minVal = Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0);
+    const secVal = Number(uMeta.segundos_acumulados) || (minVal * 60);
+    let restoredStartTs = estadoSub === "empezado" && uMeta.inicio_activo_ts ? Number(uMeta.inicio_activo_ts) : null;
+    if (estadoSub === "empezado" && !restoredStartTs && s.fecha_inicio) {
+      const parsedStart = Date.parse(String(s.fecha_inicio).replace(" ", "T"));
+      if (Number.isFinite(parsedStart) && parsedStart > 0 && parsedStart <= Date.now()) {
+        restoredStartTs = parsedStart;
+      }
+    }
     return {
       id_subtarea: String(s.id_subtarea || ""),
       orden_id: String(s.orden_id || ""),
@@ -1956,9 +2037,13 @@ function hydrateDatabaseFromSheets(cloudData) {
       es_outsourcing: Boolean(uMeta.es_outsourcing),
       es_repuesto_externo: Boolean(uMeta.es_repuesto_externo),
       fecha_asignacion: String(uMeta.fecha_asignacion || ""),
-      estado_subtarea: String(s.estado_subtarea || "pendiente"),
-      minutos_acumulados: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
-      tiempo_neto_min: Number(s.tiempo_neto_min ?? s.minutos_acumulados ?? 0),
+      estado_subtarea: estadoSub,
+      inicio_activo_ts: restoredStartTs,
+      segundos_acumulados: Math.max(0, secVal),
+      minutos_acumulados: minVal,
+      tiempo_neto_min: minVal,
+      updated_at: Number(uMeta.updated_at) || 0,
+      qc_reset_ts: Number(uMeta.qc_reset_ts) || 0,
       fecha_inicio: cleanDateISO(s.fecha_inicio, true),
       fecha_fin: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
       fecha_terminado: cleanDateISO(s.fecha_fin || s.fecha_terminado, false),
@@ -2560,6 +2645,376 @@ function mergeArrayByKey(serverArr, localArr, keyFn) {
   return Array.from(map.values());
 }
 
+/* ============================================================================
+   MOTOR DE FUSIÓN 3-WAY A NIVEL DE REGISTRO, CAMPO Y ROL (v46)
+   - Ningún dispositivo con caché vieja puede pisar órdenes, abonos ni tareas que NO editó.
+   - Los teléfonos de técnicos tienen firewall estricto: jamás alteran montos, abonos,
+     saldos ni retroceden una orden ya aprobada en 6. En Entrega / Archivada.
+   - Los cronómetros activos (inicio_activo_ts) y fotos de evidencia jamás se borran.
+   ============================================================================ */
+function digestSyncRecord(rec) {
+  if (!rec || typeof rec !== "object") return "";
+  try {
+    const clean = {};
+    Object.keys(rec)
+      .sort()
+      .forEach((k) => {
+        if (k === "ultima_actualizacion" || k === "updated_at" || k === "fin_updated_at" || k === "stage_updated_at") return;
+        const v = rec[k];
+        if (typeof v === "string" && v.startsWith("data:image")) {
+          clean[k] = `img:${v.length}:${v.slice(0, 48)}`;
+        } else if (Array.isArray(v) && v.length && typeof v[0] === "string" && v[0].startsWith("data:image")) {
+          clean[k] = v.map((x) => (typeof x === "string" && x.startsWith("data:image") ? `img:${x.length}:${x.slice(0, 32)}` : x));
+        } else {
+          clean[k] = v;
+        }
+      });
+    const str = JSON.stringify(clean);
+    // Hash FNV-1a 32-bit doble para firma compacta y determinística
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      h1 ^= c;
+      h1 = Math.imul(h1, 0x01000193);
+      h2 ^= (c + i) & 0xff;
+      h2 = Math.imul(h2, 0x85ebca6b);
+    }
+    return `${(h1 >>> 0).toString(36)}_${(h2 >>> 0).toString(36)}_${str.length}`;
+  } catch (e) {
+    return "";
+  }
+}
+
+function captureSyncedRecordDigests(sourceDb) {
+  const d = sourceDb || db;
+  if (!d || typeof d !== "object") return;
+  const buildMap = (arr, keyFn) => {
+    const out = {};
+    (Array.isArray(arr) ? arr : []).forEach((item) => {
+      const k = keyFn(item);
+      if (k) out[String(k)] = digestSyncRecord(item);
+    });
+    return out;
+  };
+  lastSyncedRecordDigests = {
+    ordenes: buildMap(d.ordenes, (x) => x && x.id_orden),
+    subtareas: buildMap(d.subtareas, (x) => x && x.id_subtarea),
+    clientes: buildMap(d.clientes, (x) => x && x.id_cliente),
+    finanzas_movimientos: buildMap(d.finanzas_movimientos, (x) => x && (x.id_mov || x.id_movimiento)),
+    asistencias: buildMap(d.asistencias, (x) => x && (x.id_asist || x.id_asistencia)),
+    cuentas_por_pagar: buildMap(d.cuentas_por_pagar, (x) => x && x.id_cxp),
+    inventario_repuestos: buildMap(d.inventario_repuestos, (x) => x && (x.id_repuesto || x.id)),
+    vouchers_nomina: buildMap(d.vouchers_nomina, (x) => x && x.id_voucher)
+  };
+  try {
+    localStorage.setItem(SYNC_BASE_DIGESTS_KEY, JSON.stringify(lastSyncedRecordDigests));
+  } catch (e) {}
+}
+
+function getOrderStageRank(stage) {
+  const map = {
+    recepcion: 1,
+    diagnostico_presupuesto: 1,
+    diagnostico: 2,
+    aprobacion: 3,
+    esperando_aprobacion_abono: 3,
+    servicio: 4,
+    asignacion_ejecucion: 4,
+    terminado: 4,
+    calidad: 5,
+    control_calidad: 5,
+    entrega: 6,
+    entregado: 6,
+    archivado: 7,
+    anulado: 8
+  };
+  return map[String(stage || "").toLowerCase()] || 1;
+}
+
+function getSubtaskProgressRank(state) {
+  const map = { pendiente: 0, pausado: 1, empezado: 2, terminado: 3 };
+  return map[String(state || "pendiente").toLowerCase()] ?? 0;
+}
+
+function mergePhotoArraysUnion(arrA, arrB) {
+  const isReal = (u) => {
+    const s = String(u || "").trim();
+    return Boolean(s && !s.startsWith("data:image/svg+xml"));
+  };
+  const realA = (Array.isArray(arrA) ? arrA : []).filter(isReal);
+  const realB = (Array.isArray(arrB) ? arrB : []).filter(isReal);
+  const merged = [...new Set([...realA, ...realB])];
+  if (merged.length) return merged;
+  return Array.isArray(arrA) && arrA.length ? arrA : (Array.isArray(arrB) ? arrB : []);
+}
+
+function mergeOrderRecordSmart(serverOrd, localOrd, actorIsAdmin) {
+  const s = serverOrd;
+  const l = localOrd;
+
+  // FIREWALL ESTRICTO PARA TÉCNICOS / RECEPCIÓN:
+  // Jamás pueden sobrescribir montos, abonos, saldos, servicios, comprobantes ni retroceder etapas avanzadas.
+  if (!actorIsAdmin) {
+    const out = { ...s };
+    const sRank = getOrderStageRank(s.estado_actual);
+    const lRank = getOrderStageRank(l.estado_actual);
+    // Un técnico solo puede avanzar desde 4. Servicio -> 5. Control de Calidad (jamás pisar 6. Entrega ni Archivado)
+    if (sRank <= 4 && lRank === 5) {
+      out.estado_actual = l.estado_actual;
+      out.subestado_ejecucion = "terminado";
+      out.devuelto_calidad = false;
+      out.stage_updated_at = Math.max(Number(s.stage_updated_at) || 0, Number(l.stage_updated_at) || Date.now());
+    } else if (sRank <= 4 && (l.subestado_ejecucion === "empezado" || l.subestado_ejecucion === "pausado" || l.subestado_ejecucion === "terminado")) {
+      out.subestado_ejecucion = l.subestado_ejecucion;
+    }
+    out.tiempo_neto_minutos = Math.max(Number(s.tiempo_neto_minutos) || 0, Number(l.tiempo_neto_minutos) || 0);
+    out.fecha_inicio_produccion = s.fecha_inicio_produccion || l.fecha_inicio_produccion || "";
+    out.galeria_fotos_pieza = mergePhotoArraysUnion(s.galeria_fotos_pieza, l.galeria_fotos_pieza);
+    out.galeria_fotos_repuestos = mergePhotoArraysUnion(s.galeria_fotos_repuestos, l.galeria_fotos_repuestos);
+    out.updated_at = Math.max(Number(s.updated_at) || 0, Number(l.updated_at) || 0);
+    return out;
+  }
+
+  // GERENCIA / ADMIN vs GERENCIA / ADMIN: fusión por dominio (Finanzas vs Etapa vs Metadatos)
+  const sFinTs = Number(s.fin_updated_at) || Number(s.updated_at) || 0;
+  const lFinTs = Number(l.fin_updated_at) || Number(l.updated_at) || 0;
+  const finWinner = lFinTs > sFinTs ? l : (sFinTs > lFinTs ? s : (Number(l.monto_abonado || 0) >= Number(s.monto_abonado || 0) ? l : s));
+
+  const sStageTs = Number(s.stage_updated_at) || Number(s.updated_at) || 0;
+  const lStageTs = Number(l.stage_updated_at) || Number(l.updated_at) || 0;
+  const stageWinner = lStageTs > sStageTs ? l : (sStageTs > lStageTs ? s : (getOrderStageRank(l.estado_actual) >= getOrderStageRank(s.estado_actual) ? l : s));
+
+  const metaWinner = (Number(l.updated_at) || 0) >= (Number(s.updated_at) || 0) ? l : s;
+
+  return {
+    ...s,
+    ...metaWinner,
+    // Dominio financiero protegido
+    servicios_cliente: finWinner.servicios_cliente !== undefined ? finWinner.servicios_cliente : s.servicios_cliente,
+    items_repuestos: finWinner.items_repuestos !== undefined ? finWinner.items_repuestos : s.items_repuestos,
+    monto_repuestos: finWinner.monto_repuestos !== undefined ? finWinner.monto_repuestos : s.monto_repuestos,
+    monto_total: Number(finWinner.monto_total) || 0,
+    monto_abonado: Number(finWinner.monto_abonado) || 0,
+    saldo_pendiente: Math.max(0, Number(finWinner.saldo_pendiente) || 0),
+    tipo_condicion_pago: finWinner.tipo_condicion_pago || s.tipo_condicion_pago,
+    cuenta_pago: finWinner.cuenta_pago || s.cuenta_pago || "",
+    metodo_pago: finWinner.metodo_pago || s.metodo_pago || "n/a",
+    comprobante_pago_foto: finWinner.comprobante_pago_foto || s.comprobante_pago_foto || l.comprobante_pago_foto || "",
+    fin_updated_at: Math.max(sFinTs, lFinTs),
+    // Dominio de etapa / calidad / entrega protegido
+    estado_actual: stageWinner.estado_actual,
+    subestado_ejecucion: stageWinner.subestado_ejecucion || s.subestado_ejecucion,
+    qc_aprobado: stageWinner.qc_aprobado,
+    devuelto_calidad: stageWinner.devuelto_calidad,
+    motivo_rechazo_qc: stageWinner.motivo_rechazo_qc || "",
+    fecha_entrega: stageWinner.fecha_entrega || s.fecha_entrega || l.fecha_entrega || "",
+    fecha_archivado: stageWinner.fecha_archivado || s.fecha_archivado || l.fecha_archivado || "",
+    fecha_garantia_hasta: stageWinner.fecha_garantia_hasta || s.fecha_garantia_hasta || l.fecha_garantia_hasta || "",
+    foto_entrega_final: stageWinner.foto_entrega_final || s.foto_entrega_final || l.foto_entrega_final || "",
+    factura_bloqueada: Boolean(stageWinner.factura_bloqueada || stageWinner.estado_actual === "archivado"),
+    stage_updated_at: Math.max(sStageTs, lStageTs),
+    // Acumulativos (jamás decrecen ni pierden fotos)
+    tiempo_neto_minutos: Math.max(Number(s.tiempo_neto_minutos) || 0, Number(l.tiempo_neto_minutos) || 0),
+    galeria_fotos_pieza: mergePhotoArraysUnion(s.galeria_fotos_pieza, l.galeria_fotos_pieza),
+    galeria_fotos_repuestos: mergePhotoArraysUnion(s.galeria_fotos_repuestos, l.galeria_fotos_repuestos),
+    updated_at: Math.max(Number(s.updated_at) || 0, Number(l.updated_at) || 0)
+  };
+}
+
+function mergeSubtaskRecordSmart(serverSub, localSub, actorIsAdmin) {
+  const s = serverSub;
+  const l = localSub;
+  const sUpd = Number(s.updated_at) || 0;
+  const lUpd = Number(l.updated_at) || 0;
+  const sQcReset = Number(s.qc_reset_ts) || 0;
+  const lQcReset = Number(l.qc_reset_ts) || 0;
+
+  // Base según quien tenga edición más reciente (para campos administrativos como comisión/descripción si es admin)
+  const out = actorIsAdmin && lUpd >= sUpd ? { ...s, ...l } : { ...l, ...s };
+  if (!actorIsAdmin) {
+    // Un técnico jamás altera su propia comisión, técnico asignado ni estado de liquidación pagada
+    out.descripcion_servicio = s.descripcion_servicio;
+    out.tecnico_id = s.tecnico_id;
+    out.nombre_tecnico = s.nombre_tecnico;
+    out.comision_base_tecnico = s.comision_base_tecnico;
+    out.pago_unitario = s.pago_unitario;
+    out.cantidad = s.cantidad;
+    out.por_unidad = s.por_unidad;
+    out.unidad_label = s.unidad_label;
+  }
+
+  // Resolución inteligente de estado de avance:
+  // Si hubo un rechazo formal de Calidad más reciente que el último avance del técnico, respetar el reinicio a "pendiente".
+  // En cualquier otro caso, jamás retroceder una tarea "empezado" o "terminado" a "pendiente" (NO INICIADO).
+  const maxQcReset = Math.max(sQcReset, lQcReset);
+  const sRank = getSubtaskProgressRank(s.estado_subtarea);
+  const lRank = getSubtaskProgressRank(l.estado_subtarea);
+  let winningState = s.estado_subtarea || "pendiente";
+
+  if (maxQcReset > 0 && maxQcReset >= Math.max(sUpd, lUpd)) {
+    winningState = lQcReset >= sQcReset ? l.estado_subtarea : s.estado_subtarea;
+  } else if (lRank > sRank) {
+    winningState = l.estado_subtarea;
+  } else if (sRank > lRank) {
+    winningState = s.estado_subtarea;
+  } else {
+    winningState = lUpd > sUpd ? l.estado_subtarea : s.estado_subtarea;
+  }
+
+  out.estado_subtarea = winningState;
+  out.qc_reset_ts = maxQcReset;
+
+  // Preservación estricta de tiempos y cronómetro activo
+  const sSec = Math.max(0, Number(s.segundos_acumulados) || (Number(s.minutos_acumulados || s.tiempo_neto_min || 0) * 60));
+  const lSec = Math.max(0, Number(l.segundos_acumulados) || (Number(l.minutos_acumulados || l.tiempo_neto_min || 0) * 60));
+  out.segundos_acumulados = Math.max(sSec, lSec);
+  out.minutos_acumulados = Math.max(Number(s.minutos_acumulados) || 0, Number(l.minutos_acumulados) || 0, Math.floor(out.segundos_acumulados / 60));
+  out.tiempo_neto_min = out.minutos_acumulados;
+
+  if (winningState === "empezado") {
+    const sStart = Number(s.inicio_activo_ts) || 0;
+    const lStart = Number(l.inicio_activo_ts) || 0;
+    if (sStart > 0 && lStart > 0) out.inicio_activo_ts = Math.min(sStart, lStart);
+    else out.inicio_activo_ts = sStart || lStart || null;
+  } else {
+    out.inicio_activo_ts = null;
+  }
+
+  out.fecha_inicio = s.fecha_inicio || l.fecha_inicio || "";
+  out.fecha_fin = (winningState === "terminado" ? (l.fecha_fin || s.fecha_fin || l.fecha_terminado || s.fecha_terminado) : (s.fecha_fin || l.fecha_fin)) || "";
+  out.fecha_terminado = out.fecha_fin;
+  out.foto_terminado_url = l.foto_terminado_url || s.foto_terminado_url || l.foto_evidencia_terminado || s.foto_evidencia_terminado || "";
+  out.foto_evidencia_terminado = out.foto_terminado_url;
+  out.comision_pagada = Boolean(s.comision_pagada || l.comision_pagada);
+  out.id_liquidacion = s.id_liquidacion || l.id_liquidacion || "";
+  out.updated_at = Math.max(sUpd, lUpd);
+  return out;
+}
+
+function mergeCollection3Way(serverArr, localArr, baseDigests, keyFn, smartMergeFn, allowLocalDelete = true) {
+  const sList = Array.isArray(serverArr) ? serverArr : [];
+  const lList = Array.isArray(localArr) ? localArr : [];
+  const baseMap = baseDigests && typeof baseDigests === "object" ? baseDigests : {};
+  const hasBase = Object.keys(baseMap).length > 0;
+
+  const sMap = new Map();
+  sList.forEach((it) => { const k = keyFn(it); if (k) sMap.set(String(k), it); });
+  const lMap = new Map();
+  lList.forEach((it) => { const k = keyFn(it); if (k) lMap.set(String(k), it); });
+
+  const allKeys = new Set([...sMap.keys(), ...lMap.keys()]);
+  const result = [];
+
+  allKeys.forEach((k) => {
+    const sItem = sMap.get(k);
+    const lItem = lMap.get(k);
+    const baseSig = baseMap[k];
+
+    if (sItem && lItem) {
+      const sSig = digestSyncRecord(sItem);
+      const lSig = digestSyncRecord(lItem);
+      if (sSig === lSig) {
+        result.push(sItem);
+        return;
+      }
+      if (hasBase && baseSig) {
+        const localChanged = lSig !== baseSig;
+        const serverChanged = sSig !== baseSig;
+        if (!localChanged) {
+          // Local NO tocó este registro -> el servidor SIEMPRE gana (0 sobrescrituras con caché viejo!)
+          result.push(sItem);
+          return;
+        }
+        if (!serverChanged) {
+          // Solo local editó este registro -> aplicar cambio local (pasando por firewall de rol si existe smartMergeFn)
+          result.push(smartMergeFn ? smartMergeFn(sItem, lItem) : lItem);
+          return;
+        }
+      }
+      // Ambos cambiaron o no hay base previa -> fusión inteligente campo a campo
+      result.push(smartMergeFn ? smartMergeFn(sItem, lItem) : lItem);
+    } else if (sItem && !lItem) {
+      // Existe en servidor pero no en local: solo eliminar si existía en base (borrado local explícito) y rol autorizado
+      if (hasBase && baseSig && allowLocalDelete) {
+        return;
+      }
+      result.push(sItem);
+    } else if (!sItem && lItem) {
+      // Existe en local pero no en servidor: si existía en base sin cambios locales, fue borrado en servidor
+      if (hasBase && baseSig) {
+        const lSig = digestSyncRecord(lItem);
+        if (lSig === baseSig) return;
+      }
+      result.push(lItem);
+    }
+  });
+
+  return result;
+}
+
+/* ---------- Conciliación Financiera Automática (Ordenes <-> Libro Diario) (v46) ---------- */
+function isOrderPaymentMovement(m, orderId = "") {
+  if (!m || m.tipo !== "ingreso" || isTransferMovement(m)) return false;
+  const oid = String(m.orden_id || "").trim();
+  if (!oid || oid === "-") return false;
+  if (orderId && oid !== String(orderId).trim()) return false;
+  const catLow = String(m.categoria || "").toLowerCase();
+  return (
+    catLow.includes("abono") ||
+    catLow.includes("liquidación") ||
+    catLow.includes("liquidacion") ||
+    catLow.includes("cobro de cuenta por cobrar") ||
+    catLow.includes("cobro de factura") ||
+    catLow.includes("finiquito") ||
+    catLow.includes("servicio de rectificaci")
+  );
+}
+
+function getOrderLedgerPaymentsSummary(orderId) {
+  const movs = (db.finanzas_movimientos || []).filter((m) => isOrderPaymentMovement(m, orderId));
+  const sum = Number(movs.reduce((acc, m) => acc + (Number(m.monto) || 0), 0).toFixed(2));
+  return { sum, count: movs.length, movements: movs };
+}
+
+function reconcileOrderBalanceFromLedger(orderId) {
+  const order = (db.ordenes || []).find((o) => o.id_orden === orderId);
+  if (!order) return null;
+  const { sum, count } = getOrderLedgerPaymentsSummary(orderId);
+  const total = Math.max(0, Number(order.monto_total) || 0);
+  order.monto_abonado = sum;
+  order.saldo_pendiente = Math.max(0, Number((total - sum).toFixed(2)));
+  if (total > 0 && order.saldo_pendiente <= 0.01) {
+    order.saldo_pendiente = 0;
+    order.tipo_condicion_pago = "pago_total";
+  } else if (sum > 0) {
+    order.tipo_condicion_pago = "abono";
+  } else if (order.tipo_condicion_pago === "pago_total" || order.tipo_condicion_pago === "abono") {
+    order.tipo_condicion_pago = "pendiente_definir";
+  }
+  const nowTs = Date.now();
+  order.fin_updated_at = nowTs;
+  order.updated_at = nowTs;
+  return { order, sum, count, overpayment: Math.max(0, Number((sum - total).toFixed(2))) };
+}
+
+function syncOrderBalanceWithLedgerAndSave(orderId) {
+  const res = reconcileOrderBalanceFromLedger(orderId);
+  if (!res) return;
+  saveDatabase(`Conciliación de saldo con caja (#${res.order.codigo_troquel})`);
+  renderApp();
+  if (res.overpayment > 0.01) {
+    Swal.fire({
+      icon: "warning",
+      title: `Saldo Conciliado con Excedente en Caja (+$${res.overpayment.toFixed(2)})`,
+      html: `La Orden <strong>#${escapeHtml(res.order.codigo_troquel)}</strong> suma <strong>$${res.sum.toFixed(2)}</strong> en ${res.count} pago(s) del Libro Diario, frente a un total facturado de <strong>$${Number(res.order.monto_total || 0).toFixed(2)}</strong>.<br/><br/>Ve a <strong>Finanzas / Libro Diario</strong> y elimina el pago duplicado sobrante: el saldo de la orden se ajustará automáticamente.`,
+      confirmButtonColor: "#182254"
+    });
+  } else {
+    showToast(`Orden #${res.order.codigo_troquel} conciliada con Libro Diario: Abonado $${res.order.monto_abonado.toFixed(2)} · Resto $${res.order.saldo_pendiente.toFixed(2)}.`, "success");
+  }
+}
+
 function mergeBitacoraReadsMaps(mapA, mapB) {
   const out = {};
   const ingest = (src) => {
@@ -2580,12 +3035,16 @@ function mergeBitacoraReadsMaps(mapA, mapB) {
   return out;
 }
 
-function mergeDatabasesNonDestructive(serverDb, localDb) {
+function mergeDatabasesNonDestructive(serverDb, localDb, overrideActorRole = null) {
   const s = normalizeDatabaseSchema(serverDb || getInitialDatabase());
   const l = normalizeDatabaseSchema(localDb || db);
-  // BLINDAJE v43: Solo Gerencia/Admin (no técnicos, ni recepción, ni perfiles restringidos) pueden
-  // pisar catálogos (Lista A / Lista B), configuración global, usuarios o CxP durante una fusión por conflicto.
-  const localCanOverrideCatalogs = isUserCatalogAdmin(currentUser);
+  // BLINDAJE v43/v46: Solo Gerencia/Admin (no técnicos, ni recepción, ni perfiles restringidos) pueden
+  // pisar catálogos (Lista A / Lista B), configuración global, usuarios, finanzas o datos comerciales de órdenes.
+  const actorUser = overrideActorRole ? { rol: overrideActorRole, nombre: "" } : currentUser;
+  const localCanOverrideCatalogs = isUserCatalogAdmin(actorUser);
+  const canEditCommercial = Boolean(actorUser && (actorUser.rol === "admin" || actorUser.rol === "jefe_taller" || actorUser.rol === "recepcion"));
+  const canDeleteAdminRecords = localCanOverrideCatalogs;
+
   const keepServerDestajo =
     !localCanOverrideCatalogs ||
     (!isDestajoListLikelyFactoryDefault(s.catalogo_destajo) && isDestajoListLikelyFactoryDefault(l.catalogo_destajo));
@@ -2599,6 +3058,61 @@ function mergeDatabasesNonDestructive(serverDb, localDb) {
     (s.config && s.config.bitacora_lecturas) || {},
     (l.config && l.config.bitacora_lecturas) || {}
   );
+
+  const baseDigests = lastSyncedRecordDigests || {};
+
+  const mergedOrdenes = mergeCollection3Way(
+    s.ordenes,
+    l.ordenes,
+    baseDigests.ordenes,
+    (x) => x && x.id_orden,
+    (srvOrd, locOrd) => mergeOrderRecordSmart(srvOrd, locOrd, canEditCommercial),
+    canDeleteAdminRecords
+  );
+
+  const mergedSubtareas = mergeCollection3Way(
+    s.subtareas,
+    l.subtareas,
+    baseDigests.subtareas,
+    (x) => x && x.id_subtarea,
+    (srvSub, locSub) => mergeSubtaskRecordSmart(srvSub, locSub, localCanOverrideCatalogs),
+    canDeleteAdminRecords
+  );
+
+  const mergedClientes = mergeCollection3Way(
+    s.clientes,
+    l.clientes,
+    baseDigests.clientes,
+    (x) => x && x.id_cliente,
+    (srvCli, locCli) => (canEditCommercial ? { ...srvCli, ...locCli } : srvCli),
+    canDeleteAdminRecords
+  );
+
+  const mergedFinanzas = mergeCollection3Way(
+    s.finanzas_movimientos,
+    l.finanzas_movimientos,
+    baseDigests.finanzas_movimientos,
+    (x) => x && (x.id_mov || x.id_movimiento),
+    (srvMov, locMov) => (localCanOverrideCatalogs ? { ...srvMov, ...locMov } : srvMov),
+    canDeleteAdminRecords
+  );
+
+  const mergedAsistencias = mergeCollection3Way(
+    s.asistencias,
+    l.asistencias,
+    baseDigests.asistencias,
+    (x) => x && (x.id_asist || x.id_asistencia),
+    (srvA, locA) => ({
+      ...srvA,
+      ...locA,
+      hora_entrada: srvA.hora_entrada || locA.hora_entrada,
+      hora_salida_almuerzo: locA.hora_salida_almuerzo || srvA.hora_salida_almuerzo || "",
+      hora_regreso_almuerzo: locA.hora_regreso_almuerzo || srvA.hora_regreso_almuerzo || "",
+      hora_salida: locA.hora_salida || srvA.hora_salida || ""
+    }),
+    canDeleteAdminRecords
+  );
+
   return normalizeDatabaseSchema({
     ...s,
     config: localCanOverrideCatalogs
@@ -2610,16 +3124,20 @@ function mergeDatabasesNonDestructive(serverDb, localDb) {
     usuarios: localCanOverrideCatalogs ? mergeArrayByKey(s.usuarios, l.usuarios, (x) => x && x.id_usuario) : s.usuarios,
     catalogo_servicios: mergedCatServicios,
     catalogo_destajo: mergedCatDestajo,
-    clientes: mergeArrayByKey(s.clientes, l.clientes, (x) => x && x.id_cliente),
-    ordenes: mergeArrayByKey(s.ordenes, l.ordenes, (x) => x && x.id_orden),
-    subtareas: mergeArrayByKey(s.subtareas, l.subtareas, (x) => x && x.id_subtarea),
+    clientes: mergedClientes,
+    ordenes: mergedOrdenes,
+    subtareas: mergedSubtareas,
     bitacora: mergeArrayByKey(s.bitacora, l.bitacora, (x) => x && x.id_mensaje),
-    finanzas_movimientos: mergeArrayByKey(s.finanzas_movimientos, l.finanzas_movimientos, (x) => x && (x.id_mov || x.id_movimiento)),
-    cuentas_por_pagar: localCanOverrideCatalogs ? mergeArrayByKey(s.cuentas_por_pagar, l.cuentas_por_pagar, (x) => x && x.id_cxp) : s.cuentas_por_pagar,
-    inventario_repuestos: mergeArrayByKey(s.inventario_repuestos, l.inventario_repuestos, (x) => x && (x.id_repuesto || x.id)),
+    finanzas_movimientos: mergedFinanzas,
+    cuentas_por_pagar: localCanOverrideCatalogs
+      ? mergeCollection3Way(s.cuentas_por_pagar, l.cuentas_por_pagar, baseDigests.cuentas_por_pagar, (x) => x && x.id_cxp, null, true)
+      : s.cuentas_por_pagar,
+    inventario_repuestos: mergeCollection3Way(s.inventario_repuestos, l.inventario_repuestos, baseDigests.inventario_repuestos, (x) => x && (x.id_repuesto || x.id), null, canDeleteAdminRecords),
     movimientos_inventario: mergeArrayByKey(s.movimientos_inventario, l.movimientos_inventario, (x) => x && (x.id_mov || x.id)),
-    asistencias: mergeArrayByKey(s.asistencias, l.asistencias, (x) => x && (x.id_asist || x.id_asistencia)),
-    vouchers_nomina: mergeArrayByKey(s.vouchers_nomina, l.vouchers_nomina, (x) => x && x.id_voucher),
+    asistencias: mergedAsistencias,
+    vouchers_nomina: localCanOverrideCatalogs
+      ? mergeCollection3Way(s.vouchers_nomina, l.vouchers_nomina, baseDigests.vouchers_nomina, (x) => x && x.id_voucher, null, true)
+      : s.vouchers_nomina,
     papelera_respaldo: mergeArrayByKey(s.papelera_respaldo, l.papelera_respaldo, (x) => x && x.id_eliminado)
   });
 }
@@ -2667,16 +3185,17 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
   const pushStartTs = Date.now();
 
   try {
-    // BLINDAJE v43/v44: Si un teléfono de técnico/recepción aún NO ha sincronizado desde la nube en esta sesión,
-    // leer y fusionar PRIMERO los catálogos/config del servidor para JAMÁS pisar Lista A/Lista B con caché viejo.
-    if (!hasSyncedFromCloudOnce && !opts.force && currentUser && !isUserCatalogAdmin(currentUser)) {
+    // BLINDAJE v46 (TODOS LOS ROLES): Si este equipo aún NO ha sincronizado desde la nube en esta sesión,
+    // leer y fusionar 3-Way PRIMERO contra el servidor para JAMÁS sobrescribir pagos, etapas o tareas con caché viejo.
+    if (!hasSyncedFromCloudOnce && !opts.force) {
       try {
         const preRes = await fetchWithTimeout(`${GAS_API_URL}?action=sync_all&t=${Date.now()}`, {}, 28000);
         const preJson = await preRes.json();
         if (preJson && preJson.success && preJson.data && !preJson.data.busy) {
           const preHydrated = hydrateDatabaseFromSheets(preJson.data);
           lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(preHydrated));
-          db = mergeDatabasesNonDestructive(preHydrated, db);
+          db = mergeDatabasesNonDestructive(preHydrated, db, opts.actorRole || null);
+          captureSyncedRecordDigests(preHydrated);
           saveLocalOnly();
           if (preJson.data.turboSyncSupported) cloudTurboSyncSupported = true;
           if (typeof preJson.data.revision === "number") {
@@ -2735,11 +3254,11 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
         payload: payloadToSend,
         partial: isPartial,
         changedTabs: isPartial ? changedTabs : undefined,
-        baseRevision: opts.force ? undefined : (lastKnownCloudRevision || undefined),
+        baseRevision: opts.force ? undefined : Number(lastKnownCloudRevision || 0),
         force: Boolean(opts.force),
         forceBackup: Boolean(opts.forceBackup),
         reason: opts.reason || "Actualización del taller",
-        actor: currentUser ? currentUser.nombre : "Sistema"
+        actor: opts.actor || (currentUser ? currentUser.nombre : "Sistema")
       };
       const serializedBody = JSON.stringify(requestBody);
       lastCloudPayloadKb = Math.max(1, Math.round(serializedBody.length / 1024));
@@ -2772,16 +3291,20 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
           throw new Error("Servidor ocupado guardando otro equipo; reintentando en segundos");
         }
 
-        // Si el servidor reporta conflicto (otro equipo guardó cambios más nuevos), fusionamos sin perder nada y reintentamos
-        if (data.conflict && data.serverState && conflictRetries < 2) {
+        // Si el servidor reporta conflicto (otro equipo guardó cambios más nuevos), fusionamos 3-Way sin perder nada y reintentamos
+        if (data.conflict && data.serverState && conflictRetries < 3) {
           conflictRetries++;
           const serverHydrated = hydrateDatabaseFromSheets(data.serverState);
           lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(serverHydrated));
-          db = mergeDatabasesNonDestructive(serverHydrated, db);
+          db = mergeDatabasesNonDestructive(serverHydrated, db, opts.actorRole || null);
+          captureSyncedRecordDigests(serverHydrated);
           saveLocalOnly();
           if (typeof data.revision === "number") {
             lastKnownCloudRevision = data.revision;
             try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
+          }
+          if (currentUser && !isAnyModalOpen()) {
+            try { renderApp(); } catch (e) {}
           }
           cloudPushPending = true;
           continue;
@@ -2792,12 +3315,13 @@ async function _executeSingleCloudPush(silent = true, opts = {}) {
           try { localStorage.setItem(CLOUD_REV_KEY, String(lastKnownCloudRevision)); } catch (e) {}
         }
 
-        // Actualizar hashes confirmados
+        // Actualizar hashes y firmas 3-Way confirmadas
         if (isPartial) {
           changedTabs.forEach((k) => { lastSyncedTabHashes[k] = currentHashes[k]; });
         } else {
           lastSyncedTabHashes = { ...currentHashes };
         }
+        captureSyncedRecordDigests(db);
         if (Number(data.photosMigrated || 0) > 0) {
           // El servidor movió fotos a Drive: permitir que la próxima lectura silenciosa refresque los enlaces ligeros
           delete lastSyncedTabHashes.ordenes;
@@ -2877,17 +3401,36 @@ async function flushCloudPush(silent = false, opts = {}) {
 
 function sendKeepaliveCloudPushOnExit() {
   if (!GAS_API_URL || (!hasUnsyncedLocalChanges && !cloudPushPending && !cloudPushDebounceTimer)) return;
+  // BLINDAJE v46: Jamás enviar un snapshot completo ciego en keepalive si el equipo no ha sincronizado primero.
+  if (!hasSyncedFromCloudOnce || !lastKnownCloudRevision) return;
   try {
-    const payload = prepareSheetsPayload(db);
+    const fullPayload = prepareSheetsPayload(db);
+    const currentHashes = computeAllTabHashes(fullPayload);
+    const canDelta = cloudTurboSyncSupported && Object.keys(lastSyncedTabHashes).length >= 10;
+    let payloadToSend = fullPayload;
+    let changedTabs = [];
+    if (canDelta) {
+      const deltaPayload = {};
+      Object.keys(fullPayload).forEach((k) => {
+        if (currentHashes[k] !== lastSyncedTabHashes[k]) {
+          deltaPayload[k] = fullPayload[k];
+          changedTabs.push(k);
+        }
+      });
+      if (changedTabs.length === 0) return;
+      payloadToSend = deltaPayload;
+    }
     const bodyStr = JSON.stringify({
       action: "push_state",
-      payload,
-      baseRevision: lastKnownCloudRevision || undefined,
+      payload: payloadToSend,
+      partial: canDelta,
+      changedTabs: canDelta ? changedTabs : undefined,
+      baseRevision: Number(lastKnownCloudRevision || 0),
       force: false,
       reason: "Guardado automático al salir",
       actor: currentUser ? currentUser.nombre : "Sistema"
     });
-    if (bodyStr.length < 60000) {
+    if (bodyStr.length < 58000) {
       fetch(GAS_API_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -3029,6 +3572,7 @@ async function syncFromGoogleSheets(silent = false, opts = {}) {
 
         db = hydrateDatabaseFromSheets(json.data);
         lastSyncedTabHashes = computeAllTabHashes(prepareSheetsPayload(db));
+        captureSyncedRecordDigests(db);
         saveLocalOnly();
         saveCatalogsSafetyVault(db);
         populateLoginSelect();
@@ -3761,7 +4305,11 @@ function saveDatabase(reason = "Actualización del taller") {
   saveLocalOnly();
   markLocalChangesDirty();
   saveLocalSafetyBackup("Respaldo automático local");
-  queueCloudPush(true, { reason });
+  queueCloudPush(true, {
+    reason,
+    actor: currentUser ? currentUser.nombre : "Sistema",
+    actorRole: currentUser ? currentUser.rol : null
+  });
 }
 
 function resetDemoDatabase() {
@@ -3909,6 +4457,13 @@ function quickLoginAs(userId) {
   if (isExternalUser(user)) {
     showToast("Los Talleres Externos / Outsourcing no usan perfil operativo de sesión; sus montos se liquidan directo desde Gerencia.", "warning");
     return false;
+  }
+  // Subir cualquier cambio pendiente del perfil saliente antes de cambiar de rol
+  if (hasUnsyncedLocalChanges || cloudPushDebounceTimer) {
+    flushCloudPush(true, {
+      actor: currentUser ? currentUser.nombre : "Sistema",
+      actorRole: currentUser ? currentUser.rol : null
+    });
   }
   loginSuccess(user);
   return false;
@@ -4758,6 +5313,10 @@ function loginSuccess(user) {
 
     renderApp();
     showToast(`Sesión iniciada: ${user.nombre} (${user.rol_label || user.rol})`, "success");
+    // Al iniciar o cambiar de perfil, traer estado fresco desde Sheets si no hay pendientes locales
+    if (!hasUnsyncedLocalChanges && !cloudPushInFlight) {
+      setTimeout(() => syncFromGoogleSheets(true), 250);
+    }
   } catch (err) {
     console.error("Error al ingresar a la sesión:", err);
     const loginView = document.getElementById("login-view");
@@ -4769,6 +5328,13 @@ function loginSuccess(user) {
 }
 
 function logout() {
+  // Asegurar que cualquier cambio pendiente del perfil saliente se despache antes de cerrar sesión
+  if (hasUnsyncedLocalChanges || cloudPushDebounceTimer) {
+    flushCloudPush(true, {
+      actor: currentUser ? currentUser.nombre : "Sistema",
+      actorRole: currentUser ? currentUser.rol : null
+    });
+  }
   currentUser = null;
   localStorage.removeItem(SESSION_KEY);
   document.getElementById("workspace").classList.add("hidden");
@@ -8172,6 +8738,28 @@ function renderOrderCardTelegramStyle(order) {
                 <strong class="val val--resto" style="color:${Number(order.saldo_pendiente || 0) > 0 ? '#ef4444' : '#22c55e'};">$${Number(order.saldo_pendiente || 0).toFixed(2)}</strong>
               </div>
             </div>
+            ${(function () {
+              if (!canManage) return "";
+              const lSum = getOrderLedgerPaymentsSummary(order.id_orden);
+              const ordPaid = Number(order.monto_abonado || 0);
+              const ordTot = Number(order.monto_total || 0);
+              const hasMismatch = lSum.count > 0 && Math.abs(lSum.sum - ordPaid) > 0.01;
+              const hasOverpay = lSum.sum > ordTot + 0.01;
+              if (!hasMismatch && !hasOverpay) return "";
+              return `
+                <div style="margin-top:8px; padding:7px 10px; border-radius:9px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.45); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:11px;">
+                  <span style="color:#fbbf24; font-weight:800;">
+                    <i class="fas fa-scale-unbalanced"></i>
+                    ${hasOverpay
+                      ? `Caja tiene $${lSum.sum.toFixed(2)} (${lSum.count} pagos) vs factura $${ordTot.toFixed(2)}. Revisa duplicados en Libro Diario.`
+                      : `Caja registra $${lSum.sum.toFixed(2)} (${lSum.count} pago/s) vs $${ordPaid.toFixed(2)} en ficha.`}
+                  </span>
+                  <button type="button" class="btn btn--gold btn--xs" style="padding:3px 8px; font-size:10.5px;" onclick="syncOrderBalanceWithLedgerAndSave('${order.id_orden}')">
+                    <i class="fas fa-sync"></i> Conciliar Saldo
+                  </button>
+                </div>
+              `;
+            })()}
             `
         }
       </div>
@@ -9151,6 +9739,7 @@ function toggleDeliverCreditMode(isCredit) {
 }
 
 function confirmDeliverAndArchiveOrder(orderId) {
+  if (isDoubleActionGuard(`deliver_${orderId}`, 2500)) return;
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
@@ -9169,8 +9758,9 @@ function confirmDeliverAndArchiveOrder(orderId) {
   const saldo = Math.max(0, Number(Number(order.saldo_pendiente || 0).toFixed(2)));
   const deliverOnCredit = Boolean(document.getElementById("deliver-allow-credit-check")?.checked);
   const now = new Date();
-  const todayIso = now.toISOString().slice(0, 10);
-  const nowStr = cleanDateISO(now.toISOString(), true);
+  const nowTs = Date.now();
+  const todayIso = getLocalIsoDate(now);
+  const nowStr = getLocalIsoDateTime(now);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
 
@@ -9232,7 +9822,7 @@ function confirmDeliverAndArchiveOrder(orderId) {
   // Transición oficial a Archivados & Garantía + Activación de Garantía de 1 Año a partir de HOY
   const oneYearLater = new Date(now.getTime());
   oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
-  const warrantyEndIso = oneYearLater.toISOString().slice(0, 10);
+  const warrantyEndIso = getLocalIsoDate(oneYearLater);
 
   order.estado_actual = "archivado";
   order.subestado_ejecucion = "terminado";
@@ -9240,6 +9830,9 @@ function confirmDeliverAndArchiveOrder(orderId) {
   order.fecha_entrega = todayIso;
   order.fecha_archivado = now.toISOString();
   order.fecha_garantia_hasta = warrantyEndIso;
+  order.fin_updated_at = nowTs;
+  order.stage_updated_at = nowTs;
+  order.updated_at = nowTs;
 
   const paySummary = collectedPayments.length
     ? `Finiquito cobrado: $${saldo.toFixed(2)} en ${collectedPayments.length} soporte(s) (${collectedPayments.map((p) => `${p.cuenta_label}: $${p.monto.toFixed(2)}`).join(" + ")}).`
@@ -11842,6 +12435,7 @@ async function handlePaymentProofUpload(event) {
 }
 
 function confirmFinancialCondition() {
+  if (isDoubleActionGuard(`fin_cond_${tempFinConditionState.orderId}`, 2000)) return;
   const order = db.ordenes.find((o) => o.id_orden === tempFinConditionState.orderId);
   if (!order) return;
 
@@ -11849,30 +12443,34 @@ function confirmFinancialCondition() {
   const abonoInput = document.getElementById("fin-input-abono");
   const cuentaInput = document.getElementById("fin-input-cuenta")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
   const nuevoAbono = opt === "pago_total" ? Number(order.monto_total) : Math.max(0, Number(abonoInput?.value) || 0);
-  const diferenciaAbono = Math.max(0, nuevoAbono - (Number(order.monto_abonado) || 0));
+  const diferenciaAbono = Math.max(0, Number((nuevoAbono - (Number(order.monto_abonado) || 0)).toFixed(2)));
 
   if ((opt === "pago_total" || opt === "abono") && !tempFinConditionState.proofPhotoDataUrl) {
     showToast("Es obligatorio adjuntar la foto del capture o de los billetes recibidos.", "error");
     return;
   }
 
+  const nowTs = Date.now();
   order.tipo_condicion_pago = nuevoAbono >= Number(order.monto_total) && Number(order.monto_total) > 0 ? "pago_total" : opt;
-  order.monto_abonado = nuevoAbono;
-  order.saldo_pendiente = Math.max(0, Number(order.monto_total) - nuevoAbono);
+  order.monto_abonado = Number(nuevoAbono.toFixed(2));
+  order.saldo_pendiente = Math.max(0, Number((Number(order.monto_total) - nuevoAbono).toFixed(2)));
   order.metodo_pago = opt === "credito" && nuevoAbono === 0 ? "n/a" : suggestMethodForBankAccount(cuentaInput);
   order.cuenta_pago = opt === "credito" && nuevoAbono === 0 ? "" : cuentaInput;
   order.comprobante_pago_foto = opt === "credito" && nuevoAbono === 0 ? (order.comprobante_pago_foto || "") : (tempFinConditionState.proofPhotoDataUrl || order.comprobante_pago_foto || "");
   order.prioridad_alta = order.tipo_condicion_pago === "pago_total";
+  order.fin_updated_at = nowTs;
+  order.updated_at = nowTs;
 
   if (order.estado_actual === "diagnostico_presupuesto") {
     order.estado_actual = "esperando_aprobacion_abono";
+    order.stage_updated_at = nowTs;
   }
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalIsoDateTime();
   if (diferenciaAbono > 0) {
     db.finanzas_movimientos.unshift({
-      id_mov: "MOV-" + Date.now(),
-      fecha: nowStr.slice(0, 10),
+      id_mov: "MOV-" + nowTs,
+      fecha: getLocalIsoDate(),
       tipo: "ingreso",
       categoria: order.saldo_pendiente === 0 ? "Liquidación Total de Orden" : "Abono de Orden",
       concepto: `${order.saldo_pendiente === 0 ? "Pago Total 100%" : "Abono"} ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
@@ -13112,6 +13710,7 @@ function saveEditedBudget(orderId) {
     if (pEl) s.monto = Math.max(0, Number(pEl.value) || 0);
   });
 
+  const nowTs = Date.now();
   const prevAbono = Number(order.monto_abonado) || 0;
   const nuevoAbono = Math.max(0, Number(document.getElementById("edit-order-abonado")?.value) || 0);
   const obsVal = document.getElementById("edit-order-obs")?.value || order.datos_motor.observaciones;
@@ -13119,19 +13718,25 @@ function saveEditedBudget(orderId) {
   order.monto_abonado = nuevoAbono;
   order.datos_motor.observaciones = obsVal;
   recalcOrderTotalsFromClientServices(order);
+  order.fin_updated_at = nowTs;
+  order.updated_at = nowTs;
   const nuevoTotal = order.monto_total;
 
   if (nuevoAbono > prevAbono) {
-    const diff = nuevoAbono - prevAbono;
+    const diff = Number((nuevoAbono - prevAbono).toFixed(2));
+    const defaultCuenta = order.cuenta_pago || getConfiguredBankAccounts()[0]?.id || "efectivo";
     db.finanzas_movimientos.unshift({
-      id_mov: "MOV-" + Date.now(),
-      fecha: new Date().toISOString().slice(0, 10),
+      id_mov: "MOV-" + nowTs,
+      fecha: getLocalIsoDate(),
       tipo: "ingreso",
       categoria: "Abono de Orden",
-      concepto: `Abono adicional en ${order.id_orden} (Troquel #${order.codigo_troquel})`,
+      concepto: `Abono adicional en ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
       monto: diff,
-      metodo: "pago_movil",
-      orden_id: order.id_orden
+      cuenta: defaultCuenta,
+      metodo: suggestMethodForBankAccount(defaultCuenta),
+      orden_id: order.id_orden,
+      codigo_troquel: order.codigo_troquel,
+      registrado_por: currentUser ? currentUser.nombre : "Sistema"
     });
   }
 
@@ -13308,10 +13913,13 @@ function rejectQualityControlAndReturn(orderId) {
   }
 
   // Regresar a 3. Asignación y Ejecución
+  const nowTs = Date.now();
   order.estado_actual = "asignacion_ejecucion";
   order.subestado_ejecucion = "empezado";
   order.devuelto_calidad = true;
   order.motivo_rechazo_qc = reason;
+  order.stage_updated_at = nowTs;
+  order.updated_at = nowTs;
 
   // Reabrir las subtareas internas de la orden para que el técnico pueda corregir y subir nueva foto general
   const internalSubs = db.subtareas.filter((s) => s.orden_id === orderId && !isSubtaskExternal(s));
@@ -13319,10 +13927,12 @@ function rejectQualityControlAndReturn(orderId) {
     internalSubs.forEach((s) => {
       s.estado_subtarea = "pendiente";
       s.inicio_activo_ts = null;
+      s.qc_reset_ts = nowTs;
+      s.updated_at = nowTs;
     });
   }
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalIsoDateTime();
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
     orden_id: order.id_orden,
@@ -13417,7 +14027,8 @@ function approveAndDeliverOrder(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowTs = Date.now();
+  const nowStr = getLocalIsoDateTime();
 
   // Pasar a estación 6. En Entrega SIN crear asientos automáticos en Finanzas, SIN alterar saldo ni activar garantía todavía
   order.estado_actual = "entregado";
@@ -13426,6 +14037,8 @@ function approveAndDeliverOrder(orderId) {
   order.factura_bloqueada = false;
   order.devuelto_calidad = false;
   order.fecha_garantia_hasta = "";
+  order.stage_updated_at = nowTs;
+  order.updated_at = nowTs;
 
   sendPushNotification(
     "Pieza Lista en 6. En Entrega",
@@ -13536,12 +14149,16 @@ function buildWhatsAppBudgetPlainText(order) {
 
 function getOrderReceptionPhotos(order) {
   if (!order) return [];
+  const isRealPhoto = (u) => {
+    const s = String(u || "").trim();
+    return Boolean(s && !s.startsWith("data:image/svg+xml"));
+  };
   const items = [];
-  const piezaArr = Array.isArray(order.galeria_fotos_pieza) ? order.galeria_fotos_pieza.filter(Boolean) : [];
-  const repArr = Array.isArray(order.galeria_fotos_repuestos) ? order.galeria_fotos_repuestos.filter(Boolean) : [];
+  const piezaArr = Array.isArray(order.galeria_fotos_pieza) ? order.galeria_fotos_pieza.filter(isRealPhoto) : [];
+  const repArr = Array.isArray(order.galeria_fotos_repuestos) ? order.galeria_fotos_repuestos.filter(isRealPhoto) : [];
   piezaArr.forEach((url, idx) => items.push({ url, label: `Pieza #${idx + 1}`, category: "pieza" }));
   repArr.forEach((url, idx) => items.push({ url, label: `Repuestos #${idx + 1}`, category: "repuestos" }));
-  if (!items.length && order.foto_pieza_url) {
+  if (!items.length && isRealPhoto(order.foto_pieza_url)) {
     items.push({ url: order.foto_pieza_url, label: "Pieza #1", category: "pieza" });
   }
   return items;
@@ -14576,6 +15193,7 @@ function suggestAccountForArMethod(metodo) {
 }
 
 function confirmCollectReceivable(orderId) {
+  if (isDoubleActionGuard(`ar_collect_${orderId}`, 2000)) return;
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
@@ -14588,24 +15206,41 @@ function confirmCollectReceivable(orderId) {
     return;
   }
 
-  order.monto_abonado = Number(order.monto_abonado) + amount;
-  order.saldo_pendiente = Math.max(0, Number(order.monto_total) - order.monto_abonado);
+  const currentResto = Math.max(0, Number(Number(order.saldo_pendiente || 0).toFixed(2)));
+  if (currentResto <= 0.01) {
+    showToast("Esta orden ya está saldada al 100% ($0.00 pendiente).", "warning");
+    closeModal();
+    return;
+  }
+  if (amount > currentResto + 0.01) {
+    showToast(`El monto ingresado ($${amount.toFixed(2)}) excede el saldo pendiente real ($${currentResto.toFixed(2)}).`, "error");
+    return;
+  }
+
+  const nowTs = Date.now();
+  order.monto_abonado = Number((Number(order.monto_abonado || 0) + amount).toFixed(2));
+  order.saldo_pendiente = Math.max(0, Number((Number(order.monto_total || 0) - order.monto_abonado).toFixed(2)));
+  order.cuenta_pago = cuenta;
+  order.fin_updated_at = nowTs;
+  order.updated_at = nowTs;
   if (tempArCollectPhoto) {
     order.comprobante_pago_foto = tempArCollectPhoto;
   }
-  if (order.saldo_pendiente === 0) {
+  if (order.saldo_pendiente <= 0.01) {
+    order.saldo_pendiente = 0;
     order.tipo_condicion_pago = "pago_total";
   }
 
   // Si estaba en Diagnóstico o Esperando Aprobación, pasa a Esperando Aprobación con abono listo
   if (order.estado_actual === "diagnostico_presupuesto") {
     order.estado_actual = "esperando_aprobacion_abono";
+    order.stage_updated_at = nowTs;
   }
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalIsoDateTime();
   db.finanzas_movimientos.unshift({
-    id_mov: "MOV-" + Date.now(),
-    fecha: nowStr.slice(0, 10),
+    id_mov: "MOV-" + nowTs,
+    fecha: getLocalIsoDate(),
     tipo: "ingreso",
     categoria: "Cobro de Cuenta por Cobrar (Resto)",
     concepto: `Cobro de Resto en ${order.id_orden} (Troquel #${order.codigo_troquel} · ${order.nombre_cliente})`,
@@ -15231,14 +15866,25 @@ function registerWorkerActiveDayProject(workerId, workerName, troquelCode, servi
 function startSubtaskWork(subtaskId) {
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
+  const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
+  if (ord && ["entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual)) {
+    showToast(`La Orden #${ord.codigo_troquel} ya fue aprobada / entregada y no puede reiniciarse.`, "warning");
+    return;
+  }
+  const nowTs = Date.now();
   sub.estado_subtarea = "empezado";
   if (!sub.inicio_activo_ts) {
-    sub.inicio_activo_ts = Date.now();
+    sub.inicio_activo_ts = nowTs;
   }
+  if (!sub.fecha_inicio) {
+    sub.fecha_inicio = getLocalIsoDateTime();
+  }
+  sub.updated_at = nowTs;
 
-  const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
   if (ord) {
     ord.subestado_ejecucion = "empezado";
+    if (!ord.fecha_inicio_produccion) ord.fecha_inicio_produccion = getLocalIsoDateTime();
+    ord.updated_at = nowTs;
     registerWorkerActiveDayProject(
       sub.tecnico_id || currentUser.id_usuario,
       sub.nombre_tecnico || currentUser.nombre,
@@ -15247,9 +15893,10 @@ function startSubtaskWork(subtaskId) {
     );
   }
 
-  saveDatabase();
+  saveDatabase(`Inicio tarea "${sub.descripcion_servicio}"`);
+  flushCloudPush(true, { reason: `Inicio cronómetro tarea ${sub.id_subtarea}`, actorRole: currentUser ? currentUser.rol : null });
   renderApp();
-  showToast(`Trabajo "${sub.descripcion_servicio}" EN PROCESO. Cronómetro en tiempo real activado.`);
+  showToast(`Trabajo "${sub.descripcion_servicio}" EN PROCESO. Cronómetro guardado en la nube (cuenta incluso si cierras la app).`);
 }
 
 /* ---------- FASE 3 PUNTO 4: PAUSADO / IMPREVISTO CON NOTA OBLIGATORIA AL CHAT ---------- */
@@ -15299,8 +15946,10 @@ function confirmPauseSubtaskWithNote(subtaskId) {
     return;
   }
 
+  const nowTs = Date.now();
   sub.estado_subtarea = "pausado";
   accumulateSubtaskActiveTime(sub);
+  sub.updated_at = nowTs;
 
   const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
   if (ord) {
@@ -15308,9 +15957,10 @@ function confirmPauseSubtaskWithNote(subtaskId) {
     ord.tiempo_neto_minutos = db.subtareas
       .filter((s) => s.orden_id === ord.id_orden)
       .reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+    ord.updated_at = nowTs;
 
     db.bitacora.push({
-      id_mensaje: "MSG-" + Date.now(),
+      id_mensaje: "MSG-" + nowTs,
       orden_id: ord.id_orden,
       codigo_troquel: ord.codigo_troquel,
       autor_id: currentUser.id_usuario,
@@ -15319,11 +15969,12 @@ function confirmPauseSubtaskWithNote(subtaskId) {
       tipo_evento: "pausa_imprevisto",
       mensaje: `⏸️ TAREA PAUSADA / IMPREVISTO en "${sub.descripcion_servicio}": ${note}`,
       foto_adjunta_url: "",
-      fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+      fecha_hora: getLocalIsoDateTime()
     });
   }
 
-  saveDatabase();
+  saveDatabase(`Pausa tarea "${sub.descripcion_servicio}"`);
+  flushCloudPush(true, { reason: `Pausa tarea ${sub.id_subtarea}`, actorRole: currentUser ? currentUser.rol : null });
   closeModal();
   renderApp();
   showToast(`⏸️ Trabajo pausado y gerencia notificada en el chat interno.`);
@@ -15444,6 +16095,7 @@ function useDemoFinishSubtaskPhoto() {
 }
 
 function confirmSubtaskCompletion(subtaskId) {
+  if (isDoubleActionGuard(`finish_sub_${subtaskId}`, 2500)) return;
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
 
@@ -15452,15 +16104,20 @@ function confirmSubtaskCompletion(subtaskId) {
     return;
   }
 
+  const nowTs = Date.now();
   // Detener el cronómetro en vivo y sumar el tiempo real invertido con precisión exacta de segundos
   accumulateSubtaskActiveTime(sub);
   if (!sub.minutos_acumulados || sub.minutos_acumulados === 0) {
-    sub.minutos_acumulados = Math.max(1, Math.floor((Number(sub.segundos_acumulados) || 0) / 60));
+    sub.minutos_acumulados = Math.max(1, Math.round((Number(sub.segundos_acumulados) || 0) / 60));
   }
+  sub.tiempo_neto_min = sub.minutos_acumulados;
 
   sub.estado_subtarea = "terminado";
   sub.foto_terminado_url = tempFinishSubtaskPhoto;
-  sub.fecha_terminado = new Date().toISOString().slice(0, 10);
+  sub.foto_evidencia_terminado = tempFinishSubtaskPhoto;
+  sub.fecha_terminado = getLocalIsoDate();
+  sub.fecha_fin = sub.fecha_terminado;
+  sub.updated_at = nowTs;
 
   const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
   if (ord) {
@@ -15474,16 +16131,19 @@ function confirmSubtaskCompletion(subtaskId) {
     const allOrderSubs = db.subtareas.filter((s) => s.orden_id === ord.id_orden);
     const allDone = allOrderSubs.every((s) => s.estado_subtarea === "terminado");
     ord.tiempo_neto_minutos = allOrderSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+    ord.updated_at = nowTs;
 
-    if (allDone) {
+    const alreadyBeyondQc = ["calidad", "control_calidad", "entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual);
+    if (allDone && !alreadyBeyondQc) {
       ord.subestado_ejecucion = "terminado";
-      // Fase 3 Punto 5: Transfiere la orden al estado de Control de Calidad y notifica al supervisor
+      // Fase 3 Punto 5: Transfiere la orden al estado de Control de Calidad (jamás retrocede 6. Entrega ni Archivada)
       ord.estado_actual = "control_calidad";
       ord.devuelto_calidad = false;
+      ord.stage_updated_at = nowTs;
     }
 
     db.bitacora.push({
-      id_mensaje: "MSG-" + Date.now(),
+      id_mensaje: "MSG-" + nowTs,
       orden_id: ord.id_orden,
       codigo_troquel: ord.codigo_troquel,
       autor_id: currentUser.id_usuario,
@@ -15491,44 +16151,54 @@ function confirmSubtaskCompletion(subtaskId) {
       autor_rol: "Técnico",
       tipo_evento: "terminado",
       mensaje: `Tarea "${sub.descripcion_servicio}" FINALIZADA con fotografía obligatoria (Tiempo invertido: ${formatMinutes(sub.minutos_acumulados)}). ${
-        allDone
+        allDone && !alreadyBeyondQc
           ? "NOTIFICACIÓN AL SUPERVISOR DE PLANTA: Todas las tareas de la pieza han sido completadas. La orden pasa a 5. Control de Calidad para revisión."
           : ""
       }`,
       foto_adjunta_url: sub.foto_terminado_url,
-      fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+      fecha_hora: getLocalIsoDateTime()
     });
   }
 
-  saveDatabase();
+  saveDatabase(`Tarea finalizada (${sub.descripcion_servicio})`);
+  flushCloudPush(true, { reason: `Tarea finalizada ${sub.id_subtarea}`, actorRole: currentUser ? currentUser.rol : null });
   closeModal();
   renderApp();
   showToast(`¡Excelente! Tarea finalizada con foto, enviada a Control de Calidad y comisión de $${Number(sub.comision_base_tecnico).toFixed(2)} sumada.`);
 }
 
 /* ============================================================================
-   CONTROLES UNIFICADOS POR TROQUEL PARA TÉCNICOS (1 INICIAR / 1 PAUSAR / 1 FOTO) (v42)
+   CONTROLES UNIFICADOS POR TROQUEL PARA TÉCNICOS (1 INICIAR / 1 PAUSAR / 1 FOTO) (v42/v46)
    Indiferentemente de cuántas tareas tenga asignadas un técnico en el mismo troquel,
    inicia, pausa y termina todo el bloque con una única foto general de la pieza.
    ============================================================================ */
 function startWorkerTroquelWork(orderId, workerId) {
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
+  const ord = db.ordenes.find((o) => o.id_orden === orderId);
+  if (ord && ["entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual)) {
+    showToast(`El Troquel #${ord.codigo_troquel} ya está en ${formatStageName(ord.estado_actual)} y no requiere reinicio.`, "warning");
+    return;
+  }
   const pendingSubs = (db.subtareas || []).filter(
     (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
   );
   if (!pendingSubs.length) return;
 
   const nowTs = Date.now();
+  const nowLocalStr = getLocalIsoDateTime();
   // Acumular cualquier reloj previo abierto y encender UN solo reloj maestro en la 1ra subtarea para no multiplicar tiempos
   pendingSubs.forEach((s, idx) => {
     if (s.inicio_activo_ts) accumulateSubtaskActiveTime(s);
     s.estado_subtarea = "empezado";
     s.inicio_activo_ts = idx === 0 ? nowTs : null;
+    if (!s.fecha_inicio) s.fecha_inicio = nowLocalStr;
+    s.updated_at = nowTs;
   });
 
-  const ord = db.ordenes.find((o) => o.id_orden === orderId);
   if (ord) {
     ord.subestado_ejecucion = "empezado";
+    if (!ord.fecha_inicio_produccion) ord.fecha_inicio_produccion = nowLocalStr;
+    ord.updated_at = nowTs;
     const summaryLabel = pendingSubs.map((s) => s.descripcion_servicio).join(", ");
     registerWorkerActiveDayProject(
       targetWorkerId,
@@ -15539,8 +16209,10 @@ function startWorkerTroquelWork(orderId, workerId) {
   }
 
   saveDatabase(`Inicio trabajo Troquel #${ord ? ord.codigo_troquel : orderId}`);
+  // Subir de inmediato para persistir inicio_activo_ts en Google Sheets aunque el trabajador cierre la app al instante
+  flushCloudPush(true, { reason: `Inicio cronómetro Troquel #${ord ? ord.codigo_troquel : orderId}`, actorRole: currentUser ? currentUser.rol : null });
   renderApp();
-  showToast(`Troquel #${ord ? ord.codigo_troquel : ""} EN PROCESO (${pendingSubs.length} tarea/s iniciadas con 1 solo reloj).`, "success");
+  showToast(`Troquel #${ord ? ord.codigo_troquel : ""} EN PROCESO (${pendingSubs.length} tarea/s · cronómetro respaldado en nube).`, "success");
 }
 
 function openPauseWorkerTroquelModal(orderId, workerId) {
@@ -15595,9 +16267,11 @@ function confirmPauseWorkerTroquelWithNote(orderId, workerId) {
     return;
   }
 
+  const nowTs = Date.now();
   pendingSubs.forEach((s) => {
     accumulateSubtaskActiveTime(s);
     s.estado_subtarea = "pausado";
+    s.updated_at = nowTs;
   });
 
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
@@ -15606,9 +16280,10 @@ function confirmPauseWorkerTroquelWithNote(orderId, workerId) {
     ord.tiempo_neto_minutos = db.subtareas
       .filter((s) => s.orden_id === ord.id_orden)
       .reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+    ord.updated_at = nowTs;
 
     db.bitacora.push({
-      id_mensaje: "MSG-" + Date.now(),
+      id_mensaje: "MSG-" + nowTs,
       orden_id: ord.id_orden,
       codigo_troquel: ord.codigo_troquel,
       autor_id: currentUser ? currentUser.id_usuario : targetWorkerId,
@@ -15617,11 +16292,12 @@ function confirmPauseWorkerTroquelWithNote(orderId, workerId) {
       tipo_evento: "pausa_imprevisto",
       mensaje: `⏸️ TROQUEL PAUSADO (${pendingSubs.length} tarea/s: ${pendingSubs.map((s) => s.descripcion_servicio).join(", ")}): ${note}`,
       foto_adjunta_url: "",
-      fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+      fecha_hora: getLocalIsoDateTime()
     });
   }
 
   saveDatabase(`Pausa trabajo Troquel #${ord ? ord.codigo_troquel : orderId}`);
+  flushCloudPush(true, { reason: `Pausa Troquel #${ord ? ord.codigo_troquel : orderId}`, actorRole: currentUser ? currentUser.rol : null });
   closeModal();
   renderApp();
   showToast(`⏸️ Trabajo del Troquel #${ord ? ord.codigo_troquel : ""} pausado y gerencia notificada.`, "info");
@@ -15706,6 +16382,7 @@ function openCompleteWorkerTroquelModal(orderId, workerId) {
 }
 
 function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
+  if (isDoubleActionGuard(`finish_troquel_${orderId}_${workerId || "me"}`, 2500)) return;
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
   const pendingSubs = (db.subtareas || []).filter(
     (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
@@ -15717,20 +16394,23 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
     return;
   }
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const nowTs = Date.now();
+  const todayIso = getLocalIsoDate();
   let totalBatchMinutes = 0;
   let totalCommBatch = 0;
 
   pendingSubs.forEach((s, idx) => {
     accumulateSubtaskActiveTime(s);
     if (idx === 0 && (!s.minutos_acumulados || s.minutos_acumulados === 0)) {
-      s.minutos_acumulados = Math.max(1, Math.floor((Number(s.segundos_acumulados) || 0) / 60));
+      s.minutos_acumulados = Math.max(1, Math.round((Number(s.segundos_acumulados) || 0) / 60));
     }
+    s.tiempo_neto_min = Number(s.minutos_acumulados) || 0;
     s.estado_subtarea = "terminado";
     s.foto_terminado_url = tempFinishSubtaskPhoto;
     s.foto_evidencia_terminado = tempFinishSubtaskPhoto;
     s.fecha_terminado = todayIso;
     s.fecha_fin = todayIso;
+    s.updated_at = nowTs;
     totalBatchMinutes += Number(s.minutos_acumulados) || 0;
     totalCommBatch += Number(s.comision_base_tecnico) || 0;
   });
@@ -15748,15 +16428,19 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
     const allOrderSubs = db.subtareas.filter((s) => s.orden_id === ord.id_orden);
     const allDone = allOrderSubs.every((s) => s.estado_subtarea === "terminado");
     ord.tiempo_neto_minutos = allOrderSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
+    ord.updated_at = nowTs;
 
-    if (allDone) {
+    // GUARDIA MONOTÓNICA (v46): Jamás retroceder una orden que Gerencia ya aprobó a 6. En Entrega o Archivada
+    const alreadyBeyondQc = ["calidad", "control_calidad", "entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual);
+    if (allDone && !alreadyBeyondQc) {
       ord.subestado_ejecucion = "terminado";
       ord.estado_actual = "control_calidad";
       ord.devuelto_calidad = false;
+      ord.stage_updated_at = nowTs;
     }
 
     db.bitacora.push({
-      id_mensaje: "MSG-" + Date.now(),
+      id_mensaje: "MSG-" + nowTs,
       orden_id: ord.id_orden,
       codigo_troquel: ord.codigo_troquel,
       autor_id: currentUser ? currentUser.id_usuario : targetWorkerId,
@@ -15764,20 +16448,21 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
       autor_rol: "Técnico",
       tipo_evento: "terminado",
       mensaje: `TROQUEL FINALIZADO (${pendingSubs.length} tarea/s: ${summaryLabel}) con 1 foto general obligatoria (Tiempo total: ${formatMinutes(totalBatchMinutes)}). ${
-        allDone
+        allDone && !alreadyBeyondQc
           ? "NOTIFICACIÓN AL SUPERVISOR: Todas las tareas de la pieza están listas. La orden pasa a 5. Control de Calidad."
           : ""
       }`,
       foto_adjunta_url: tempFinishSubtaskPhoto,
-      fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+      fecha_hora: getLocalIsoDateTime()
     });
   }
 
   tempFinishSubtaskPhoto = "";
   saveDatabase(`Troquel #${ord ? ord.codigo_troquel : orderId} finalizado con foto general`);
+  flushCloudPush(true, { reason: `Troquel #${ord ? ord.codigo_troquel : orderId} finalizado`, actorRole: currentUser ? currentUser.rol : null });
   closeModal();
   renderApp();
-  showToast(`¡Excelente! Troquel #${ord ? ord.codigo_troquel : ""} marcado como LISTO (${pendingSubs.length} tarea/s · +$${totalCommBatch.toFixed(2)}).`, "success");
+  showToast(`¡Excelente! Troquel #${ord ? ord.codigo_troquel : ""} marcado como LISTO (${pendingSubs.length} tarea/s · ${formatMinutes(totalBatchMinutes)} · +$${totalCommBatch.toFixed(2)}).`, "success");
 }
 
 /* ============================================================================
@@ -15797,8 +16482,8 @@ function getCurrentPayrollWeekRange() {
   const fmtD = (d) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
   return {
     label: `${fmtD(monD)} - ${fmtD(sunD)}`,
-    startIso: monD.toISOString().slice(0, 10),
-    endIso: sunD.toISOString().slice(0, 10)
+    startIso: getLocalIsoDate(monD),
+    endIso: getLocalIsoDate(sunD)
   };
 }
 
@@ -19450,6 +20135,13 @@ function deleteFinanceMovement(movId) {
       );
     });
 
+    const affectedOrderIds = new Set();
+    pairedMovs.forEach((pm) => {
+      if (isOrderPaymentMovement(pm)) {
+        affectedOrderIds.add(String(pm.orden_id));
+      }
+    });
+
     db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((m) => {
       const mid = String(m.id_mov || m.id_movimiento || "");
       return !idsToDelete.has(mid) && mid !== String(movId);
@@ -19460,13 +20152,19 @@ function deleteFinanceMovement(movId) {
         return !idsToDelete.has(mid) && mid !== String(movId);
       });
     }
+
+    // Conciliación automática v46: si se borró un pago/abono ligado a una orden, recalcular su saldo inmediatamente
+    affectedOrderIds.forEach((oid) => reconcileOrderBalanceFromLedger(oid));
+
     saveDatabase(isPairedTransfer ? "Transferencia eliminada" : "Movimiento financiero eliminado");
     renderApp();
     await flushCloudPush(true);
     showToast(
       isPairedTransfer
         ? "Transferencia (Salida + Entrada) eliminada y saldos restaurados."
-        : "Movimiento eliminado del Libro Diario (recuperable en Papelera)."
+        : (affectedOrderIds.size
+            ? "Movimiento eliminado y saldo de la orden recalculado automáticamente."
+            : "Movimiento eliminado del Libro Diario (recuperable en Papelera).")
     );
   });
 }
@@ -19789,6 +20487,7 @@ function clearTransferPhoto(slotIdx) {
 }
 
 function saveTransferBetweenAccounts() {
+  if (isDoubleActionGuard("save_transfer_accounts", 2000)) return;
   const originId = document.getElementById("trf-origin-account")?.value;
   const destId = document.getElementById("trf-dest-account")?.value;
   const amountOut = Math.max(0, Number(document.getElementById("trf-amount")?.value) || 0);
@@ -19810,7 +20509,7 @@ function saveTransferBetweenAccounts() {
   const originAcc = findBankAccountById(originId);
   const destAcc = findBankAccountById(destId);
   const now = new Date();
-  const dateIso = now.toISOString().slice(0, 10);
+  const dateIso = getLocalIsoDate(now);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const baseTs = Date.now();
   const trfGroupId = "TRF-" + baseTs;
@@ -20079,6 +20778,7 @@ function openNewFinanceMovementModal(tipo) {
 }
 
 function saveNewFinanceMovement(tipo) {
+  if (isDoubleActionGuard(`save_fin_mov_${tipo}`, 1800)) return;
   const typedCat = (document.getElementById("mov-cat-search")?.value || "").trim();
   const cat = (document.getElementById("mov-cat")?.value || typedCat || "").trim();
   const amount = Math.max(0, Number(document.getElementById("mov-amount")?.value) || 0);
@@ -20108,7 +20808,7 @@ function saveNewFinanceMovement(tipo) {
   const now = new Date();
   db.finanzas_movimientos.unshift({
     id_mov: "MOV-" + Date.now(),
-    fecha: now.toISOString().slice(0, 10),
+    fecha: getLocalIsoDate(now),
     hora: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     tipo,
     categoria: cat,
@@ -20749,6 +21449,32 @@ function openClientHistoryModal(clientId) {
           <span class="kpi-sub">${totalDebt > 0 ? "Cuenta por cobrar abierta" : "Solvente al día"}</span>
         </div>
       </div>
+
+      ${(function () {
+        const desyncedOrders = clientOrders
+          .map((o) => ({ order: o, lSum: getOrderLedgerPaymentsSummary(o.id_orden) }))
+          .filter(({ order, lSum }) => lSum.count > 0 && (Math.abs(lSum.sum - Number(order.monto_abonado || 0)) > 0.01 || lSum.sum > Number(order.monto_total || 0) + 0.01));
+        if (!desyncedOrders.length) return "";
+        return `
+          <div style="background:rgba(245,158,11,0.12); border:1.5px solid rgba(245,158,11,0.5); border-radius:12px; padding:10px 14px; margin-bottom:14px;">
+            <div style="font-size:12px; font-weight:900; color:#fbbf24; margin-bottom:6px;">
+              <i class="fas fa-triangle-exclamation"></i> Descuadre detectado entre Libro Diario y Ficha de Orden
+            </div>
+            ${desyncedOrders
+              .map(({ order, lSum }) => `
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; margin-top:4px;">
+                  <span>
+                    <strong>Troquel #${escapeHtml(order.codigo_troquel)}</strong>: Caja suma <strong>$${lSum.sum.toFixed(2)}</strong> (${lSum.count} pagos) · Ficha muestra <strong>$${Number(order.monto_abonado || 0).toFixed(2)}</strong> abonado.${lSum.sum > Number(order.monto_total || 0) + 0.01 ? " <em>(Hay un pago excedente/duplicado en Libro Diario)</em>" : ""}
+                  </span>
+                  <button type="button" class="btn btn--gold btn--xs" onclick="syncOrderBalanceWithLedgerAndSave('${order.id_orden}'); openClientPaymentHistoryModal('${client.id_cliente}');">
+                    <i class="fas fa-sync"></i> Conciliar Troquel #${escapeHtml(order.codigo_troquel)}
+                  </button>
+                </div>
+              `)
+              .join("")}
+          </div>
+        `;
+      })()}
 
       <div class="form-section-box">
         <div class="form-section-title"><i class="fas fa-cogs"></i> Piezas / Troqueles de ${client.nombre_completo}</div>
@@ -23366,6 +24092,26 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!lastCloudPullDoneTs || Date.now() - lastCloudPullDoneTs >= 6000) {
       syncFromGoogleSheets(true);
     }
+  });
+  // Sincronización en tiempo real entre pestañas abiertas del mismo navegador (evita peleas entre perfiles en la misma PC)
+  window.addEventListener("storage", (ev) => {
+    try {
+      if (ev.key === CLOUD_REV_KEY && ev.newValue) {
+        const nextRev = Number(ev.newValue) || 0;
+        if (nextRev > lastKnownCloudRevision) lastKnownCloudRevision = nextRev;
+      }
+      if (ev.key === SYNC_BASE_DIGESTS_KEY && ev.newValue) {
+        const parsedBase = safeJsonParse(ev.newValue, null);
+        if (parsedBase && typeof parsedBase === "object") lastSyncedRecordDigests = parsedBase;
+      }
+      if (ev.key === STORAGE_KEY && ev.newValue && !hasUnsyncedLocalChanges && !cloudPushInFlight && !isAnyModalOpen()) {
+        const parsedDb = safeJsonParse(ev.newValue, null);
+        if (parsedDb && Array.isArray(parsedDb.usuarios)) {
+          db = normalizeDatabaseSchema(parsedDb);
+          if (currentUser) renderApp();
+        }
+      }
+    } catch (e) {}
   });
   window.addEventListener("beforeunload", (e) => {
     if (hasUnsyncedLocalChanges || cloudPushInFlight || cloudPushPending || cloudPushDebounceTimer) {
