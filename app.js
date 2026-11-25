@@ -68,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.25.v46.2";
+const CURRENT_APP_VERSION = "2026.11.25.v47";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -557,6 +557,26 @@ function formatDateHuman(raw, includeTime = false) {
   if (!y || !m || !d) return cleaned;
   const formattedDate = `${d}/${m}/${y}`;
   return includeTime && timePart ? `${formattedDate} ${timePart}` : formattedDate;
+}
+
+/* ---------- Formateador Visual de Vehículo (v47): MODELO grande a la izquierda y MARCA pequeña al lado ---------- */
+function formatVehicleModelFirstHtml(datosMotor, mode = "card") {
+  const dm = datosMotor || {};
+  const marca = String(dm.marca || "").trim();
+  const modelo = String(dm.modelo || "").trim();
+  const primary = modelo || marca || "Motor";
+  const secondary = modelo && marca ? marca : "";
+  if (mode === "card") {
+    return `${escapeHtml(primary)}${secondary ? ` <span style="font-size:13px; font-weight:700; color:#94a3b8; text-transform:none;">${escapeHtml(secondary)}</span>` : ""}`;
+  }
+  if (mode === "list") {
+    return `<span style="font-weight:900; font-size:13.5px; text-transform:uppercase;">${escapeHtml(primary)}</span>${secondary ? ` <span style="font-size:11.5px; font-weight:600; color:var(--text-muted);">${escapeHtml(secondary)}</span>` : ""}`;
+  }
+  if (mode === "worker") {
+    const pieza = String(dm.tipo_pieza || "Cámara / Culata").trim();
+    return `<span style="font-weight:900; text-transform:uppercase;">${escapeHtml(primary)}</span>${secondary ? ` <span style="font-size:11.5px; font-weight:700; color:var(--text-muted); text-transform:none;">${escapeHtml(secondary)}</span>` : ""}<span style="font-size:11px; font-weight:600; color:var(--text-muted); text-transform:none;"> · ${escapeHtml(pieza)}</span>`;
+  }
+  return `<strong>${escapeHtml(primary)}</strong>${secondary ? ` <span style="font-size:0.86em; font-weight:600; opacity:0.75;">${escapeHtml(secondary)}</span>` : ""}`;
 }
 
 function cleanTimeHuman(raw) {
@@ -5127,7 +5147,7 @@ function renderBitacoraNotificationsDropdown() {
             <div class="bitacora-notif-item bitacora-notif-item--read" onclick="openBitacoraFromNotification('${ord.id_orden}')">
               <div class="bitacora-notif-item-top">
                 <span class="bitacora-notif-troquel"><i class="fas fa-barcode"></i> #${escapeHtml(ord.codigo_troquel)}</span>
-                <span class="bitacora-notif-vehicle">${escapeHtml(ord.datos_motor?.marca || "")} ${escapeHtml(ord.datos_motor?.modelo || "")}</span>
+                <span class="bitacora-notif-vehicle">${formatVehicleModelFirstHtml(ord.datos_motor, "inline")}</span>
                 <span class="bitacora-notif-time">${formatDateHuman(msg.fecha_hora, true)}</span>
               </div>
               <div class="bitacora-notif-preview">
@@ -5153,7 +5173,7 @@ function renderBitacoraNotificationsDropdown() {
               <div class="bitacora-notif-item-top">
                 <div style="display:flex; align-items:center; gap:6px; min-width:0; flex:1;">
                   <span class="bitacora-notif-troquel"><i class="fas fa-barcode"></i> #${escapeHtml(g.codigo_troquel)}</span>
-                  <span class="bitacora-notif-vehicle">${escapeHtml(g.order.datos_motor?.marca || "")} ${escapeHtml(g.order.datos_motor?.modelo || "")}</span>
+                  <span class="bitacora-notif-vehicle">${formatVehicleModelFirstHtml(g.order.datos_motor, "inline")}</span>
                 </div>
                 <span class="bitacora-notif-count-pill">${g.unreadCount} ${g.unreadCount === 1 ? "nuevo" : "nuevos"}</span>
               </div>
@@ -6406,7 +6426,7 @@ function renderReceptionScreen() {
                 <div style="font-size:11px; color:var(--text-muted);"><i class="fas fa-phone"></i> ${escapeHtml(o.telefono_cliente || "-")}</div>
               </td>
               <td>
-                <strong>${escapeHtml(o.datos_motor.marca)} ${escapeHtml(o.datos_motor.modelo)}</strong>
+                <div>${formatVehicleModelFirstHtml(o.datos_motor, "list")}</div>
                 <div style="font-size:11px; color:var(--text-muted);">${escapeHtml(o.datos_motor.tipo_pieza || "Pieza")}</div>
               </td>
               <td>
@@ -6565,7 +6585,7 @@ function renderReceptionScreen() {
               <tr>
                 <td><strong style="font-family:'JetBrains Mono',monospace; color:var(--renacer-gold); font-size:14px;">#${escapeHtml(o.codigo_troquel)}</strong></td>
                 <td><strong>${escapeHtml(o.nombre_cliente)}</strong><div style="font-size:11px; color:var(--text-muted);">${escapeHtml(o.telefono_cliente || "")}</div></td>
-                <td>${escapeHtml(o.datos_motor.marca)} ${escapeHtml(o.datos_motor.modelo)}</td>
+                <td>${formatVehicleModelFirstHtml(o.datos_motor, "list")}</td>
                 <td>${formatDateHuman(o.fecha_ingreso, false)}</td>
                 <td><span class="state-badge state-badge--${o.estado_actual}">${formatStageName(o.estado_actual)}</span></td>
                 <td style="text-align:right; white-space:nowrap;">
@@ -8335,7 +8355,7 @@ function renderOrdersCompactTable(orders) {
             <div style="font-size:11.5px; color:var(--text-muted);">${o.telefono_cliente}</div>
           </td>
           <td>
-            <div style="font-weight:800;">${o.datos_motor.marca} ${o.datos_motor.modelo}</div>
+            <div>${formatVehicleModelFirstHtml(o.datos_motor, "list")}</div>
             <div style="font-size:11px; color:var(--text-muted);">${o.datos_motor.tipo_pieza}</div>
           </td>
           <td>
@@ -8785,7 +8805,7 @@ function renderOrderCardTelegramStyle(order) {
       <!-- 2. DATOS DE VEHÍCULO / MOTOR Y CLIENTE (DISEÑO IMAGEN 6) -->
       <div class="order-clean-subheader">
         <div class="order-clean-brand">
-          ${order.datos_motor.marca} ${order.datos_motor.modelo ? `<span style="font-size:13px; font-weight:700; color:#94a3b8; text-transform:none;">${order.datos_motor.modelo}</span>` : ""}
+          ${formatVehicleModelFirstHtml(order.datos_motor, "card")}
         </div>
         <div class="order-clean-client-info">
           <span><i class="fas fa-user"></i> ${order.nombre_cliente}</span>
@@ -10288,7 +10308,7 @@ function quickViewOrderDetails(orderId) {
           <div style="font-size:11px; font-weight:800; color:var(--renacer-gold); text-transform:uppercase; margin-bottom:4px;">
             <i class="fas fa-car"></i> Motor y Vehículo
           </div>
-          <div style="font-size:15px; font-weight:900;">${order.datos_motor.marca} ${order.datos_motor.modelo || ""}</div>
+          <div style="font-size:15px; font-weight:900;">${formatVehicleModelFirstHtml(order.datos_motor, "card")}</div>
           <div style="font-size:12.5px; color:var(--text-main); margin-top:2px;">Pieza: <strong>${order.datos_motor.tipo_pieza}</strong></div>
           ${order.datos_motor.serial_pieza ? `<div style="font-size:11.5px; color:var(--text-muted);">Serial: ${order.datos_motor.serial_pieza}</div>` : ""}
           ${order.observaciones_iniciales ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:6px; font-style:italic;">Nota: "${order.observaciones_iniciales}"</div>` : ""}
@@ -11357,20 +11377,107 @@ let tempNewOrderState = {
   itemsPresupuesto: []
 };
 
-function getAlliedWorkshopsOptions() {
-  const alliedClients = (db.clientes || []).filter((c) => c.es_taller_aliado || (c.tipo_cliente && c.tipo_cliente.includes("aliado")));
+function getAlliedWorkshopsCatalog() {
+  const alliedClients = (db.clientes || []).filter((c) => c.es_taller_aliado || (c.tipo_cliente && String(c.tipo_cliente).toLowerCase().includes("aliado")));
   const alliedOutsourcing = (db.usuarios || []).filter((u) => u.rol === "outsourcing" || u.tipo === "taller_externo");
-  
-  const options = [];
+
+  const items = [];
   alliedClients.forEach((c) => {
-    options.push(`<option value="CLI_${c.id_cliente}">${c.nombre_completo} (${c.documento_identidad})</option>`);
+    items.push({
+      val: `CLI_${c.id_cliente}`,
+      nombre: String(c.nombre_completo || c.nombre_cliente || "").trim(),
+      doc: String(c.documento_identidad || "").trim(),
+      telefono: String(c.telefono || "").trim(),
+      badge: "Taller Aliado"
+    });
   });
   alliedOutsourcing.forEach((u) => {
-    if (!alliedClients.some((c) => c.nombre_completo === u.nombre)) {
-      options.push(`<option value="USR_${u.id_usuario}">${u.nombre} (Taller Aliado Externo)</option>`);
+    const uName = String(u.nombre || "").trim();
+    if (uName && !items.some((x) => x.nombre.toLowerCase() === uName.toLowerCase())) {
+      items.push({
+        val: `USR_${u.id_usuario}`,
+        nombre: uName,
+        doc: "",
+        telefono: String(u.telefono || "").trim(),
+        badge: "Aliado Externo"
+      });
     }
   });
-  return options.join("");
+  return items.sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { sensitivity: "base" }));
+}
+
+function getAlliedWorkshopsOptions() {
+  return getAlliedWorkshopsCatalog()
+    .map((it) => `<option value="${escapeHtml(it.val)}">${escapeHtml(it.nombre)}${it.doc ? ` (${escapeHtml(it.doc)})` : ` (${it.badge})`}</option>`)
+    .join("");
+}
+
+function normalizeSearchChars(str) {
+  return String(str || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function filterFastAlliedDropdown(query) {
+  const dropdown = document.getElementById("fast-allied-dropdown");
+  if (!dropdown) return;
+  const q = normalizeSearchChars(query);
+  const catalog = getAlliedWorkshopsCatalog();
+  const matches = q
+    ? catalog.filter((it) => normalizeSearchChars(`${it.nombre} ${it.doc} ${it.telefono}`).includes(q))
+    : catalog;
+
+  if (!catalog.length) {
+    dropdown.innerHTML = `<div style="padding:10px 12px; font-size:12px; color:var(--text-muted); text-align:center;">No hay talleres aliados registrados todavía.</div>`;
+  } else if (!matches.length) {
+    dropdown.innerHTML = `<div style="padding:10px 12px; font-size:12px; color:var(--text-muted); text-align:center;">Sin coincidencias para "<strong>${escapeHtml(query)}</strong>".</div>`;
+  } else {
+    dropdown.innerHTML = matches
+      .map((it) => {
+        const safeVal = String(it.val).replace(/'/g, "\\'");
+        const safeLabel = String(it.nombre).replace(/'/g, "\\'");
+        const meta = [it.doc, it.telefono].filter(Boolean).join(" · ") || it.badge;
+        return `
+          <div class="fin-cat-option" onmousedown="event.preventDefault(); selectFastAlliedFromSearch('${safeVal}', '${safeLabel}')">
+            <div style="min-width:0;">
+              <div style="font-weight:800; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                <i class="fas fa-handshake" style="color:var(--renacer-gold); margin-right:5px;"></i>${escapeHtml(it.nombre)}
+              </div>
+              <div style="font-size:10.5px; color:var(--text-muted); font-weight:600;">${escapeHtml(meta)}</div>
+            </div>
+            <span style="font-size:10px; font-weight:800; color:var(--renacer-gold); flex-shrink:0;">Elegir</span>
+          </div>
+        `;
+      })
+      .join("");
+  }
+  dropdown.classList.add("open");
+}
+
+function closeFastAlliedDropdownDelayed() {
+  setTimeout(() => {
+    const dropdown = document.getElementById("fast-allied-dropdown");
+    if (dropdown) dropdown.classList.remove("open");
+  }, 160);
+}
+
+function selectFastAlliedFromSearch(val, displayLabel) {
+  const inp = document.getElementById("search-fast-allied-workshop");
+  const dropdown = document.getElementById("fast-allied-dropdown");
+  if (inp) inp.value = displayLabel || "";
+  if (dropdown) dropdown.classList.remove("open");
+  handleFastAlliedSelect(val);
+}
+
+function clearFastAlliedSearch() {
+  const inp = document.getElementById("search-fast-allied-workshop");
+  if (inp) {
+    inp.value = "";
+    inp.focus();
+  }
+  filterFastAlliedDropdown("");
 }
 
 function handleFastAlliedSelect(val) {
@@ -11523,12 +11630,26 @@ function openNewOrderModal() {
         <div class="form-section-box">
           <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
             <span><i class="fas fa-id-card"></i> 1. Identificación del Cliente / Taller Aliado</span>
-            <div style="display:flex; align-items:center; gap:6px;">
-              <span style="font-size:11px; font-weight:800; color:var(--renacer-gold);"><i class="fas fa-handshake"></i> ¿Es Taller Aliado?:</span>
-              <select id="select-fast-allied-workshop" onchange="handleFastAlliedSelect(this.value)" style="padding:4px 8px; font-size:11.5px; font-weight:800; border-radius:8px; background:var(--bg-card); color:var(--text-main); border:1.5px solid var(--renacer-gold);">
-                <option value="">-- Seleccionar Taller Aliado Registrado --</option>
-                ${getAlliedWorkshopsOptions()}
-              </select>
+            <div class="allied-fast-search-row">
+              <span style="font-size:11px; font-weight:800; color:var(--renacer-gold); white-space:nowrap;"><i class="fas fa-handshake"></i> ¿Es Taller Aliado?:</span>
+              <div class="fin-cat-combobox allied-fast-combobox">
+                <div class="fin-cat-combobox-input-wrap">
+                  <input
+                    type="text"
+                    id="search-fast-allied-workshop"
+                    placeholder="Filtrar taller aliado (escribe 2-3 letras)..."
+                    oninput="filterFastAlliedDropdown(this.value)"
+                    onfocus="filterFastAlliedDropdown(this.value)"
+                    onblur="closeFastAlliedDropdownDelayed()"
+                    autocomplete="off"
+                    style="padding:5px 28px 5px 10px; font-size:11.5px; font-weight:800; border-radius:8px; background:var(--bg-card); color:var(--text-main); border:1.5px solid var(--renacer-gold);"
+                  />
+                  <button type="button" class="fin-cat-combobox-clear" onclick="clearFastAlliedSearch()" title="Limpiar / Ver lista">
+                    <i class="fas fa-times"></i>
+                  </button>
+                </div>
+                <div id="fast-allied-dropdown" class="fin-cat-combobox-dropdown"></div>
+              </div>
             </div>
           </div>
           <div class="form-grid-3">
@@ -12963,7 +13084,7 @@ function openSubtaskAssignmentModal(orderId, directAdvance = false) {
             <button type="button" class="btn-troquel-clickable" style="font-size:13px; padding:3px 10px;" onclick="quickViewOrderDetails('${order.id_orden}')" title="Inspeccionar ficha técnica">
               <i class="fas fa-barcode"></i> TROQUEL #${order.codigo_troquel}
             </button>
-            <span style="font-size:13.5px; font-weight:900;">${escapeHtml(order.datos_motor.marca)} ${escapeHtml(order.datos_motor.modelo)}</span>
+            <span style="font-size:13.5px; font-weight:900;">${formatVehicleModelFirstHtml(order.datos_motor, "inline")}</span>
           </div>
           <div style="font-size:12px; color:var(--text-muted); line-height:1.45;">
             Pieza: <strong>${escapeHtml(order.datos_motor.tipo_pieza)}</strong> · Serial: <strong>${escapeHtml(order.datos_motor.serial)}</strong><br/>
@@ -15038,7 +15159,7 @@ function renderAccountsReceivableScreen() {
                   </div>
                   <div>
                     <div style="font-weight:800; font-size:14px; color:var(--text-main);">
-                      ${ord.datos_motor.marca} ${ord.datos_motor.modelo || ""}
+                      ${formatVehicleModelFirstHtml(ord.datos_motor, "inline")}
                     </div>
                     <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
                       ${ord.datos_motor.tipo_pieza} · Ingreso: <strong>${formatDateHuman(ord.fecha_ingreso, false)}</strong>
@@ -15806,7 +15927,7 @@ function renderWorkerPanelScreen() {
             }
             <div style="min-width:0;">
               <div class="worker-tapa-title worker-tapa-title--compact">
-                ${escapeHtml(ord.datos_motor?.tipo_pieza || "Cámara / Culata")} · ${escapeHtml(ord.datos_motor?.marca || "")} ${escapeHtml(ord.datos_motor?.modelo || "")}
+                ${formatVehicleModelFirstHtml(ord.datos_motor, "worker")}
               </div>
               <div class="worker-tapa-meta worker-tapa-meta--compact">
                 <span><i class="fas fa-calendar-alt"></i> ${formatDateHuman(ord.fecha_ingreso, false)}</span>
@@ -15934,9 +16055,71 @@ function renderWorkerPanelScreen() {
         }
       `;
 
+  const isTechOwnView = Boolean(currentUser && currentUser.rol === "tecnico");
+  const workerTodayCheckIn = getWorkerTodayCheckInRecord(activeWorkerId);
+  const workerPresence = getWorkerCurrentPresence(activeWorkerId);
+  const isBlockedByAttendance = isTechOwnView && isWorkerBlockedByAttendanceGate(currentUser);
+
+  // BARRA SUPERIOR DEDICADA DE ESCANEO DE ASISTENCIA (v47 — pedido de Jesús para vista principal del trabajador)
+  const attendanceQuickTopBarHtml = isTechOwnView
+    ? `
+      <div class="worker-attendance-top-bar ${workerTodayCheckIn ? "worker-attendance-top-bar--checked" : ""}">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0; flex:1;">
+          <div style="width:36px; height:36px; border-radius:10px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:16px; background:${workerTodayCheckIn ? "rgba(34,197,94,0.16)" : "rgba(245,223,0,0.16)"}; color:${workerTodayCheckIn ? "#22c55e" : "var(--renacer-gold)"};">
+            <i class="fas ${workerTodayCheckIn ? "fa-check-circle" : "fa-qrcode"}"></i>
+          </div>
+          <div style="min-width:0;">
+            <div style="font-size:12.5px; font-weight:900; color:${workerTodayCheckIn ? "#22c55e" : "var(--renacer-gold)"};">
+              ${workerTodayCheckIn ? `Asistencia de hoy registrada (${escapeHtml(workerPresence.label)})` : "Asistencia Presencial Pendiente Hoy"}
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); font-weight:600;">
+              ${
+                workerTodayCheckIn
+                  ? "Puedes volver a escanear para registrar salida/regreso de almuerzo o fin de jornada."
+                  : "Escanea el QR en el teléfono de Recepción o Gerencia para abrir tu mesa de trabajo."
+              }
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          id="btn-worker-top-scan-attendance"
+          class="btn ${workerTodayCheckIn ? "btn--ghost" : "btn--gold"} worker-attendance-top-btn"
+          style="${workerTodayCheckIn ? "border-color:rgba(34,197,94,0.5); color:#22c55e;" : ""}"
+          onclick="openTechnicianQrScanModal()"
+        >
+          <i class="fas fa-qrcode"></i> Escanear Asistencia
+        </button>
+      </div>
+    `
+    : "";
+
+  const attendanceGateLockHtml = `
+    <div id="worker-attendance-gate-lock" class="worker-attendance-gate-card">
+      <div class="worker-attendance-gate-icon">
+        <i class="fas fa-lock"></i>
+      </div>
+      <h3 style="font-size:18px; font-weight:900; margin:2px 0 0;">Mesa de Trabajo Bloqueada</h3>
+      <p style="font-size:13px; color:var(--text-muted); max-width:440px; margin:0; line-height:1.5;">
+        Para abrir tus piezas asignadas e iniciar trabajos hoy, primero debes <strong>escanear tu asistencia presencial</strong> en el teléfono de <strong>Recepción o Gerencia</strong>.
+      </p>
+      ${
+        pendingGroups.length > 0
+          ? `<div style="background:rgba(245,223,0,0.12); border:1px solid rgba(245,223,0,0.45); color:var(--renacer-gold); padding:6px 14px; border-radius:99px; font-size:12px; font-weight:800;">
+               <i class="fas fa-wrench"></i> Tienes ${pendingGroups.length} troquel(es) esperando en tu mesa
+             </div>`
+          : ""
+      }
+      <button type="button" class="btn btn--gold btn--lg" style="margin-top:6px; font-weight:900;" onclick="openTechnicianQrScanModal()">
+        <i class="fas fa-camera"></i> Escanear Asistencia (QR)
+      </button>
+    </div>
+  `;
+
   return `
     ${workerSelectorBar}
-    <!-- CABECERA COMPACTA DEL PANEL TÉCNICO (v43) -->
+    ${attendanceQuickTopBarHtml}
+    <!-- CABECERA COMPACTA DEL PANEL TÉCNICO (v43/v47) -->
     <div class="worker-top-compact-bar">
       <div style="min-width:0;">
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -15958,6 +16141,10 @@ function renderWorkerPanelScreen() {
       </div>
     </div>
 
+    ${
+      isBlockedByAttendance
+        ? attendanceGateLockHtml
+        : `
     <!-- PESTAÑAS SEPARADORAS: PENDIENTES EN MESA VS FINALIZADOS / ENTREGADOS -->
     <div class="worker-section-tabs">
       <button type="button" class="worker-section-tab-btn ${workerPanelViewTab === "pendientes" ? "active" : ""}" onclick="setWorkerPanelViewTab('pendientes')">
@@ -15990,6 +16177,8 @@ function renderWorkerPanelScreen() {
     }
 
     ${mainCardsSectionHtml}
+    `
+    }
   `;
 }
 
@@ -16042,6 +16231,11 @@ function registerWorkerActiveDayProject(workerId, workerName, troquelCode, servi
 }
 
 function startSubtaskWork(subtaskId) {
+  if (isWorkerBlockedByAttendanceGate()) {
+    showToast("Debes escanear tu asistencia presencial de hoy antes de iniciar trabajos.", "warning");
+    openTechnicianQrScanModal();
+    return;
+  }
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
   const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
@@ -16351,6 +16545,11 @@ function confirmSubtaskCompletion(subtaskId) {
    inicia, pausa y termina todo el bloque con una única foto general de la pieza.
    ============================================================================ */
 function startWorkerTroquelWork(orderId, workerId) {
+  if (isWorkerBlockedByAttendanceGate()) {
+    showToast("Debes escanear tu asistencia presencial de hoy antes de iniciar trabajos.", "warning");
+    openTechnicianQrScanModal();
+    return;
+  }
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
   if (ord && ["entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual)) {
@@ -17730,7 +17929,7 @@ function openOrderCrmModal(orderId) {
             ${crmHeaderTitle}
           </div>
           <div style="font-size:11.5px; color:var(--text-muted); font-weight:600;">
-            ${order.datos_motor.marca} ${order.datos_motor.modelo} (${order.datos_motor.tipo_pieza})
+            ${formatVehicleModelFirstHtml(order.datos_motor, "inline")} (${order.datos_motor.tipo_pieza})
           </div>
         </div>
         <div>
@@ -19518,7 +19717,7 @@ function deleteWorker(userId) {
 /* ---------- MONITOREO DE HORARIOS, ENTRADA, ALMUERZO Y SALIDA (9:00 AM – 6:00 PM · 1H ALMUERZO) ---------- */
 function renderAttendanceMonitorWidget(options = {}) {
   const embedded = Boolean(options && options.embeddedInDashboard);
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = getLocalIsoDate();
   const isTechnician = currentUser && currentUser.rol === "tecnico";
 
   // PRIVACIDAD POR ROL: Los técnicos de taller solo ven su propio registro de presencia e historial
@@ -19696,6 +19895,21 @@ function renderAttendanceMonitorWidget(options = {}) {
     }
   }
 
+  const gateToggleHtml = !isTechnician
+    ? `
+      <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:12px; padding:10px 14px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <div style="font-size:12px;">
+          <strong style="color:var(--renacer-gold);"><i class="fas fa-lock"></i> Candado Obligatorio de Asistencia Diaria:</strong>
+          <span style="color:var(--text-muted);">Bloquea la Mesa de Trabajo del técnico hasta que escanee el QR presencial de hoy en Recepción o Gerencia.</span>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:800;">
+          <input type="checkbox" ${isMandatoryAttendanceGateEnabled() ? "checked" : ""} onchange="toggleMandatoryAttendanceGate(this.checked)" style="width:18px; height:18px; accent-color:#f5c400; cursor:pointer;" />
+          <span>${isMandatoryAttendanceGateEnabled() ? "Activo (Obligatorio)" : "Desactivado"}</span>
+        </label>
+      </div>
+    `
+    : "";
+
   return `
     <!-- ENCABEZADO Y ACCIONES PRINCIPALES DE ASISTENCIA -->
     <div style="${embedded ? "margin-bottom:14px;" : "background:var(--bg-card); border-radius:18px; padding:16px 20px; border:1px solid var(--border-subtle); margin-bottom:18px;"} display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
@@ -19713,6 +19927,7 @@ function renderAttendanceMonitorWidget(options = {}) {
       </div>
     </div>
 
+    ${gateToggleHtml}
     ${lateAlertBannerHtml}
 
     <!-- TABLERO EN VIVO DE PRESENCIA FÍSICA HOY -->
@@ -19828,6 +20043,74 @@ let ledgerAccountFilter = "all";
 let ledgerCategoryFilter = "all";
 let ledgerDateFrom = "";
 let ledgerDateTo = "";
+let ledgerSortOrder = localStorage.getItem("RENACER_LEDGER_SORT_ORDER") || "desc"; // "desc" = más recientes primero | "asc" = más antiguos primero
+
+function parseLedgerTimeTo24h(horaStr, fechaHoraRaw) {
+  const tryStr = String(horaStr || "").trim();
+  const extract24 = (s) => {
+    if (!s) return "";
+    // 12h format: "02:15 p. m." / "2:15 PM" / "11:05 a. m."
+    const m12 = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)/i);
+    if (m12) {
+      let hh = parseInt(m12[1], 10) || 0;
+      const mm = String(parseInt(m12[2], 10) || 0).padStart(2, "0");
+      const ss = String(parseInt(m12[3] || "0", 10) || 0).padStart(2, "0");
+      const isPm = /^p/i.test(m12[4]);
+      if (isPm && hh < 12) hh += 12;
+      if (!isPm && hh === 12) hh = 0;
+      return `${String(hh).padStart(2, "0")}:${mm}:${ss}`;
+    }
+    // 24h format: "14:35" or "2026-11-25 14:35:00"
+    const m24 = s.match(/(?:^|\s|T)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (m24) {
+      const hh = String(Math.min(23, parseInt(m24[1], 10) || 0)).padStart(2, "0");
+      const mm = String(Math.min(59, parseInt(m24[2], 10) || 0)).padStart(2, "0");
+      const ss = String(Math.min(59, parseInt(m24[3] || "0", 10) || 0)).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    return "";
+  };
+  return extract24(tryStr) || extract24(String(fechaHoraRaw || "")) || "00:00:00";
+}
+
+function getFinanceMovementSortKey(m) {
+  const dateIso = cleanDateISO(m?.fecha || m?.fecha_hora, false) || "0000-00-00";
+  const time24 = parseLedgerTimeTo24h(m?.hora, m?.fecha_hora || m?.fecha);
+  const idDigits = parseInt(String(m?.id_mov || m?.id_movimiento || "").replace(/\D/g, ""), 10) || 0;
+  const tsTie = Number(m?.updated_at) || idDigits || 0;
+  return { dateIso, time24, tsTie };
+}
+
+function compareFinanceMovementsByDate(a, b, order = ledgerSortOrder) {
+  const ka = getFinanceMovementSortKey(a);
+  const kb = getFinanceMovementSortKey(b);
+  const dir = order === "asc" ? 1 : -1;
+  if (ka.dateIso !== kb.dateIso) {
+    return ka.dateIso < kb.dateIso ? -1 * dir : 1 * dir;
+  }
+  if (ka.time24 !== kb.time24) {
+    return ka.time24 < kb.time24 ? -1 * dir : 1 * dir;
+  }
+  if (ka.tsTie !== kb.tsTie) {
+    return (ka.tsTie - kb.tsTie) * dir;
+  }
+  // En transferencias del mismo milisegundo, mantener consistente ENTRADA/SALIDA
+  const idA = String(a?.id_mov || a?.id_movimiento || "");
+  const idB = String(b?.id_mov || b?.id_movimiento || "");
+  return idA.localeCompare(idB) * dir;
+}
+
+function toggleLedgerSortOrder() {
+  ledgerSortOrder = ledgerSortOrder === "asc" ? "desc" : "asc";
+  try { localStorage.setItem("RENACER_LEDGER_SORT_ORDER", ledgerSortOrder); } catch (e) {}
+  renderScreen();
+  showToast(
+    ledgerSortOrder === "desc"
+      ? "Libro Diario ordenado: Más recientes primero."
+      : "Libro Diario ordenado: Más antiguos primero.",
+    "info"
+  );
+}
 
 function isTransferMovement(m) {
   if (!m) return false;
@@ -19970,6 +20253,9 @@ function renderFinancesLedgerScreen() {
   if (ledgerDateTo) {
     filteredMovs = filteredMovs.filter((m) => cleanDateISO(m.fecha) <= ledgerDateTo);
   }
+
+  // ORDEN ESTRICTO POR FECHA EN EL LIBRO DIARIO (v47): nunca desordenado por orden de carga
+  filteredMovs.sort((a, b) => compareFinanceMovementsByDate(a, b, ledgerSortOrder));
 
   const filteredIngresosOp = filteredMovs
     .filter((m) => m.tipo === "ingreso" && !isTransferMovement(m))
@@ -20236,6 +20522,18 @@ function renderFinancesLedgerScreen() {
           <i class="fas fa-calendar-week"></i> Semana Actual
         </button>
 
+        <button
+          type="button"
+          id="btn-ledger-sort-order"
+          class="btn btn--ghost btn--xs"
+          onclick="toggleLedgerSortOrder()"
+          style="padding:6px 10px; font-size:11.5px; font-weight:800; border-color:rgba(56,189,248,0.45); color:#38bdf8;"
+          title="Cambiar orden estricto por fecha del Libro Diario"
+        >
+          <i class="fas ${ledgerSortOrder === "asc" ? "fa-arrow-up-short-wide" : "fa-arrow-down-wide-short"}"></i>
+          ${ledgerSortOrder === "asc" ? "Fecha: Antiguos ↑" : "Fecha: Recientes ↓"}
+        </button>
+
         ${
           hasAnyFilter
             ? `<button type="button" class="btn btn--ghost" style="padding:4px 8px; font-size:11px;" onclick="resetLedgerFilters()" title="Limpiar filtros"><i class="fas fa-undo"></i> Limpiar</button>`
@@ -20265,7 +20563,9 @@ function renderFinancesLedgerScreen() {
       <table class="renacer-table">
         <thead>
           <tr>
-            <th>Fecha</th>
+            <th onclick="toggleLedgerSortOrder()" style="cursor:pointer; user-select:none; white-space:nowrap;" title="Clic para invertir orden estricto por fecha">
+              Fecha <i class="fas ${ledgerSortOrder === "asc" ? "fa-arrow-up" : "fa-arrow-down"}" style="color:var(--renacer-gold); margin-left:3px;"></i>
+            </th>
             <th>Tipo</th>
             <th>Categoría</th>
             <th>Concepto / Detalle</th>
@@ -23060,13 +23360,53 @@ let kioskTimerInterval = null;
 let html5QrCodeScannerInstance = null;
 
 function getTodayAttendanceList() {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  return (db.asistencias || []).filter((a) => a.fecha === todayIso);
+  const todayIso = getLocalIsoDate();
+  return (db.asistencias || []).filter((a) => a && cleanDateISO(a.fecha, false) === todayIso);
+}
+
+function isMandatoryAttendanceGateEnabled() {
+  if (!db || !db.config) return true;
+  return db.config.candado_asistencia_obligatorio !== false;
+}
+
+function toggleMandatoryAttendanceGate(enabled) {
+  if (!db.config) db.config = {};
+  db.config.candado_asistencia_obligatorio = Boolean(enabled);
+  saveDatabase(enabled ? "Candado asistencia QR activado" : "Candado asistencia QR desactivado");
+  flushCloudPush(true, { reason: "Configuración candado asistencia" });
+  renderApp();
+  showToast(
+    enabled
+      ? "Candado obligatorio activado: los técnicos deben escanear asistencia QR para abrir su Mesa de Trabajo."
+      : "Candado obligatorio desactivado temporalmente.",
+    "info"
+  );
+}
+
+function getWorkerTodayCheckInRecord(userId) {
+  if (!userId) return null;
+  const todayRecords = getTodayAttendanceList();
+  return (
+    todayRecords.find((a) => {
+      if (String(a.usuario_id || "") !== String(userId)) return false;
+      const entrada = String(a.hora_entrada || a.hora_registro || "").trim().toLowerCase();
+      const estado = String(a.estado || "").trim().toLowerCase();
+      // Excluir registros pasivos de "Destajo" / "Activo en Taller": exigir entrada presencial real
+      if (!entrada || entrada === "destajo" || estado === "activo en taller") return false;
+      return true;
+    }) || null
+  );
+}
+
+function isWorkerBlockedByAttendanceGate(user) {
+  const u = user || currentUser;
+  if (!u || u.rol !== "tecnico") return false;
+  if (!isMandatoryAttendanceGateEnabled()) return false;
+  return !getWorkerTodayCheckInRecord(u.id_usuario);
 }
 
 function getWorkerCurrentPresence(userId) {
-  const todayRecords = getTodayAttendanceList();
-  const rec = todayRecords.find((a) => a.usuario_id === userId);
+  const rec = getWorkerTodayCheckInRecord(userId);
   if (!rec) return { status: "no_ingreso", label: "No ha ingresado hoy", cls: "text-muted", icon: "fa-circle" };
   if (rec.hora_salida) return { status: "salida_final", label: `Jornada Finalizada (${rec.hora_salida})`, cls: "text-secondary", icon: "fa-flag-checkered", rec };
   if (rec.hora_salida_almuerzo && !rec.hora_regreso_almuerzo) return { status: "en_almuerzo", label: `En Almuerzo (${rec.hora_salida_almuerzo})`, cls: "text-warning", icon: "fa-utensils", rec };
@@ -23410,9 +23750,15 @@ function openTechnicianQrScanModal() {
         </div>
 
         <div style="margin-top:14px; display:flex; justify-content:center; gap:8px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--ghost btn--sm" onclick="stopActiveQrScannerSafely(); promptManualPinAttendance();">
-            ¿Problemas con la cámara? Registrar con PIN
-          </button>
+          ${
+            currentUser && currentUser.rol === "tecnico"
+              ? `<button type="button" class="btn btn--ghost btn--sm" onclick="stopActiveQrScannerSafely(); promptManagerAuthorizedAttendancePin();">
+                   <i class="fas fa-user-shield"></i> ¿Sin cámara? Autorizar con PIN de Gerencia / Recepción
+                 </button>`
+              : `<button type="button" class="btn btn--ghost btn--sm" onclick="stopActiveQrScannerSafely(); promptManualPinAttendance();">
+                   ¿Problemas con la cámara? Registrar con PIN
+                 </button>`
+          }
         </div>
       </div>
     `
@@ -23571,12 +23917,61 @@ function promptManualPinAttendance() {
   });
 }
 
+function promptManagerAuthorizedAttendancePin(targetUserId) {
+  stopActiveQrScannerSafely();
+  const targetUser =
+    (targetUserId ? (db.usuarios || []).find((u) => u.id_usuario === targetUserId) : null) || currentUser;
+  if (!targetUser) return;
+
+  Swal.fire({
+    title: "Autorización Presencial (Sin Cámara)",
+    html: `
+      <div style="text-align:left; font-size:13px; display:grid; gap:10px;">
+        <div style="padding:10px 12px; border-radius:8px; background:rgba(245,223,0,0.12); border:1px solid rgba(245,223,0,0.4); font-size:12px;">
+          <strong>Trabajador:</strong> ${escapeHtml(targetUser.nombre)}<br/>
+          <span style="color:var(--text-muted);">Para registrar asistencia sin escanear QR, un encargado de <strong>Gerencia o Recepción</strong> debe ingresar su PIN presencialmente.</span>
+        </div>
+        <div>
+          <label style="font-weight:700;">PIN de Gerencia / Recepción:</label>
+          <input type="password" id="swal-mgr-att-pin" class="swal2-input" inputmode="numeric" placeholder="PIN de supervisor o recepción" style="width:100%; margin:4px 0 0 0;" />
+        </div>
+      </div>
+    `,
+    showCancelButton: true,
+    confirmButtonText: "Autorizar y Continuar",
+    confirmButtonColor: "#f5c400",
+    cancelButtonText: "Cancelar",
+    preConfirm: () => {
+      const pin = String(document.getElementById("swal-mgr-att-pin")?.value || "").trim();
+      if (!pin) {
+        Swal.showValidationMessage("Ingresa el PIN de Gerencia o Recepción.");
+        return false;
+      }
+      const authorizer = (db.usuarios || []).find(
+        (u) =>
+          u.activo !== false &&
+          (u.rol === "admin" || u.rol === "jefe_taller" || u.rol === "recepcion") &&
+          String(u.pin || "").trim() === pin
+      );
+      if (!authorizer) {
+        Swal.showValidationMessage("PIN no válido. Solo un PIN de Gerencia o Recepción puede autorizar sin QR.");
+        return false;
+      }
+      return authorizer;
+    }
+  }).then((res) => {
+    if (res.isConfirmed && res.value) {
+      handleAttendanceActionForUser(targetUser, `pin_autorizado_${res.value.nombre}`);
+    }
+  });
+}
+
 function handleAttendanceActionForUser(user, method) {
   const now = new Date();
-  const todayIso = now.toISOString().slice(0, 10);
+  const todayIso = getLocalIsoDate(now);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  let existing = (db.asistencias || []).find((a) => a.fecha === todayIso && a.usuario_id === user.id_usuario);
+  let existing = (db.asistencias || []).find((a) => cleanDateISO(a.fecha, false) === todayIso && a.usuario_id === user.id_usuario);
 
   const entradaText = existing?.hora_entrada ? `✅ Entrada: ${existing.hora_entrada} (${existing.estado})` : "⏳ Sin marcar entrada";
   const almuerzoSalText = existing?.hora_salida_almuerzo ? `✅ Salió a almuerzo: ${existing.hora_salida_almuerzo}` : "⏳ Sin salida a almuerzo";
@@ -23636,10 +24031,10 @@ function handleAttendanceActionForUser(user, method) {
 
 function executeAttendanceAction(user, action, method) {
   const now = new Date();
-  const todayIso = now.toISOString().slice(0, 10);
+  const todayIso = getLocalIsoDate(now);
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  let existing = (db.asistencias || []).find((a) => a.fecha === todayIso && a.usuario_id === user.id_usuario);
+  let existing = (db.asistencias || []).find((a) => cleanDateISO(a.fecha, false) === todayIso && a.usuario_id === user.id_usuario);
 
   if (action === "entrada") {
     const isLate = now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() > 15);
@@ -23666,14 +24061,17 @@ function executeAttendanceAction(user, action, method) {
       db.asistencias.unshift(existing);
     } else {
       existing.hora_entrada = timeStr;
+      existing.hora_registro = timeStr;
       existing.estado = isLate ? "Tardanza" : "Puntual";
       existing.estado_hoy = "En Taller";
+      existing.metodo = method;
     }
-    saveDatabase();
+    saveDatabase(`Asistencia entrada ${user.nombre}`);
+    flushCloudPush(true, { reason: `Asistencia entrada ${user.nombre}`, actorRole: currentUser ? currentUser.rol : null });
     Swal.close();
     closeModal();
     renderApp();
-    showToast(`Entrada registrada para ${user.nombre} (${timeStr} - ${isLate ? "Tardanza" : "Puntual"}).`, isLate ? "warning" : "info");
+    showToast(`Entrada registrada para ${user.nombre} (${timeStr} - ${isLate ? "Tardanza" : "Puntual"}). Mesa de trabajo desbloqueada.`, isLate ? "warning" : "success");
     return;
   }
 
