@@ -1,4 +1,4 @@
-const CACHE_NAME = 'renacer-taller-v46_1';
+const CACHE_NAME = 'renacer-taller-v46_2';
 const STATIC_ASSETS = [
   './',
   './index.html',
