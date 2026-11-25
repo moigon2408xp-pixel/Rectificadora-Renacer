@@ -68,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.25.v46.1";
+const CURRENT_APP_VERSION = "2026.11.25.v46.2";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -4873,6 +4873,97 @@ function saveUserBitacoraReadTimestamp(userId, orderId, tsValue, syncCloud = fal
   }
 }
 
+function isBitacoraMessageFinancialOrConfidential(m, user) {
+  if (!m) return true;
+  const u = user || currentUser;
+  const isPriv = Boolean(u && (u.rol === "admin" || u.rol === "jefe_taller"));
+  if (isPriv) return false;
+
+  const ev = String(m.tipo_evento || "").toLowerCase();
+  const rawMsg = String(m.mensaje || "");
+  const txt = rawMsg.toLowerCase();
+
+  // Excepción útil: la aprobación de Calidad SÍ la ve el técnico, pero sanitizada sin montos de factura
+  if (ev === "control_calidad" && txt.includes("control de calidad aprobado")) {
+    return false;
+  }
+
+  const hiddenEvents = [
+    "cobro_resto",
+    "abono",
+    "pago",
+    "finanzas",
+    "modificacion",
+    "presupuesto_abierto",
+    "entrega",
+    "conciliacion",
+    "anulacion",
+    "subtarea_eliminada"
+  ];
+  if (hiddenEvents.includes(ev)) return true;
+
+  const confidentialKeywords = [
+    "presupuesto inicial",
+    "pago recibido",
+    "saldo pendiente",
+    "resto pendiente",
+    "cuentas por cobrar",
+    "condición financiera",
+    "condicion financiera",
+    "abonado",
+    "abono",
+    "crédito",
+    "credito",
+    "total:",
+    "total factura",
+    "nuevo total",
+    "factura abierta",
+    "modificación completa",
+    "modificacion completa",
+    "libro diario",
+    "cobro automático",
+    "cobro automatico",
+    "finiquit",
+    "conciliad",
+    "transferencia",
+    "pago móvil",
+    "pago movil",
+    "zelle",
+    "banesco",
+    "mercantil",
+    "provincial",
+    "bolívares",
+    "factura ya saldada",
+    "monto:",
+    "precio"
+  ];
+  if (confidentialKeywords.some((kw) => txt.includes(kw))) return true;
+
+  // Red de seguridad adicional para técnicos: ningún mensaje automático del sistema con montos en $ se expone
+  if (u && u.rol === "tecnico" && ev !== "comentario" && /\$\s*\d/.test(rawMsg)) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizeBitacoraMessageForUser(m, user) {
+  const raw = String((m && m.mensaje) || "");
+  const u = user || currentUser;
+  const isPriv = Boolean(u && (u.rol === "admin" || u.rol === "jefe_taller"));
+  if (isPriv) return raw;
+
+  // En aprobaciones de Calidad, retirar cualquier detalle financiero/saldo para el técnico
+  if (String(m && m.tipo_evento || "").toLowerCase() === "control_calidad" && raw.toLowerCase().includes("control de calidad aprobado")) {
+    return raw
+      .replace(/Resto pendiente real en Cuentas por Cobrar:.*$/i, "")
+      .replace(/Factura ya saldada al 100%\.?/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return raw;
+}
+
 function isBitacoraMessageVisibleToUser(m, user) {
   if (!m || !user) return false;
   if (m.id_mensaje === "SYS-META-STATE" || m.orden_id === "__SYSTEM__") return false;
@@ -4886,17 +4977,7 @@ function isBitacoraMessageVisibleToUser(m, user) {
     );
     if (!assignedToOrder) return false;
   }
-  const txt = String(m.mensaje || "").toLowerCase();
-  if (m.tipo_evento === "cobro_resto" || m.tipo_evento === "abono" || m.tipo_evento === "pago" || m.tipo_evento === "finanzas") {
-    return false;
-  }
-  if (
-    txt.includes("presupuesto inicial:") ||
-    txt.includes("pago recibido") ||
-    txt.includes("saldo pendiente") ||
-    txt.includes("resto pendiente") ||
-    txt.includes("abono")
-  ) {
+  if (isBitacoraMessageFinancialOrConfidential(m, user)) {
     return false;
   }
   return true;
@@ -5050,7 +5131,7 @@ function renderBitacoraNotificationsDropdown() {
                 <span class="bitacora-notif-time">${formatDateHuman(msg.fecha_hora, true)}</span>
               </div>
               <div class="bitacora-notif-preview">
-                <strong>${escapeHtml(msg.autor_nombre || "Sistema")}:</strong> ${escapeHtml(String(msg.mensaje || "").slice(0, 75))}${String(msg.mensaje || "").length > 75 ? "..." : ""}
+                <strong>${escapeHtml(msg.autor_nombre || "Sistema")}:</strong> ${escapeHtml(sanitizeBitacoraMessageForUser(msg, currentUser).slice(0, 75))}${sanitizeBitacoraMessageForUser(msg, currentUser).length > 75 ? "..." : ""}
               </div>
             </div>
           `
@@ -5064,7 +5145,7 @@ function renderBitacoraNotificationsDropdown() {
     ? groups
         .map((g) => {
           const msg = g.latestMsg || {};
-          const previewRaw = String(msg.mensaje || "");
+          const previewRaw = sanitizeBitacoraMessageForUser(msg, currentUser);
           const preview = previewRaw.length > 90 ? previewRaw.slice(0, 90) + "..." : previewRaw;
           const hasPhoto = Boolean(msg.foto_adjunta_url);
           return `
@@ -5567,8 +5648,8 @@ function setDateFilterCurrentWeek() {
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
 
-  const fromStr = monday.toISOString().slice(0, 10);
-  const toStr = sunday.toISOString().slice(0, 10);
+  const fromStr = getLocalIsoDate(monday);
+  const toStr = getLocalIsoDate(sunday);
 
   const fromEl = document.getElementById("topbar-date-from");
   const toEl = document.getElementById("topbar-date-to");
@@ -8377,7 +8458,7 @@ async function cancelOrderWithReason(orderId) {
   if (reason) {
     o.estado_actual = "anulado";
     o.motivo_anulacion = reason.trim();
-    o.fecha_anulacion = new Date().toISOString().slice(0, 16).replace("T", " ");
+    o.fecha_anulacion = getLocalIsoDateTime();
 
     if (!Array.isArray(db.bitacora)) db.bitacora = [];
     db.bitacora.unshift({
@@ -8390,7 +8471,7 @@ async function cancelOrderWithReason(orderId) {
       tipo_evento: "anulacion",
       mensaje: `ORDEN ANULADA. Motivo: ${o.motivo_anulacion}. El troquel #${o.codigo_troquel} queda archivado en auditoría.`,
       foto_adjunta_url: "",
-      fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+      fecha_hora: getLocalIsoDateTime()
     });
 
     saveDatabase();
@@ -13606,7 +13687,7 @@ function saveQuickExtraItem(orderId) {
   // Recalcular Total_Factura y Saldo_Pendiente automáticamente desde Servicios al Cliente + Repuestos
   recalcOrderTotalsFromClientServices(order);
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalIsoDateTime();
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
     orden_id: order.id_orden,
@@ -13803,7 +13884,7 @@ function moveOrderToTerminado(orderId) {
   order.subestado_ejecucion = "terminado";
   order.devuelto_calidad = false;
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalIsoDateTime();
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
     orden_id: order.id_orden,
@@ -13826,10 +13907,13 @@ function moveOrderToQualityControl(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
+  const nowTs = Date.now();
   order.estado_actual = "control_calidad";
   order.subestado_ejecucion = "terminado";
+  order.stage_updated_at = nowTs;
+  order.updated_at = nowTs;
 
-  const nowStr = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const nowStr = getLocalIsoDateTime();
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
     orden_id: order.id_orden,
@@ -13912,23 +13996,56 @@ function promptRejectQualityControl(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
-  const subtasks = db.subtareas.filter((s) => s.orden_id === orderId);
-  const techNames = [...new Set(subtasks.map((s) => s.nombre_tecnico).filter(Boolean))].join(", ") || "Técnico asignado";
+  const internalSubs = db.subtareas.filter((s) => s.orden_id === orderId && !isSubtaskExternal(s));
+  const techNames = [...new Set(internalSubs.map((s) => s.nombre_tecnico).filter(Boolean))].join(", ") || "Técnico asignado";
+
+  const subtaskCheckboxesHtml = internalSubs.length
+    ? `
+      <div class="form-section-box" style="margin-bottom:14px; padding:10px 12px;">
+        <div class="form-section-title" style="margin-bottom:6px; font-size:12px;">
+          <i class="fas fa-tasks"></i> ¿Qué trabajos se reabren para que el técnico corrija y suba nueva foto?
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; max-height:170px; overflow-y:auto;">
+          ${internalSubs
+            .map(
+              (s) => `
+              <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:8px; background:var(--bg-input); border:1px solid var(--border-subtle); cursor:pointer; font-size:12.5px;">
+                <span style="display:flex; align-items:center; gap:8px;">
+                  <input type="checkbox" name="qc-reopen-sub" value="${escapeHtml(s.id_subtarea)}" checked style="width:16px; height:16px; accent-color:#dc2626;" />
+                  <strong>${escapeHtml(formatSubtaskDisplayLabel(s))}</strong>
+                </span>
+                <span style="font-size:11.5px; color:var(--renacer-gold); font-weight:800;">
+                  <i class="fas fa-user-cog"></i> ${escapeHtml(s.nombre_tecnico || "Sin asignar")}
+                </span>
+              </label>
+            `
+            )
+            .join("")}
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+          <i class="fas fa-info-circle" style="color:#38bdf8;"></i> Si hubo varios técnicos y solo uno debe corregir, desmarca los que sí quedaron aprobados. La comisión NO se duplica y se conserva el tiempo previo trabajado.
+        </div>
+      </div>
+    `
+    : "";
 
   openModal({
-    title: `Rechazar Control de Calidad y Devolver al Técnico — Troquel #${order.codigo_troquel}`,
-    icon: "fa-times-circle",
+    title: `Devolver a 4. Servicio (Corrección de Calidad) — Troquel #${order.codigo_troquel}`,
+    icon: "fa-rotate-left",
     body: `
-      <div style="background:rgba(220,38,38,0.1); border:1.5px solid rgba(220,38,38,0.4); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px; color:#b91c1c;">
-        <strong>Acción del Sistema (Fase 2 — Bucle de Control de Calidad):</strong>
-        <ul style="margin:6px 0 0 18px;">
-          <li>Mueve automáticamente el Estado Actual de regreso a <strong>3. Asignación y Ejecución</strong>.</li>
-          <li>Envía una notificación interna de alerta al chat del técnico asignado (<strong>${techNames}</strong>) con el motivo ingresado.</li>
+      <div style="background:rgba(220,38,38,0.1); border:1.5px solid rgba(220,38,38,0.4); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px; color:#fca5a5;">
+        <strong style="color:#f87171;">¿Cómo funciona la devolución al técnico?</strong>
+        <ul style="margin:6px 0 0 18px; line-height:1.45;">
+          <li>Regresa la orden a <strong>4. Servicio</strong> y muestra un aviso rojo en <strong>Mis Trabajos</strong> del técnico (<strong>${escapeHtml(techNames)}</strong>).</li>
+          <li><strong>Reabre automáticamente</strong> las tareas marcadas abajo (pasan de <em>Listo</em> a <em>Pendiente</em>) para que el técnico pueda pulsar <strong>Iniciar Corrección</strong>, documentar lo corregido y subir una <strong>nueva foto obligatoria</strong>.</li>
+          <li>Al subir su nueva foto de corrección, la orden regresa automáticamente a <strong>5. Control de Calidad</strong> para tu visto bueno final.</li>
         </ul>
       </div>
 
+      ${subtaskCheckboxesHtml}
+
       <div class="form-field">
-        <label style="color:#dc2626; font-weight:900;">Motivo del fallo / corrección requerida (Obligatorio) *</label>
+        <label style="color:#f87171; font-weight:900;">Motivo del fallo / corrección requerida (Obligatorio) *</label>
         <textarea
           id="qc-reject-reason"
           rows="3"
@@ -13941,7 +14058,7 @@ function promptRejectQualityControl(orderId) {
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button type="button" class="btn btn--danger btn--lg" onclick="rejectQualityControlAndReturn('${order.id_orden}')">
-        <i class="fas fa-undo"></i> Confirmar Rechazo y Devolver a 3. Asignación y Ejecución
+        <i class="fas fa-rotate-left"></i> Confirmar y Devolver a 4. Servicio
       </button>
     `
   });
@@ -13957,44 +14074,60 @@ function rejectQualityControlAndReturn(orderId) {
     return;
   }
 
-  // Regresar a 3. Asignación y Ejecución
+  // Determinar qué subtareas internas se reabren (todas si no hay checkboxes o las marcadas)
+  const checkboxes = Array.from(document.querySelectorAll('input[name="qc-reopen-sub"]'));
+  const selectedIds = checkboxes.length
+    ? new Set(checkboxes.filter((cb) => cb.checked).map((cb) => cb.value))
+    : null;
+
+  const internalSubs = db.subtareas.filter((s) => s.orden_id === orderId && !isSubtaskExternal(s));
+  const subsToReopen = selectedIds
+    ? internalSubs.filter((s) => selectedIds.has(s.id_subtarea))
+    : internalSubs;
+
+  if (checkboxes.length > 0 && subsToReopen.length === 0) {
+    showToast("Marca al menos una tarea para reabrirla al técnico (o cancela si no requiere corrección).", "warning");
+    return;
+  }
+
+  // Regresar a 4. Servicio y reabrir subtareas seleccionadas con marca qc_reset_ts para el merge 3-Way
   const nowTs = Date.now();
   order.estado_actual = "asignacion_ejecucion";
-  order.subestado_ejecucion = "empezado";
+  order.subestado_ejecucion = "pendiente";
   order.devuelto_calidad = true;
   order.motivo_rechazo_qc = reason;
   order.stage_updated_at = nowTs;
   order.updated_at = nowTs;
 
-  // Reabrir las subtareas internas de la orden para que el técnico pueda corregir y subir nueva foto general
-  const internalSubs = db.subtareas.filter((s) => s.orden_id === orderId && !isSubtaskExternal(s));
-  if (internalSubs.length > 0) {
-    internalSubs.forEach((s) => {
-      s.estado_subtarea = "pendiente";
-      s.inicio_activo_ts = null;
-      s.qc_reset_ts = nowTs;
-      s.updated_at = nowTs;
-    });
-  }
+  subsToReopen.forEach((s) => {
+    s.estado_subtarea = "pendiente";
+    s.inicio_activo_ts = null;
+    s.qc_reset_ts = nowTs;
+    s.updated_at = nowTs;
+  });
+
+  const reopenedTechs = [...new Set(subsToReopen.map((s) => s.nombre_tecnico).filter(Boolean))].join(", ") || "Técnico asignado";
+  const reopenedLabels = subsToReopen.map((s) => s.descripcion_servicio).join(", ");
 
   const nowStr = getLocalIsoDateTime();
   db.bitacora.push({
-    id_mensaje: "MSG-" + Date.now(),
+    id_mensaje: "MSG-" + nowTs,
     orden_id: order.id_orden,
     codigo_troquel: order.codigo_troquel,
     autor_id: currentUser.id_usuario,
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "rechazo_calidad",
-    mensaje: `RECHAZADO EN CONTROL DE CALIDAD — Devuelto a 3. Asignación y Ejecución. Motivo del fallo / corrección: "${reason}"`,
+    mensaje: `⚠️ DEVUELTO POR CONTROL DE CALIDAD a 4. Servicio (${reopenedTechs}${reopenedLabels ? ` · ${reopenedLabels}` : ""}). Corrección solicitada: "${reason}". Tareas reabiertas para corregir y subir nueva foto.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
 
-  saveDatabase();
+  saveDatabase(`Devuelto por Calidad (#${order.codigo_troquel})`);
+  flushCloudPush(true, { reason: `Devolución Calidad Troquel #${order.codigo_troquel}`, actorRole: currentUser ? currentUser.rol : null });
   closeModal();
   renderApp();
-  showToast(`Orden ${order.id_orden} devuelta a 3. Asignación y Ejecución y notificada al chat del técnico.`, "error");
+  showToast(`Troquel #${order.codigo_troquel} devuelto a 4. Servicio. Las tareas de ${reopenedTechs} ya aparecen reabiertas en su panel para corregir con nueva foto.`, "warning");
 }
 
 /* ---------- OPCIÓN A DE FASE 2: [ Aprobar Calidad y Pasar a 6. En Entrega ] (Sin cobro automático ni garantía prematura) ---------- */
@@ -15627,7 +15760,7 @@ function renderWorkerPanelScreen() {
             <i class="fas fa-pause"></i> Pausar
           </button>
           <button type="button" class="btn btn--success btn--xs checklist-btn-action-compact" onclick="openCompleteWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Subir 1 foto general y terminar todas tus tareas aquí">
-            <i class="fas fa-camera"></i> Terminar (Foto)
+            <i class="fas fa-camera"></i> ${ord.devuelto_calidad ? "Terminar Corrección (Foto)" : "Terminar (Foto)"}
           </button>
         </div>
       `;
@@ -15641,15 +15774,15 @@ function renderWorkerPanelScreen() {
             <i class="fas fa-play"></i> Reanudar
           </button>
           <button type="button" class="btn btn--success btn--xs checklist-btn-action-compact" onclick="openCompleteWorkerTroquelModal('${ord.id_orden}', '${activeWorkerId}')" title="Subir 1 foto general y terminar todas tus tareas aquí">
-            <i class="fas fa-camera"></i> Terminar (Foto)
+            <i class="fas fa-camera"></i> ${ord.devuelto_calidad ? "Terminar Corrección (Foto)" : "Terminar (Foto)"}
           </button>
         </div>
       `;
     } else {
       troquelUnifiedControlsHtml = `
         <div class="worker-troquel-controls-group worker-troquel-controls-group--compact worker-troquel-controls-group--unstarted">
-          <button type="button" class="btn btn--gold btn--xs checklist-btn-action-compact worker-start-blink-btn" onclick="startWorkerTroquelWork('${ord.id_orden}', '${activeWorkerId}')" title="Iniciar todas tus tareas asignadas en este troquel con 1 solo toque">
-            <i class="fas fa-play"></i> Iniciar Trabajo (${pendingSubtasks.length})
+          <button type="button" class="btn ${ord.devuelto_calidad ? "btn--danger" : "btn--gold"} btn--xs checklist-btn-action-compact worker-start-blink-btn" onclick="startWorkerTroquelWork('${ord.id_orden}', '${activeWorkerId}')" title="${ord.devuelto_calidad ? "Iniciar corrección solicitada por Control de Calidad" : "Iniciar todas tus tareas asignadas en este troquel con 1 solo toque"}">
+            <i class="fas ${ord.devuelto_calidad ? "fa-rotate-left" : "fa-play"}"></i> ${ord.devuelto_calidad ? `Iniciar Corrección (${pendingSubtasks.length})` : `Iniciar Trabajo (${pendingSubtasks.length})`}
           </button>
         </div>
       `;
@@ -15883,7 +16016,7 @@ function setSubtaskToPending(subtaskId) {
 }
 
 function registerWorkerActiveDayProject(workerId, workerName, troquelCode, serviceDesc) {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = getLocalIsoDate();
   const existing = db.asistencias.find(
     (a) => a.usuario_id === workerId && cleanDateISO(a.fecha) === todayIso
   );
@@ -16363,13 +16496,34 @@ function openCompleteWorkerTroquelModal(orderId, workerId) {
     .map((s) => `<li style="margin-bottom:3px;"><strong>${escapeHtml(formatSubtaskDisplayLabel(s))}</strong> <span style="color:#22c55e;">(+$${Number(s.comision_base_tecnico || 0).toFixed(2)})</span></li>`)
     .join("");
 
+  const isQcRework = Boolean(ord && ord.devuelto_calidad);
+  const qcReworkBoxHtml = isQcRework
+    ? `
+      <div style="background:rgba(220,38,38,0.12); border:1.5px solid rgba(220,38,38,0.5); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px;">
+        <div style="font-weight:900; color:#f87171; margin-bottom:4px;">
+          <i class="fas fa-exclamation-triangle"></i> CORRECCIÓN SOLICITADA POR CONTROL DE CALIDAD
+        </div>
+        <div style="color:var(--text-main); margin-bottom:8px;">
+          <strong>Indicación de Calidad:</strong> ${escapeHtml(ord.motivo_rechazo_qc || "Revisar acabado / tolerancia solicitada en bitácora.")}
+        </div>
+        <div class="form-field" style="margin-bottom:0;">
+          <label style="font-size:12px; font-weight:800; color:#fbbf24;">¿Qué corregiste en la pieza? (Opcional — se adjunta con la nueva foto para Calidad)</label>
+          <textarea id="finish-troquel-qc-note" rows="2" placeholder="Ej: Se volvió a asentar la válvula #3 y se verificó planitud final en 0.00mm..."></textarea>
+        </div>
+      </div>
+    `
+    : "";
+
   openModal({
-    title: `Terminar Troquel #${ord ? ord.codigo_troquel : ""} — 1 Sola Foto General`,
+    title: isQcRework
+      ? `Documentar Corrección de Calidad — Troquel #${ord ? ord.codigo_troquel : ""}`
+      : `Terminar Troquel #${ord ? ord.codigo_troquel : ""} — 1 Sola Foto General`,
     icon: "fa-camera",
     wide: true,
     body: `
+      ${qcReworkBoxHtml}
       <div style="background:rgba(22,163,74,0.1); border:1px solid rgba(22,163,74,0.35); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px;">
-        <strong>Cierre Unificado por Troquel (1 sola foto):</strong> Con una única fotografía general de la pieza finalizada marcarás como <strong>LISTAS</strong> todas tus tareas en el <strong>Troquel #${ord ? escapeHtml(ord.codigo_troquel) : ""}</strong> (<strong>+$${totalCommBatch.toFixed(2)}</strong> en destajo):
+        <strong>${isQcRework ? "Cierre de Corrección (Nueva Foto Obligatoria):" : "Cierre Unificado por Troquel (1 sola foto):"}</strong> Con una única fotografía general de la pieza ${isQcRework ? "corregida " : "finalizada "}marcarás como <strong>LISTAS</strong> todas tus tareas en el <strong>Troquel #${ord ? escapeHtml(ord.codigo_troquel) : ""}</strong> (<strong>+$${totalCommBatch.toFixed(2)}</strong> en destajo):
         <ul style="margin:8px 0 0 18px; font-size:12.5px;">${tasksSummaryHtml}</ul>
       </div>
 
@@ -16460,8 +16614,10 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
     totalCommBatch += Number(s.comision_base_tecnico) || 0;
   });
 
+  const qcCorrectionNote = (document.getElementById("finish-troquel-qc-note")?.value || "").trim();
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
   if (ord) {
+    const wasQcRework = Boolean(ord.devuelto_calidad);
     const summaryLabel = pendingSubs.map((s) => s.descripcion_servicio).join(", ");
     registerWorkerActiveDayProject(
       targetWorkerId,
@@ -16481,9 +16637,12 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
       ord.subestado_ejecucion = "terminado";
       ord.estado_actual = "control_calidad";
       ord.devuelto_calidad = false;
+      ord.motivo_rechazo_qc = "";
       ord.stage_updated_at = nowTs;
     }
 
+    const prefixLabel = wasQcRework ? "CORRECCIÓN DE CALIDAD FINALIZADA" : "TROQUEL FINALIZADO";
+    const noteSuffix = qcCorrectionNote ? ` Nota de corrección: "${qcCorrectionNote}".` : "";
     db.bitacora.push({
       id_mensaje: "MSG-" + nowTs,
       orden_id: ord.id_orden,
@@ -16492,11 +16651,11 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
       autor_nombre: pendingSubs[0].nombre_tecnico || (currentUser ? currentUser.nombre : "Técnico"),
       autor_rol: "Técnico",
       tipo_evento: "terminado",
-      mensaje: `TROQUEL FINALIZADO (${pendingSubs.length} tarea/s: ${summaryLabel}) con 1 foto general obligatoria (Tiempo total: ${formatMinutes(totalBatchMinutes)}). ${
+      mensaje: `${prefixLabel} (${pendingSubs.length} tarea/s: ${summaryLabel}) con nueva foto general obligatoria (Tiempo total: ${formatMinutes(totalBatchMinutes)}).${noteSuffix} ${
         allDone && !alreadyBeyondQc
           ? "NOTIFICACIÓN AL SUPERVISOR: Todas las tareas de la pieza están listas. La orden pasa a 5. Control de Calidad."
           : ""
-      }`,
+      }`.trim(),
       foto_adjunta_url: tempFinishSubtaskPhoto,
       fecha_hora: getLocalIsoDateTime()
     });
@@ -17522,16 +17681,14 @@ function openOrderCrmModal(orderId) {
   const baseMessages = isTechOrRecep ? chatOnlyMessages : (currentCrmFilterMode === "chat" ? chatOnlyMessages : allMessages);
   const displayMessages = baseMessages.filter((m) => {
     if (isPrivileged) return true;
-    const txt = (m.mensaje || "").toLowerCase();
-    if (m.tipo_evento === "cobro_resto" || m.tipo_evento === "abono" || m.tipo_evento === "pago") return false;
-    if (txt.includes("presupuesto inicial:") || txt.includes("pago recibido") || txt.includes("saldo pendiente") || txt.includes("resto pendiente") || txt.includes("abono")) return false;
-    return true;
+    return !isBitacoraMessageFinancialOrConfidential(m, currentUser);
   });
 
   const feedHtml = displayMessages.length
     ? displayMessages
         .map((m) => {
           const isMine = currentUser && m.autor_id === currentUser.id_usuario;
+          const visibleMsgText = sanitizeBitacoraMessageForUser(m, currentUser);
           const specialStyle =
             m.tipo_evento === "rechazo_calidad"
               ? "border-color:#dc2626; background:rgba(220,38,38,0.08);"
@@ -17546,7 +17703,7 @@ function openOrderCrmModal(orderId) {
               <span><strong><i class="fas ${isMine ? "fa-user-check" : "fa-user"}"></i> ${m.autor_nombre}</strong> (${m.autor_rol})</span>
               <span><i class="far fa-clock"></i> ${formatDateHuman(m.fecha_hora, true)}</span>
             </div>
-            <div class="crm-msg-text">${m.mensaje}</div>
+            <div class="crm-msg-text">${visibleMsgText}</div>
             ${
               m.foto_adjunta_url
                 ? `<img src="${m.foto_adjunta_url}" class="crm-msg-photo" alt="Adjunto" onclick="openPhotoLightbox('${m.foto_adjunta_url}', 'Orden #${order.codigo_troquel} · Bitácora')" style="cursor:zoom-in;" />`
@@ -17558,6 +17715,10 @@ function openOrderCrmModal(orderId) {
         .join("")
     : `<p style="font-size:13px; color:var(--text-muted); text-align:center; padding:24px 0;"><i class="fas fa-comment-dots" style="font-size:24px; opacity:0.5; display:block; margin-bottom:6px;"></i>${currentCrmFilterMode === "chat" || isTechOrRecep ? "No hay notas técnicas de trabajadores aún en esta orden." : "Aún no hay registros en la bitácora."}</p>`;
 
+  const crmHeaderTitle = currentUser && currentUser.rol === "tecnico"
+    ? `<span style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">ORDEN #${order.codigo_troquel}</span>`
+    : `${order.nombre_cliente} · <span style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">ORDEN #${order.codigo_troquel}</span>`;
+
   openModal({
     title: `Chat Interno Técnico — ORDEN #${order.codigo_troquel}`,
     icon: "fa-comments",
@@ -17566,7 +17727,7 @@ function openOrderCrmModal(orderId) {
       <div style="background:var(--bg-input); padding:10px 14px; border-radius:12px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
         <div>
           <div style="font-weight:900; font-size:14px; color:var(--text-main);">
-            ${order.nombre_cliente} · <span style="color:var(--renacer-gold); font-family:'JetBrains Mono',monospace;">ORDEN #${order.codigo_troquel}</span>
+            ${crmHeaderTitle}
           </div>
           <div style="font-size:11.5px; color:var(--text-muted); font-weight:600;">
             ${order.datos_motor.marca} ${order.datos_motor.modelo} (${order.datos_motor.tipo_pieza})
@@ -22179,7 +22340,7 @@ function openEditCompleteOrderModal(orderId) {
             </div>
             <div class="form-field">
               <label>Fase / Estado del Proceso *</label>
-              <select id="edit-ord-estado" style="font-weight:800;">
+              <select id="edit-ord-estado" style="font-weight:800;" onchange="handleEditOrderStageChange('${order.id_orden}', this.value)">
                 <option value="diagnostico_presupuesto" ${order.estado_actual === "diagnostico_presupuesto" || order.estado_actual === "recepcion" ? "selected" : ""}>1. Recepción (Diagnóstico / Presupuesto)</option>
                 <option value="diagnostico" ${order.estado_actual === "diagnostico" ? "selected" : ""}>2. Diagnóstico Técnico</option>
                 <option value="aprobacion" ${order.estado_actual === "aprobacion" || order.estado_actual === "esperando_aprobacion_abono" ? "selected" : ""}>3. Aprobación y Abono</option>
@@ -22198,6 +22359,13 @@ function openEditCompleteOrderModal(orderId) {
                 <option value="credito" ${order.tipo_condicion_pago === "credito" ? "selected" : ""}>Taller Aliado / Cuenta por Cobrar</option>
               </select>
             </div>
+          </div>
+          <div id="edit-ord-reopen-subs-wrap" class="hidden" style="margin-top:10px; padding:10px 12px; border-radius:10px; background:rgba(220,38,38,0.12); border:1.5px solid rgba(220,38,38,0.45);">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:800; font-size:12.5px; color:#fca5a5;">
+              <input type="checkbox" id="edit-ord-reopen-subs" checked style="width:17px; height:17px; accent-color:#dc2626;" />
+              Reabrir trabajos ya terminados del técnico (pasan a Pendiente para que pueda corregir y subir nueva foto)
+            </label>
+            <input type="text" id="edit-ord-reopen-reason" placeholder="Motivo / indicación para el técnico (Opcional, ej: Corregir acabado y subir nueva foto)" style="width:100%; margin-top:8px; padding:7px 10px; border-radius:8px; border:1px solid rgba(220,38,38,0.4); background:var(--bg-input); color:var(--text-main); font-size:12px;" />
           </div>
         </div>
 
@@ -22665,14 +22833,39 @@ function recalcEditTotals() {
   }
 }
 
+function handleEditOrderStageChange(orderId, newStage) {
+  const wrap = document.getElementById("edit-ord-reopen-subs-wrap");
+  if (!wrap) return;
+  const order = (db.ordenes || []).find((o) => o.id_orden === orderId);
+  if (!order) return;
+  const wasAdvanced = ["calidad", "control_calidad", "entrega", "entregado", "archivado", "terminado"].includes(order.estado_actual);
+  const movingToService = newStage === "servicio" || newStage === "asignacion_ejecucion";
+  const hasDoneInternalSubs = (db.subtareas || []).some(
+    (s) => s.orden_id === orderId && !isSubtaskExternal(s) && s.estado_subtarea === "terminado"
+  );
+  if (wasAdvanced && movingToService && hasDoneInternalSubs) {
+    wrap.classList.remove("hidden");
+  } else {
+    wrap.classList.add("hidden");
+  }
+}
+
 function saveEditedCompleteOrder(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
 
+  const prevEstado = order.estado_actual;
   const troquel = (document.getElementById("edit-ord-troquel")?.value || "").trim();
   const estado = document.getElementById("edit-ord-estado")?.value || order.estado_actual;
   const condPago = document.getElementById("edit-ord-pago-condicion")?.value || order.tipo_condicion_pago;
   const isPriority = Boolean(document.getElementById("edit-ord-priority")?.checked);
+  const reopenWrap = document.getElementById("edit-ord-reopen-subs-wrap");
+  const shouldReopenSubs = Boolean(
+    reopenWrap &&
+    !reopenWrap.classList.contains("hidden") &&
+    document.getElementById("edit-ord-reopen-subs")?.checked
+  );
+  const reopenReason = (document.getElementById("edit-ord-reopen-reason")?.value || "").trim();
 
   const cliName = (document.getElementById("edit-cli-name")?.value || "").trim();
   const cliDoc = (document.getElementById("edit-cli-doc")?.value || "").trim();
@@ -22692,20 +22885,51 @@ function saveEditedCompleteOrder(orderId) {
   }
 
   // Actualizar campos de la orden
+  const nowTs = Date.now();
   order.codigo_troquel = troquel;
   order.estado_actual = estado;
   order.tipo_condicion_pago = condPago;
   order.prioridad_alta = isPriority;
+  order.updated_at = nowTs;
+  if (estado !== prevEstado) {
+    order.stage_updated_at = nowTs;
+  }
   if (estado === "archivado") {
     order.factura_bloqueada = true;
-    if (!order.fecha_entrega) order.fecha_entrega = new Date().toISOString().slice(0, 10);
+    if (!order.fecha_entrega) order.fecha_entrega = getLocalIsoDate();
     if (!order.fecha_garantia_hasta) {
       const gDate = new Date();
       gDate.setFullYear(gDate.getFullYear() + 1);
-      order.fecha_garantia_hasta = gDate.toISOString().slice(0, 10);
+      order.fecha_garantia_hasta = getLocalIsoDate(gDate);
     }
   } else if (estado === "entrega" || estado === "entregado") {
     order.factura_bloqueada = false;
+  }
+
+  // Si Gerencia devolvió manualmente de Calidad/Entrega a 4. Servicio y marcó reabrir trabajos:
+  if (shouldReopenSubs && (estado === "servicio" || estado === "asignacion_ejecucion")) {
+    const internalSubs = db.subtareas.filter((s) => s.orden_id === orderId && !isSubtaskExternal(s));
+    internalSubs.forEach((s) => {
+      s.estado_subtarea = "pendiente";
+      s.inicio_activo_ts = null;
+      s.qc_reset_ts = nowTs;
+      s.updated_at = nowTs;
+    });
+    order.subestado_ejecucion = "pendiente";
+    order.devuelto_calidad = true;
+    order.motivo_rechazo_qc = reopenReason || "Devuelto por Gerencia a 4. Servicio para corrección y nueva foto.";
+    db.bitacora.push({
+      id_mensaje: "MSG-QC-" + nowTs,
+      orden_id: order.id_orden,
+      codigo_troquel: troquel,
+      autor_id: currentUser ? currentUser.id_usuario : "USR-ADMIN",
+      autor_nombre: currentUser ? currentUser.nombre : "Gerencia",
+      autor_rol: currentUser ? currentUser.rol_label : "Administrador",
+      tipo_evento: "rechazo_calidad",
+      mensaje: `⚠️ DEVUELTO A 4. SERVICIO por ${currentUser ? currentUser.nombre : "Gerencia"}. ${order.motivo_rechazo_qc} Tareas reabiertas para corregir y subir nueva foto.`,
+      foto_adjunta_url: "",
+      fecha_hora: getLocalIsoDateTime()
+    });
   }
 
   order.nombre_cliente = cliName;
@@ -22748,7 +22972,7 @@ function saveEditedCompleteOrder(orderId) {
   // Calcular totales actualizados estrictamente desde Servicios al Cliente + Repuestos
   recalcOrderTotalsFromClientServices(order);
 
-  // Registrar en bitácora
+  // Registrar en bitácora (oculto automáticamente para perfiles técnicos por confidencialidad financiera)
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
     orden_id: order.id_orden,
@@ -22759,13 +22983,17 @@ function saveEditedCompleteOrder(orderId) {
     tipo_evento: "modificacion",
     mensaje: `Modificación completa guardada para Orden #${troquel}. Total: $${order.monto_total.toFixed(2)}.`,
     foto_adjunta_url: "",
-    fecha_hora: new Date().toISOString().slice(0, 16).replace("T", " ")
+    fecha_hora: getLocalIsoDateTime()
   });
 
   saveDatabase();
   closeModal();
   renderApp();
-  showToast(`Orden #${troquel} actualizada correctamente.`);
+  showToast(
+    shouldReopenSubs
+      ? `Orden #${troquel} actualizada y tareas reabiertas al técnico en 4. Servicio.`
+      : `Orden #${troquel} actualizada correctamente.`
+  );
 }
 
 function saveEditedOrderAndOpenDestajo(orderId) {
