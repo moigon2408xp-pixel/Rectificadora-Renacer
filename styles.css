@@ -3350,7 +3350,9 @@ body {
 .renacer-workspace-layout {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   max-height: 100vh;
+  max-height: 100dvh;
   width: 100%;
   max-width: 100vw;
   background-color: var(--bg-main);
@@ -3370,8 +3372,11 @@ body {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
   z-index: 120;
-  padding: 16px 12px;
+  padding: 16px 12px calc(16px + env(safe-area-inset-bottom, 0px));
   box-sizing: border-box;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
   transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -3488,8 +3493,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding-right: 2px;
 }
 
@@ -3583,22 +3590,26 @@ body {
   transform: translateY(-1px);
 }
 
-/* VIEWPORT PRINCIPAL CON SCROLL VERTICAL FLUIDO (SOLUCIÓN DEFINITIVA DE CORTE EN ESCRITORIO) */
+/* VIEWPORT PRINCIPAL CON SCROLL VERTICAL FLUIDO (SOLUCIÓN DEFINITIVA DE CORTE EN ESCRITORIO Y IPHONE) */
 .renacer-main-viewport {
   flex: 1 1 0%;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   width: 100%;
   max-width: 100%;
   height: 100vh;
+  height: 100dvh;
   max-height: 100vh;
+  max-height: 100dvh;
   overflow-y: auto !important;
   overflow-x: clip !important;
   -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth;
   background: var(--bg-main);
   box-sizing: border-box;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* TOPBAR INDUSTRIAL */
@@ -3930,14 +3941,99 @@ body {
   }
   .renacer-sidebar {
     position: fixed;
-    left: -270px;
+    left: -275px;
     transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     top: 0;
     bottom: 0;
     height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding-top: calc(14px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .renacer-sidebar.mobile-open {
     left: 0;
+  }
+  .sidebar-session-panel,
+  .sidebar-bottom-status {
+    flex-shrink: 0;
+  }
+  .sidebar-session-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+  }
+  .sidebar-mini-action {
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 4px;
+    font-size: 10px;
+    line-height: 1.1;
+    min-width: 0;
+    overflow: hidden;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .sidebar-mini-action i {
+    font-size: 13px;
+  }
+}
+
+/* BLINDAJE ESPECÍFICO PARA iOS / iPHONE SAFARI (0 impacto en Android y Escritorio) */
+@supports (-webkit-touch-callout: none) {
+  html,
+  body {
+    height: -webkit-fill-available;
+  }
+  .renacer-workspace-layout,
+  .renacer-main-viewport {
+    height: -webkit-fill-available;
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+  .renacer-sidebar {
+    height: -webkit-fill-available;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding-top: calc(14px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .renacer-sidebar .sidebar-brand-box,
+  .renacer-sidebar .sidebar-session-panel,
+  .renacer-sidebar .sidebar-bottom-status {
+    flex-shrink: 0;
+  }
+  .sidebar-session-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    width: 100% !important;
+  }
+  .sidebar-mini-action {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    min-width: 0 !important;
+    flex-direction: column !important;
+    gap: 3px !important;
+    padding: 8px 3px !important;
+    font-size: 10px !important;
+    line-height: 1.15 !important;
+    font-family: inherit !important;
+  }
+  .sidebar-session-user-btn,
+  .sidebar-sync-pill,
+  .sidebar-nav-btn {
+    -webkit-appearance: none;
+    appearance: none;
+    font-family: inherit;
+  }
+  .modal-box,
+  .renacer-modal-box {
+    max-height: 88dvh !important;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    -webkit-overflow-scrolling: touch;
   }
 }
 
