@@ -68,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.25.v47";
+const CURRENT_APP_VERSION = "2026.11.26.v48";
 
 /* ---------- Helpers de Perfil Restringido (Javier Andrade) y Bóveda Anti-Reinicio (v43) ---------- */
 function isJavierRestrictedUser(user) {
@@ -428,40 +428,71 @@ function getBalancesPorCuenta() {
 
 async function fetchLiveExchangeRates(silent = false) {
   try {
-    const res = await fetch("https://ve.dolarapi.com/v1/dolares", { cache: "no-cache" });
-    if (res.ok) {
-      const data = await res.json();
-      const oficial = Array.isArray(data) ? data.find((d) => d.fuente === "oficial") : null;
-      const paralelo = Array.isArray(data) ? data.find((d) => d.fuente === "paralelo") : null;
-      let changed = false;
+    // Consultar Euro Oficial BCV (fuente primaria + respaldo open.er-api) y Paralelo/Binance P2P en paralelo
+    const [euroRes, paraleloRes] = await Promise.allSettled([
+      fetch("https://ve.dolarapi.com/v1/euros/oficial", { cache: "no-cache" }),
+      fetch("https://ve.dolarapi.com/v1/dolares/paralelo", { cache: "no-cache" })
+    ]);
 
-      if (!db.config) db.config = {};
+    let euroBcvVal = 0;
+    let paraleloVal = 0;
 
-      if (oficial && Number(oficial.promedio) > 0) {
-        db.config.tasaBcv = Number(oficial.promedio);
-        changed = true;
-      }
-      if (paralelo && Number(paralelo.promedio) > 0) {
-        db.config.tasaBinance = Number(paralelo.promedio);
-        changed = true;
-      }
+    if (euroRes.status === "fulfilled" && euroRes.value && euroRes.value.ok) {
+      try {
+        const euroData = await euroRes.value.json();
+        const avg = Number(euroData?.promedio || euroData?.venta || euroData?.compra || 0);
+        if (avg > 0) euroBcvVal = avg;
+      } catch (e) {}
+    }
 
-      if (changed) {
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit" });
-        db.config.tasaFechaActualizacion = `${now.toISOString().slice(0, 10)} ${timeStr}`;
-        // Solo guardar tasas en caché local en actualizaciones silenciosas para JAMÁS sobreescribir la nube antes de sincronizar
-        if (!silent && hasSyncedFromCloudOnce) {
-          saveDatabase();
-        } else {
-          saveLocalOnly();
+    // Respaldo automático de Euro BCV por si el primer servicio tarda o falla
+    if (euroBcvVal <= 0) {
+      try {
+        const fbRes = await fetch("https://open.er-api.com/v6/latest/EUR", { cache: "no-cache" });
+        if (fbRes.ok) {
+          const fbData = await fbRes.json();
+          const vesRate = Number(fbData?.rates?.VES || 0);
+          if (vesRate > 0) euroBcvVal = vesRate;
         }
-        if (currentUser) renderApp();
-        if (!silent) {
-          showToast(`Tasas actualizadas en vivo: BCV Bs. ${db.config.tasaBcv.toFixed(2)} | Paralelo Bs. ${db.config.tasaBinance.toFixed(2)}`, "info");
-        }
-        return true;
+      } catch (e) {}
+    }
+
+    if (paraleloRes.status === "fulfilled" && paraleloRes.value && paraleloRes.value.ok) {
+      try {
+        const parData = await paraleloRes.value.json();
+        const avg = Number(parData?.promedio || parData?.venta || parData?.compra || 0);
+        if (avg > 0) paraleloVal = avg;
+      } catch (e) {}
+    }
+
+    if (!db.config) db.config = {};
+    let changed = false;
+
+    if (euroBcvVal > 0) {
+      db.config.tasaBcv = Number(euroBcvVal.toFixed(4));
+      db.config.tasaBcvMoneda = "EUR";
+      changed = true;
+    }
+    if (paraleloVal > 0) {
+      db.config.tasaBinance = Number(paraleloVal.toFixed(4));
+      changed = true;
+    }
+
+    if (changed) {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit" });
+      db.config.tasaFechaActualizacion = `${getLocalIsoDate(now)} ${timeStr}`;
+      // Solo guardar tasas en caché local en actualizaciones silenciosas para JAMÁS sobreescribir la nube antes de sincronizar
+      if (!silent && hasSyncedFromCloudOnce) {
+        saveDatabase("Actualización tasa BCV Euro");
+      } else {
+        saveLocalOnly();
       }
+      if (currentUser) renderApp();
+      if (!silent) {
+        showToast(`Tasas actualizadas en vivo: BCV Euro Bs. ${db.config.tasaBcv.toFixed(2)} | Paralelo Bs. ${db.config.tasaBinance.toFixed(2)}`, "info");
+      }
+      return true;
     }
   } catch (err) {
     console.warn("No se pudo obtener tasa en vivo:", err);
@@ -1580,9 +1611,11 @@ function prepareSheetsPayload(sourceDb) {
     v: 2,
     config: {
       tasaBcv: Number(d.config?.tasaBcv) || 45.80,
+      tasaBcvMoneda: d.config?.tasaBcvMoneda || "EUR",
       tasaBinance: Number(d.config?.tasaBinance) || 52.40,
       tasaFechaActualizacion: d.config?.tasaFechaActualizacion || "",
       qcStandbyMode: Boolean(d.config?.qcStandbyMode),
+      candado_asistencia_obligatorio: d.config?.candado_asistencia_obligatorio !== false,
       correlativoTroquelActual: Number(d.config?.correlativoTroquelActual) || 5021,
       correlativoOrdenActual: Number(d.config?.correlativoOrdenActual) || 1007,
       forzar_actualizacion_version: d.config?.forzar_actualizacion_version || "",
@@ -2313,8 +2346,16 @@ function hydrateDatabaseFromSheets(cloudData) {
     bitacora_lecturas: mergedBitacoraLecturas,
     migrations: (cloudConfigSource && cloudConfigSource.migrations) ? { ...cloudConfigSource.migrations } : ((db && db.config && db.config.migrations) || {})
   };
-  if (db && db.config && db.config.tasaFechaActualizacion && (!cloudConfigSource || !cloudConfigSource.tasaFechaActualizacion)) {
+  if (
+    db &&
+    db.config &&
+    db.config.tasaFechaActualizacion &&
+    (!cloudConfigSource ||
+      !cloudConfigSource.tasaFechaActualizacion ||
+      (db.config.tasaBcvMoneda === "EUR" && cloudConfigSource.tasaBcvMoneda !== "EUR"))
+  ) {
     mergedConfig.tasaBcv = db.config.tasaBcv;
+    mergedConfig.tasaBcvMoneda = db.config.tasaBcvMoneda || "EUR";
     mergedConfig.tasaBinance = db.config.tasaBinance;
     mergedConfig.tasaFechaActualizacion = db.config.tasaFechaActualizacion;
   }
@@ -2475,26 +2516,152 @@ function countInlineBase64PhotosInDb(sourceDb) {
   return { count, totalKb: Math.round(totalBytes / 1024) };
 }
 
-async function uploadImageDataUrlToDrive(dataUrl, fileNamePrefix = "evidencia", timeoutMs = 15000) {
+let cachedDriveFolderInfo = (function () {
+  try {
+    const raw = localStorage.getItem("RENACER_DRIVE_INFO_V1");
+    return raw ? JSON.parse(raw) || null : null;
+  } catch (e) {
+    return null;
+  }
+})();
+
+function saveCachedDriveFolderInfo(info) {
+  if (!info || typeof info !== "object") return;
+  cachedDriveFolderInfo = {
+    ...(cachedDriveFolderInfo || {}),
+    ...info,
+    updatedAt: Date.now()
+  };
+  try {
+    localStorage.setItem("RENACER_DRIVE_INFO_V1", JSON.stringify(cachedDriveFolderInfo));
+  } catch (e) {}
+}
+
+function buildOrderDriveFolderName(orderOrHint) {
+  let troquel = "";
+  let modelo = "";
+  let marca = "";
+  let cliente = "";
+  if (typeof orderOrHint === "string") {
+    const cleanId = orderOrHint.trim();
+    const ord = (db.ordenes || []).find((o) => o.id_orden === cleanId || String(o.codigo_troquel) === cleanId.replace(/^#/, ""));
+    if (ord) {
+      orderOrHint = ord;
+    } else {
+      troquel = cleanId.replace(/^#/, "");
+    }
+  }
+  if (orderOrHint && typeof orderOrHint === "object") {
+    troquel = String(orderOrHint.codigo_troquel || orderOrHint.troquel || "").replace(/^#/, "").trim();
+    modelo = String(orderOrHint.datos_motor?.modelo || orderOrHint.modelo || "").trim();
+    marca = String(orderOrHint.datos_motor?.marca || orderOrHint.marca || "").trim();
+    cliente = String(orderOrHint.nombre_cliente || orderOrHint.cliente || "").trim();
+  }
+  if (!troquel) return "General_Finanzas_y_Vouchers";
+  const veh = modelo || marca;
+  const shortCli = cliente.split(/\s+/).slice(0, 2).join(" ");
+  const parts = [`Pedido_#${troquel}`];
+  if (veh) parts.push(veh);
+  if (shortCli) parts.push(shortCli);
+  return parts
+    .join("_")
+    .replace(/[\\/:*?"<>|\r\n\t]+/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 68);
+}
+
+function replacePhotoDataUrlEverywhere(oldDataUrl, newDriveUrl) {
+  if (!oldDataUrl || !newDriveUrl || oldDataUrl === newDriveUrl || !newDriveUrl.startsWith("http")) return false;
+  let changedDb = false;
+
+  // 1. Estados temporales en formularios abiertos
+  if (tempNewOrderState) {
+    if (Array.isArray(tempNewOrderState.galeriaPieza)) {
+      tempNewOrderState.galeriaPieza = tempNewOrderState.galeriaPieza.map((u) => (u === oldDataUrl ? newDriveUrl : u));
+    }
+    if (Array.isArray(tempNewOrderState.galeriaRepuestos)) {
+      tempNewOrderState.galeriaRepuestos = tempNewOrderState.galeriaRepuestos.map((u) => (u === oldDataUrl ? newDriveUrl : u));
+    }
+  }
+  if (typeof tempCrmPhotoUrl !== "undefined" && tempCrmPhotoUrl === oldDataUrl) {
+    tempCrmPhotoUrl = newDriveUrl;
+  }
+  if (typeof tempFinishSubtaskPhoto !== "undefined" && tempFinishSubtaskPhoto === oldDataUrl) {
+    tempFinishSubtaskPhoto = newDriveUrl;
+  }
+
+  // 2. Registros ya guardados en db (si el usuario pulsó Guardar antes de terminar Drive en segundo plano)
+  (db.ordenes || []).forEach((o) => {
+    if (!o) return;
+    if (Array.isArray(o.galeria_fotos_pieza)) {
+      o.galeria_fotos_pieza.forEach((u, i) => {
+        if (u === oldDataUrl) { o.galeria_fotos_pieza[i] = newDriveUrl; changedDb = true; }
+      });
+    }
+    if (Array.isArray(o.galeria_fotos_repuestos)) {
+      o.galeria_fotos_repuestos.forEach((u, i) => {
+        if (u === oldDataUrl) { o.galeria_fotos_repuestos[i] = newDriveUrl; changedDb = true; }
+      });
+    }
+    if (o.comprobante_pago_foto === oldDataUrl) { o.comprobante_pago_foto = newDriveUrl; changedDb = true; }
+    if (o.foto_entrega_final === oldDataUrl) { o.foto_entrega_final = newDriveUrl; changedDb = true; }
+  });
+  (db.subtareas || []).forEach((s) => {
+    if (!s) return;
+    if (s.foto_terminado_url === oldDataUrl) { s.foto_terminado_url = newDriveUrl; changedDb = true; }
+    if (s.foto_evidencia_terminado === oldDataUrl) { s.foto_evidencia_terminado = newDriveUrl; changedDb = true; }
+  });
+  (db.bitacora || []).forEach((b) => {
+    if (b && b.foto_adjunta_url === oldDataUrl) { b.foto_adjunta_url = newDriveUrl; changedDb = true; }
+  });
+  (db.finanzas_movimientos || []).forEach((m) => {
+    if (!m) return;
+    if (m.comprobante_foto === oldDataUrl) { m.comprobante_foto = newDriveUrl; changedDb = true; }
+    if (m.comprobante_foto_2 === oldDataUrl) { m.comprobante_foto_2 = newDriveUrl; changedDb = true; }
+  });
+
+  if (changedDb) {
+    saveDatabase("URL Drive respaldada");
+  }
+  return changedDb;
+}
+
+async function uploadImageDataUrlToDrive(dataUrl, fileNamePrefix = "evidencia", timeoutMs = 15000, driveMeta = null) {
   if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:image")) return dataUrl;
   if (!GAS_API_URL || (typeof navigator !== "undefined" && navigator.onLine === false)) return dataUrl;
   try {
-    const fileName = `${fileNamePrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`;
+    const meta = driveMeta && typeof driveMeta === "object" ? driveMeta : {};
+    const prefix = meta.category || fileNamePrefix || "evidencia";
+    const fileName = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`;
+    const bodyObj = {
+      action: "upload_photo",
+      base64: dataUrl,
+      fileName
+    };
+    if (meta.orderFolder) bodyObj.orderFolder = meta.orderFolder;
+    if (meta.codigoTroquel) bodyObj.codigoTroquel = meta.codigoTroquel;
+    if (meta.clienteNombre) bodyObj.clienteNombre = meta.clienteNombre;
+    if (meta.category) bodyObj.category = meta.category;
+
     const res = await fetchWithTimeout(
       GAS_API_URL,
       {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({
-          action: "upload_photo",
-          base64: dataUrl,
-          fileName
-        })
+        body: JSON.stringify(bodyObj)
       },
       timeoutMs
     );
     const json = await res.json();
     if (json && json.success && json.data && json.data.url) {
+      if (json.data.rootFolderUrl || json.data.ownerEmail) {
+        saveCachedDriveFolderInfo({
+          rootFolderUrl: json.data.rootFolderUrl || (cachedDriveFolderInfo && cachedDriveFolderInfo.rootFolderUrl) || "",
+          ownerEmail: json.data.ownerEmail || (cachedDriveFolderInfo && cachedDriveFolderInfo.ownerEmail) || ""
+        });
+      }
       return String(json.data.url);
     }
   } catch (err) {
@@ -2503,60 +2670,93 @@ async function uploadImageDataUrlToDrive(dataUrl, fileNamePrefix = "evidencia", 
   return dataUrl;
 }
 
-async function runCloudPhotoMigration(interactive = false) {
+async function fetchDriveFoldersInfo(timeoutMs = 12000) {
+  if (!GAS_API_URL || (typeof navigator !== "undefined" && navigator.onLine === false)) return cachedDriveFolderInfo;
+  try {
+    const sep = GAS_API_URL.includes("?") ? "&" : "?";
+    const res = await fetchWithTimeout(`${GAS_API_URL}${sep}action=get_drive_info&t=${Date.now()}`, { method: "GET" }, timeoutMs);
+    const json = await res.json();
+    if (json && json.success && json.data) {
+      saveCachedDriveFolderInfo(json.data);
+      return json.data;
+    }
+  } catch (e) {}
+  return cachedDriveFolderInfo;
+}
+
+async function runOrganizeDrivePhotosByOrder(interactive = true) {
   if (!GAS_API_URL || photoMigrationInProgress) return false;
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    if (interactive) showToast("Sin conexión a internet para optimizar fotos.", "error");
+    if (interactive) showToast("Sin conexión a internet para organizar fotos en Google Drive.", "error");
     return false;
   }
   photoMigrationInProgress = true;
-  let totalMigrated = 0;
   let totalUploaded = 0;
-  let remaining = 0;
+  let totalMoved = 0;
+  let totalMigrated = 0;
+  let lastInfo = null;
   try {
     if (interactive) {
-      showToast("Optimizando fotos antiguas a Google Drive para acelerar la nube...", "info");
+      showToast("Organizando y respaldando fotos por pedido en Google Drive...", "info");
     }
-    for (let round = 0; round < 12; round++) {
-      if (hasUnsyncedLocalChanges || cloudPushInFlight) break;
+    for (let round = 0; round < 15; round++) {
       const res = await fetchWithTimeout(
         GAS_API_URL,
         {
           method: "POST",
           headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ action: "migrate_photos_batch", limit: 6 })
+          body: JSON.stringify({ action: "organize_photos_by_order", limit: 8, moveLimit: 25 })
         },
-        32000
+        35000
       );
       const json = await res.json();
-      if (!json || !json.success || !json.data) break;
-      if (json.data.busy) {
-        await new Promise((r) => setTimeout(r, 2000));
-        continue;
+      if (!json || !json.success || !json.data) {
+        if (json && json.busy) {
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        break;
       }
-      totalMigrated += Number(json.data.migratedPhotos || 0);
-      totalUploaded += Number(json.data.uploadedNewDriveFiles || 0);
-      remaining = Number(json.data.remainingPhotos || 0);
-      if (remaining <= 0 || Number(json.data.updatedCells || 0) === 0) break;
-      await new Promise((r) => setTimeout(r, 400));
+      const d = json.data;
+      lastInfo = d;
+      if (d.rootFolderUrl || d.ownerEmail) {
+        saveCachedDriveFolderInfo({
+          rootFolderUrl: d.rootFolderUrl || "",
+          ownerEmail: d.ownerEmail || ""
+        });
+      }
+      totalUploaded += Number(d.uploadedNewDriveFiles || 0);
+      totalMoved += Number(d.movedDriveFiles || 0);
+      totalMigrated += Number(d.migratedPhotos || 0);
+      const remPhotos = Number(d.remainingPhotos || 0);
+      const remMoves = Number(d.remainingMoves || 0);
+      if (remPhotos <= 0 && remMoves <= 0) break;
+      await new Promise((r) => setTimeout(r, 350));
     }
 
-    if (totalMigrated > 0) {
+    if (totalMigrated > 0 || totalUploaded > 0) {
       await syncFromGoogleSheets(true, { forceFull: true });
-      if (interactive) {
-        showToast(`Optimización completada: ${totalMigrated} foto(s) movidas a Google Drive (${totalUploaded} archivos nuevos). La nube ahora es hasta 10x más rápida.`);
-      }
-    } else if (interactive) {
-      showToast("Todas las fotografías ya están optimizadas en Google Drive.");
+    }
+    await fetchDriveFoldersInfo();
+
+    if (interactive) {
+      const detail = totalUploaded > 0 || totalMoved > 0
+        ? `Listo: ${totalUploaded} foto(s) respaldadas y ${totalMoved} foto(s) organizadas en sus carpetas por pedido.`
+        : "Todas las fotografías ya están respaldadas y organizadas por pedido en Google Drive.";
+      showToast(detail, "success");
     }
     return true;
   } catch (err) {
-    console.warn("Aviso durante optimización de fotos a Drive:", err);
-    if (interactive) showToast("No se pudo completar la optimización de fotos en este momento.", "warning");
+    console.warn("Error organizando fotos en Drive:", err);
+    if (interactive) showToast("No se pudo completar la organización en Drive (verifica que Code.gs v48 esté implementado).", "warning");
     return false;
   } finally {
     photoMigrationInProgress = false;
   }
+}
+
+async function runCloudPhotoMigration(interactive = false) {
+  return runOrganizeDrivePhotosByOrder(interactive);
 }
 
 function updateCloudSyncBadge(state, detailText) {
@@ -4050,6 +4250,14 @@ async function restoreFromRecycleBin(delId) {
       if (Array.isArray(d.finanzas)) {
         d.finanzas.forEach((f) => { db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, f, (x) => x.id_mov || x.id_movimiento); });
       }
+      if (d.inventarioReintegrado && Array.isArray(d.movimientos_inventario) && d.movimientos_inventario.length) {
+        if (!Array.isArray(db.movimientos_inventario)) db.movimientos_inventario = [];
+        d.movimientos_inventario.forEach((mv) => {
+          const sp = (db.inventario_repuestos || []).find((r) => r.id_repuesto === mv.repuesto_id);
+          if (sp) sp.stock_actual = Math.max(0, (Number(sp.stock_actual) || 0) - (Number(mv.cantidad) || 0));
+          db.movimientos_inventario = upsertByKey(db.movimientos_inventario, mv, (x) => x.id_mov);
+        });
+      }
       break;
     case "cliente":
       db.clientes = upsertByKey(db.clientes, d, (x) => x.id_cliente);
@@ -4166,6 +4374,35 @@ function openCloudSyncModal() {
         </button>
       </div>
 
+      <!-- Carpeta Organizada de Fotos en Google Drive (Por Pedido — v48) -->
+      <div class="form-section-box" style="border-color:rgba(34,197,94,0.45); margin-bottom:14px; background:rgba(22,163,74,0.07);">
+        <div class="form-section-title" style="color:#4ade80;">
+          <i class="fab fa-google-drive"></i> Respaldo Organizado de Fotos en Google Drive (Carpetas por Pedido)
+        </div>
+        <div id="cloud-drive-info-summary" style="font-size:12px; color:var(--text-muted); margin-bottom:10px; line-height:1.45;">
+          ${
+            cachedDriveFolderInfo && cachedDriveFolderInfo.rootFolderUrl
+              ? `Carpeta raíz: <strong>Rectificadora_Renacer_Evidencias</strong>${cachedDriveFolderInfo.ownerEmail ? ` · Cuenta propietaria: <strong style="color:#fde047;">${escapeHtml(cachedDriveFolderInfo.ownerEmail)}</strong>` : ""}${cachedDriveFolderInfo.orderFoldersCount ? ` · <strong>${cachedDriveFolderInfo.orderFoldersCount}</strong> subcarpeta(s) de pedidos` : ""}. Cada foto se guarda comprimida y organizada dentro de <code>Pedido_#Troquel_Modelo_Cliente</code>.`
+              : `Consultando carpeta <strong>Rectificadora_Renacer_Evidencias</strong> en Google Drive... (Las fotos nuevas y existentes se organizan automáticamente en subcarpetas por pedido).`
+          }
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <a
+            id="btn-open-drive-photos-folder"
+            href="${cachedDriveFolderInfo && cachedDriveFolderInfo.rootFolderUrl ? escapeHtml(cachedDriveFolderInfo.rootFolderUrl) : "#"}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn--success btn--sm ${cachedDriveFolderInfo && cachedDriveFolderInfo.rootFolderUrl ? "" : "hidden"}"
+            style="text-decoration:none;"
+          >
+            <i class="fab fa-google-drive"></i> Abrir Carpeta de Fotos en Drive
+          </a>
+          <button type="button" class="btn btn--gold btn--sm" onclick="closeModal(); runOrganizeDrivePhotosByOrder(true);">
+            <i class="fas fa-folder-tree"></i> Organizar y Respaldar Fotos por Pedido
+          </button>
+        </div>
+      </div>
+
       <!-- Respaldos Históricos y Recuperación -->
       <div class="form-section-box" style="border-color:rgba(56,189,248,0.4); margin-bottom:14px; background:rgba(15,23,42,0.22);">
         <div class="form-section-title" style="color:#38bdf8;">
@@ -4227,6 +4464,20 @@ function openCloudSyncModal() {
       </button>
     `
   });
+
+  // Consultar info actualizada de la carpeta de Drive en segundo plano para mostrar enlace directo y cuenta propietaria
+  fetchDriveFoldersInfo().then((info) => {
+    if (!info) return;
+    const sumEl = document.getElementById("cloud-drive-info-summary");
+    const linkEl = document.getElementById("btn-open-drive-photos-folder");
+    if (sumEl && info.rootFolderUrl) {
+      sumEl.innerHTML = `Carpeta raíz: <strong>${escapeHtml(info.rootFolderName || "Rectificadora_Renacer_Evidencias")}</strong>${info.ownerEmail ? ` · Cuenta propietaria: <strong style="color:#fde047;">${escapeHtml(info.ownerEmail)}</strong>` : ""}${info.orderFoldersCount !== undefined ? ` · <strong>${info.orderFoldersCount}</strong> subcarpeta(s) de pedidos` : ""}. Cada foto se guarda comprimida y organizada dentro de <code>Pedido_#Troquel_Modelo_Cliente</code>.`;
+    }
+    if (linkEl && info.rootFolderUrl) {
+      linkEl.href = info.rootFolderUrl;
+      linkEl.classList.remove("hidden");
+    }
+  });
 }
 
 function clearAllTestOrders() {
@@ -4279,9 +4530,21 @@ function clearAllTestOrders() {
 function deleteOrder(orderId) {
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
   if (!ord) return;
+  const isArchivedOrder = ord.estado_actual === "archivado";
+  const linkedInvMovs = (db.movimientos_inventario || []).filter(
+    (m) =>
+      m &&
+      m.tipo === "salida_orden" &&
+      (String(m.orden_id || "") === String(orderId) ||
+        (ord.codigo_troquel && String(m.codigo_troquel || "") === String(ord.codigo_troquel)))
+  );
+  const invNotice = !isArchivedOrder && linkedInvMovs.length > 0
+    ? ` Además se devolverán automáticamente al inventario las unidades descontadas por esta orden (${linkedInvMovs.reduce((a, m) => a + (Number(m.cantidad) || 0), 0)} uds.).`
+    : "";
+
   Swal.fire({
     title: `¿Eliminar Troquel #${ord.codigo_troquel}?`,
-    text: `Se eliminará la orden de ${ord.nombre_cliente} (${ord.datos_motor.marca} ${ord.datos_motor.modelo}) junto con sus subtareas y bitácora. Quedará una copia recuperable en la Papelera de Respaldo.`,
+    text: `Se eliminará la orden de ${ord.nombre_cliente} (${ord.datos_motor.marca} ${ord.datos_motor.modelo}) junto con sus subtareas y bitácora.${invNotice} Quedará una copia recuperable en la Papelera de Respaldo.`,
     icon: "warning",
     showCancelButton: true,
     confirmButtonColor: "#dc2626",
@@ -4290,6 +4553,11 @@ function deleteOrder(orderId) {
     confirmButtonText: "Sí, eliminar orden"
   }).then(async (res) => {
     if (res.isConfirmed) {
+      // Si la orden NO fue concretada/archivada, reintegrar su inventario y limpiar la salida fantasma (v48)
+      const invReint = !isArchivedOrder
+        ? reintegrateOrderInventory(ord, "delete")
+        : { restoredUnits: 0, removedMovs: [] };
+
       archiveToRecycleBin(
         "orden",
         ord.id_orden,
@@ -4298,7 +4566,9 @@ function deleteOrder(orderId) {
           orden: ord,
           subtareas: (db.subtareas || []).filter((s) => s.orden_id === orderId),
           bitacora: (db.bitacora || []).filter((b) => b.orden_id === orderId),
-          finanzas: (db.finanzas_movimientos || []).filter((f) => f.orden_id === orderId)
+          finanzas: (db.finanzas_movimientos || []).filter((f) => f.orden_id === orderId),
+          movimientos_inventario: invReint.removedMovs || [],
+          inventarioReintegrado: invReint.restoredUnits > 0
         },
         `Eliminación de orden #${ord.codigo_troquel}`
       );
@@ -4314,7 +4584,11 @@ function deleteOrder(orderId) {
       closeModal();
       renderApp();
       await flushCloudPush(true, { reason: `Orden #${ord.codigo_troquel} eliminada` });
-      showToast(`Orden / Troquel #${ord.codigo_troquel} eliminada (recuperable desde Papelera).`);
+      showToast(
+        invReint.restoredUnits > 0
+          ? `Orden #${ord.codigo_troquel} eliminada y ${invReint.restoredUnits} unidad(es) reintegradas al inventario.`
+          : `Orden / Troquel #${ord.codigo_troquel} eliminada (recuperable desde Papelera).`
+      );
     }
   });
 }
@@ -5982,15 +6256,218 @@ function renderScreen() {
 /* ============================================================================
    MÓDULO DE INVENTARIO CENTRAL DE REPUESTOS (RESPONSABLE: JAVIER ANDRADE)
    ============================================================================ */
+/* ---------- INTEGRIDAD DE INVENTARIO: REINTEGRO EN ÓRDENES ELIMINADAS/ANULADAS (v48) ---------- */
+function isInventoryExitOrderValid(mov) {
+  if (!mov || mov.tipo !== "salida_orden") return true;
+  const oid = String(mov.orden_id || "").trim();
+  const troq = String(mov.codigo_troquel || "").trim();
+  if (!oid && !troq) return true;
+  const ord = (db.ordenes || []).find(
+    (o) => (oid && String(o.id_orden) === oid) || (troq && String(o.codigo_troquel) === troq)
+  );
+  if (!ord) return false; // La orden fue eliminada del sistema
+  if (ord.estado_actual === "anulado") return false; // La orden fue anulada
+  return true;
+}
+
+function getOrphanedInventoryOrderExits() {
+  return (db.movimientos_inventario || []).filter(
+    (m) => m && m.tipo === "salida_orden" && !isInventoryExitOrderValid(m)
+  );
+}
+
+function reintegrateOrderInventory(orderOrId, mode = "delete") {
+  const ord = typeof orderOrId === "string"
+    ? (db.ordenes || []).find((o) => o.id_orden === orderOrId)
+    : orderOrId;
+  if (!ord) return { restoredUnits: 0, removedMovs: [] };
+
+  // Si la orden se concretó y archivó, la salida física SÍ ocurrió -> respetar salida
+  if (ord.estado_actual === "archivado") {
+    return { restoredUnits: 0, removedMovs: [] };
+  }
+
+  if (!Array.isArray(db.movimientos_inventario)) db.movimientos_inventario = [];
+  const orderIdStr = String(ord.id_orden || "");
+  const troqStr = String(ord.codigo_troquel || "");
+
+  const matchedMovs = db.movimientos_inventario.filter(
+    (m) =>
+      m &&
+      m.tipo === "salida_orden" &&
+      ((orderIdStr && String(m.orden_id || "") === orderIdStr) ||
+        (troqStr && String(m.codigo_troquel || "") === troqStr))
+  );
+
+  let restoredUnits = 0;
+  const restoredBySpare = new Map();
+
+  matchedMovs.forEach((m) => {
+    const qty = Math.max(0, Number(m.cantidad) || 0);
+    if (qty <= 0) return;
+    const sp = (db.inventario_repuestos || []).find(
+      (r) =>
+        r.id_repuesto === m.repuesto_id ||
+        (m.repuesto_nombre && String(r.nombre || "").toLowerCase() === String(m.repuesto_nombre).toLowerCase())
+    );
+    if (sp) {
+      sp.stock_actual = (Number(sp.stock_actual) || 0) + qty;
+      restoredUnits += qty;
+      restoredBySpare.set(sp.id_repuesto, (restoredBySpare.get(sp.id_repuesto) || 0) + qty);
+    }
+  });
+
+  // Respaldo: si la orden tenía items_repuestos pero ningún movimiento registrado, devolverlos también
+  if (matchedMovs.length === 0 && Array.isArray(ord.items_repuestos) && ord.items_repuestos.length > 0) {
+    ord.items_repuestos.forEach((it) => {
+      const qty = Math.max(0, Number(it.cantidad) || 0);
+      if (qty <= 0) return;
+      const sp = (db.inventario_repuestos || []).find((r) => r.id_repuesto === it.id_repuesto);
+      if (sp) {
+        sp.stock_actual = (Number(sp.stock_actual) || 0) + qty;
+        restoredUnits += qty;
+      }
+    });
+  }
+
+  if (mode === "delete" || mode === "annul") {
+    const matchedIds = new Set(matchedMovs.map((m) => m.id_mov));
+    db.movimientos_inventario = db.movimientos_inventario.filter((m) => !matchedIds.has(m.id_mov));
+  }
+
+  return { restoredUnits, removedMovs: matchedMovs };
+}
+
+async function reintegrateOrphanedInventoryExits(singleMovId = null) {
+  const orphans = singleMovId
+    ? getOrphanedInventoryOrderExits().filter((m) => m.id_mov === singleMovId)
+    : getOrphanedInventoryOrderExits();
+
+  if (!orphans.length) {
+    showToast("No hay salidas de órdenes eliminadas pendientes por devolver.", "info");
+    return;
+  }
+
+  let totalRestored = 0;
+  const orphanIds = new Set();
+
+  orphans.forEach((m) => {
+    const qty = Math.max(0, Number(m.cantidad) || 0);
+    const sp = (db.inventario_repuestos || []).find(
+      (r) =>
+        r.id_repuesto === m.repuesto_id ||
+        (m.repuesto_nombre && String(r.nombre || "").toLowerCase() === String(m.repuesto_nombre).toLowerCase())
+    );
+    if (sp && qty > 0) {
+      sp.stock_actual = (Number(sp.stock_actual) || 0) + qty;
+      totalRestored += qty;
+    }
+    orphanIds.add(m.id_mov);
+  });
+
+  db.movimientos_inventario = (db.movimientos_inventario || []).filter((m) => !orphanIds.has(m.id_mov));
+
+  saveDatabase(`Reintegro stock por órdenes eliminadas (+${totalRestored} uds.)`);
+  renderApp();
+  await flushCloudPush(true, { reason: `Reintegro inventario órdenes eliminadas (+${totalRestored} uds.)` });
+  if (document.getElementById("renacer-modal-overlay") && !document.getElementById("renacer-modal-overlay").classList.contains("hidden")) {
+    openInventoryHistoryModal();
+  }
+  showToast(`Stock reintegrado: +${totalRestored} unidad(es) devueltas al inventario y salida fantasma eliminada.`, "success");
+}
+
+function revertSingleInventoryMovement(movId) {
+  const mov = (db.movimientos_inventario || []).find((m) => m.id_mov === movId);
+  if (!mov) return;
+  const isExit = mov.tipo === "salida_orden" || mov.tipo === "salida";
+  const qty = Math.max(0, Number(mov.cantidad) || 0);
+
+  Swal.fire({
+    title: isExit ? "¿Revertir esta salida y devolver stock?" : "¿Eliminar este movimiento del historial?",
+    text: isExit
+      ? `Se devolverán +${qty} unidad(es) de "${mov.repuesto_nombre || mov.repuesto_id}" al stock actual y se eliminará el registro.`
+      : `Se eliminará este registro del historial de movimientos.`,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: isExit ? "Sí, devolver stock y eliminar" : "Sí, eliminar"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    if (isExit && qty > 0) {
+      const sp = (db.inventario_repuestos || []).find(
+        (r) =>
+          r.id_repuesto === mov.repuesto_id ||
+          (mov.repuesto_nombre && String(r.nombre || "").toLowerCase() === String(mov.repuesto_nombre).toLowerCase())
+      );
+      if (sp) sp.stock_actual = (Number(sp.stock_actual) || 0) + qty;
+    }
+    db.movimientos_inventario = (db.movimientos_inventario || []).filter((m) => m.id_mov !== movId);
+    saveDatabase(`Movimiento inventario revertido (${mov.repuesto_nombre || movId})`);
+    renderApp();
+    openInventoryHistoryModal();
+    await flushCloudPush(true, { reason: `Reverso movimiento inventario ${movId}` });
+    showToast(isExit ? `Salida revertida: +${qty} uds. devueltas al inventario.` : "Movimiento eliminado del historial.");
+  });
+}
+
 function renderInventoryScreen() {
   const spares = db.inventario_repuestos || [];
   const lowStock = spares.filter((r) => Number(r.stock_actual) <= Number(r.stock_minimo));
   const totalUnits = spares.reduce((acc, r) => acc + (Number(r.stock_actual) || 0), 0);
+  const totalCostoUSD = spares.reduce((acc, r) => acc + ((Number(r.stock_actual) || 0) * (Number(r.precio_costo) || 0)), 0);
   const totalValorUSD = spares.reduce((acc, r) => acc + ((Number(r.stock_actual) || 0) * (Number(r.precio_venta) || 0)), 0);
+  const totalGananciaUSD = totalValorUSD - totalCostoUSD;
+  const margenSobreVenta = totalValorUSD > 0 ? (totalGananciaUSD / totalValorUSD) * 100 : 0;
+  const retornoSobreCosto = totalCostoUSD > 0 ? (totalGananciaUSD / totalCostoUSD) * 100 : 0;
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
 
+  // Detectar salidas huérfanas de órdenes eliminadas/anuladas (ej. Orden #1584 de prueba)
+  const orphanedExits = getOrphanedInventoryOrderExits();
+  const orphanTotalUnits = orphanedExits.reduce((acc, m) => acc + (Number(m.cantidad) || 0), 0);
+
+  // Resumen de salidas reales en órdenes válidas (activas o archivadas/concretadas)
+  const validOrderExits = (db.movimientos_inventario || []).filter(
+    (m) => m && m.tipo === "salida_orden" && isInventoryExitOrderValid(m)
+  );
+  let soldUnits = 0;
+  let soldCostUSD = 0;
+  let soldSaleUSD = 0;
+  validOrderExits.forEach((m) => {
+    const qty = Math.max(0, Number(m.cantidad) || 0);
+    const sp = spares.find(
+      (r) =>
+        r.id_repuesto === m.repuesto_id ||
+        (m.repuesto_nombre && String(r.nombre || "").toLowerCase() === String(m.repuesto_nombre).toLowerCase())
+    );
+    soldUnits += qty;
+    soldCostUSD += qty * (Number(sp?.precio_costo) || 0);
+    soldSaleUSD += qty * (Number(sp?.precio_venta) || 0);
+  });
+  const soldProfitUSD = soldSaleUSD - soldCostUSD;
+
+  const orphanBannerHtml = orphanedExits.length > 0
+    ? `
+      <div id="inventory-orphan-alert-banner" style="background:rgba(245, 158, 11, 0.12); border:1.5px solid rgba(245, 158, 11, 0.55); border-radius:14px; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; align-items:center; gap:12px; min-width:0; flex:1;">
+          <i class="fas fa-triangle-exclamation" style="font-size:20px; color:#f59e0b; flex-shrink:0;"></i>
+          <div style="font-size:12.5px; line-height:1.4;">
+            <strong style="color:#fbbf24;">Se detectó ${orphanedExits.length} salida(s) de orden(es) eliminada(s) o anulada(s) (${orphanTotalUnits} uds.)</strong>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+              ${orphanedExits.map((m) => `Orden #${escapeHtml(m.codigo_troquel || m.orden_id || "?")} · ${escapeHtml(m.repuesto_nombre || m.repuesto_id)} (${m.cantidad} uds.)`).join(" | ")}
+            </div>
+          </div>
+        </div>
+        <button type="button" class="btn btn--gold btn--sm" onclick="reintegrateOrphanedInventoryExits()" style="font-weight:900;">
+          <i class="fas fa-rotate-left"></i> Devolver Stock (+${orphanTotalUnits} uds.) y Limpiar
+        </button>
+      </div>
+    `
+    : "";
+
   return `
-    <div style="display:flex; flex-direction:column; gap:18px;">
+    <div style="display:flex; flex-direction:column; gap:16px;">
       <!-- CABECERA DE INVENTARIO -->
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; background:var(--bg-card); padding:16px 20px; border-radius:16px; border:1px solid var(--border-subtle);">
         <div>
@@ -5998,7 +6475,7 @@ function renderInventoryScreen() {
             <i class="fas fa-boxes-stacked" style="color:var(--renacer-gold);"></i> CONTROL CENTRAL DE INVENTARIO Y REPUESTOS
           </h2>
           <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
-            Gestión de stock, válvulas, guías, empacaduras y consumos por orden · Responsable: <strong>Javier Andrade</strong>
+            Gestión de stock, costos, ganancias y consumos por orden · Responsable: <strong>Javier Andrade</strong>
           </div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -6006,33 +6483,63 @@ function renderInventoryScreen() {
             <i class="fas fa-plus"></i> Nuevo Repuesto
           </button>
           <button type="button" class="btn btn--ghost" onclick="openInventoryHistoryModal()">
-            <i class="fas fa-history"></i> Historial de Salidas
+            <i class="fas fa-history"></i> Historial de Salidas${orphanedExits.length ? ` <span class="sidebar-badge-count" style="margin-left:4px; background:rgba(245,158,11,0.28); color:#fbbf24;">${orphanedExits.length}</span>` : ""}
           </button>
         </div>
       </div>
 
-      <!-- TARJETAS DE MÉTRICAS -->
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px;">
-        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1px solid var(--border-subtle);">
-          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Variedad de Repuestos</div>
-          <div style="font-size:24px; font-weight:900; color:var(--text-main); margin-top:4px;">${spares.length} Ítems</div>
+      ${orphanBannerHtml}
+
+      <!-- TARJETAS DE MÉTRICAS FINANCIERAS Y STOCK PARA JAVIER (v48) -->
+      <div class="kpi-strip" style="grid-template-columns:repeat(auto-fit, minmax(185px, 1fr)); margin-bottom:0;">
+        <div class="kpi-card">
+          <span class="kpi-label"><i class="fas fa-cubes" style="color:#38bdf8;"></i> Stock Físico Actual</span>
+          <div class="kpi-value" style="color:#38bdf8;">${totalUnits} uds.</div>
+          <span class="kpi-sub">${spares.length} ítem(s) registrados en depósito</span>
         </div>
-        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1px solid var(--border-subtle);">
-          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Unidades Físicas en Stock</div>
-          <div style="font-size:24px; font-weight:900; color:#38bdf8; margin-top:4px;">${totalUnits} uds.</div>
+
+        <div class="kpi-card" style="border:1px solid rgba(248, 113, 113, 0.35);">
+          <span class="kpi-label"><i class="fas fa-tags" style="color:#f87171;"></i> Costo Total Repuestos</span>
+          <div class="kpi-value" style="color:#f87171;">$${totalCostoUSD.toFixed(2)}</div>
+          <div style="font-size:11px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ Bs. ${(totalCostoUSD * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <span class="kpi-sub">Inversión total en stock actual</span>
         </div>
-        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1px solid var(--border-subtle);">
-          <div style="font-size:11px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Valor Total Inventario (PVP)</div>
-          <div style="font-size:24px; font-weight:900; color:#22c55e; margin-top:4px;">$${totalValorUSD.toFixed(2)}</div>
-          <div style="font-size:11px; color:var(--text-muted);">≈ Bs. ${(totalValorUSD * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2 })}</div>
+
+        <div class="kpi-card">
+          <span class="kpi-label"><i class="fas fa-dollar-sign" style="color:#22c55e;"></i> Valor Venta Total (PVP)</span>
+          <div class="kpi-value" style="color:#22c55e;">$${totalValorUSD.toFixed(2)}</div>
+          <div style="font-size:11px; color:#86efac; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ Bs. ${(totalValorUSD * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <span class="kpi-sub">Valor proyectado a precio de venta</span>
         </div>
-        <div style="background:var(--bg-card); padding:14px 16px; border-radius:14px; border:1.5px solid ${lowStock.length > 0 ? "#ef4444" : "var(--border-subtle)"};">
-          <div style="font-size:11px; font-weight:800; color:${lowStock.length > 0 ? "#ef4444" : "var(--text-muted)"}; text-transform:uppercase;">Stock Bajo / Reponer</div>
-          <div style="font-size:24px; font-weight:900; color:${lowStock.length > 0 ? "#ef4444" : "#22c55e"}; margin-top:4px;">${lowStock.length} Ítems</div>
+
+        <div class="kpi-card" style="border:1.5px solid rgba(245, 223, 0, 0.5);">
+          <span class="kpi-label"><i class="fas fa-chart-line" style="color:var(--renacer-gold);"></i> Ganancia General Estimada</span>
+          <div class="kpi-value" style="color:var(--renacer-gold);">+$${totalGananciaUSD.toFixed(2)}</div>
+          <div style="font-size:11px; color:#fde047; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ Bs. ${(totalGananciaUSD * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <span class="kpi-sub">Margen: <strong>${margenSobreVenta.toFixed(1)}%</strong> · Retorno: <strong>+${retornoSobreCosto.toFixed(1)}%</strong></span>
+        </div>
+
+        <div class="kpi-card" style="border:1.5px solid ${lowStock.length > 0 ? "#ef4444" : "var(--border-subtle)"};">
+          <span class="kpi-label" style="color:${lowStock.length > 0 ? "#ef4444" : "var(--text-muted)"};"><i class="fas fa-bell"></i> Stock Bajo / Reponer</span>
+          <div class="kpi-value" style="color:${lowStock.length > 0 ? "#ef4444" : "#22c55e"};">${lowStock.length} Ítems</div>
+          <span class="kpi-sub">${lowStock.length > 0 ? "Requieren reposición pronta" : "Todo el depósito abastecido"}</span>
         </div>
       </div>
 
-      <!-- TABLA DE REPUESTOS -->
+      <!-- RESUMEN DE REPUESTOS DESPACHADOS EN ÓRDENES VÁLIDAS -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:14px; padding:11px 16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; font-size:12px;">
+        <span style="font-weight:800; color:var(--text-muted); text-transform:uppercase; font-size:11px;">
+          <i class="fas fa-receipt" style="color:var(--renacer-gold);"></i> Salidas Válidas en Órdenes Concretadas / Activas:
+        </span>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; font-family:'JetBrains Mono',monospace; font-weight:800;">
+          <span>Despachado: <strong style="color:#38bdf8;">${soldUnits} uds.</strong></span>
+          <span>Costo: <strong style="color:#f87171;">$${soldCostUSD.toFixed(2)}</strong></span>
+          <span>Facturado: <strong style="color:#22c55e;">$${soldSaleUSD.toFixed(2)}</strong></span>
+          <span>Ganancia Generada: <strong style="color:var(--renacer-gold);">+$${soldProfitUSD.toFixed(2)}</strong></span>
+        </div>
+      </div>
+
+      <!-- TABLA DE REPUESTOS CON COSTO, VENTA Y GANANCIA -->
       <div style="background:var(--bg-card); border-radius:16px; border:1px solid var(--border-subtle); overflow:hidden;">
         <div style="padding:12px 16px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
           <span style="font-size:12.5px; font-weight:800; color:var(--text-main);"><i class="fas fa-list"></i> Catálogo Físico en Depósito</span>
@@ -6041,32 +6548,44 @@ function renderInventoryScreen() {
         <div style="overflow-x:auto;">
           <table style="width:100%; border-collapse:collapse; font-size:12.5px; text-align:left;">
             <thead>
-              <tr style="background:rgba(0,0,0,0.12); color:var(--text-secondary); font-size:11.5px; text-transform:uppercase;">
-                <th style="padding:10px 14px;">Código</th>
-                <th style="padding:10px 14px;">Repuesto</th>
-                <th style="padding:10px 14px;">Categoría</th>
-                <th style="padding:10px 14px; text-align:center;">Stock Actual</th>
-                <th style="padding:10px 14px; text-align:right;">P. Costo</th>
-                <th style="padding:10px 14px; text-align:right;">P. Venta</th>
-                <th style="padding:10px 14px; text-align:center;">Acciones</th>
+              <tr style="background:rgba(0,0,0,0.12); color:var(--text-secondary); font-size:11px; text-transform:uppercase;">
+                <th style="padding:10px 12px;">Código</th>
+                <th style="padding:10px 12px;">Repuesto</th>
+                <th style="padding:10px 12px;">Categoría</th>
+                <th style="padding:10px 12px; text-align:center;">Stock</th>
+                <th style="padding:10px 12px; text-align:right;">P. Costo</th>
+                <th style="padding:10px 12px; text-align:right;">P. Venta</th>
+                <th style="padding:10px 12px; text-align:right;">Ganancia c/u</th>
+                <th style="padding:10px 12px; text-align:right;">Costo Total</th>
+                <th style="padding:10px 12px; text-align:right;">Ganancia Stock</th>
+                <th style="padding:10px 12px; text-align:center;">Acciones</th>
               </tr>
             </thead>
             <tbody id="inventory-table-body">
               ${spares.map(r => {
-                const isCritical = Number(r.stock_actual) <= Number(r.stock_minimo);
+                const stk = Number(r.stock_actual) || 0;
+                const cost = Number(r.precio_costo) || 0;
+                const price = Number(r.precio_venta) || 0;
+                const unitProfit = price - cost;
+                const rowCostTotal = stk * cost;
+                const rowProfitTotal = stk * unitProfit;
+                const isCritical = stk <= Number(r.stock_minimo);
                 return `
                   <tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td style="padding:10px 14px; font-weight:900; font-family:'JetBrains Mono',monospace; color:var(--renacer-gold);">${r.codigo || r.id_repuesto}</td>
-                    <td style="padding:10px 14px; font-weight:800; color:var(--text-main);">${r.nombre}</td>
-                    <td style="padding:10px 14px; color:var(--text-muted);">${r.categoria || "General"}</td>
-                    <td style="padding:10px 14px; text-align:center;">
+                    <td style="padding:10px 12px; font-weight:900; font-family:'JetBrains Mono',monospace; color:var(--renacer-gold);">${r.codigo || r.id_repuesto}</td>
+                    <td style="padding:10px 12px; font-weight:800; color:var(--text-main);">${r.nombre}</td>
+                    <td style="padding:10px 12px; color:var(--text-muted);">${r.categoria || "General"}</td>
+                    <td style="padding:10px 12px; text-align:center;">
                       <span style="padding:3px 9px; border-radius:99px; font-weight:900; font-size:12px; background:${isCritical ? "rgba(239,68,68,0.18)" : "rgba(34,197,94,0.15)"}; color:${isCritical ? "#ef4444" : "#22c55e"};">
-                        ${r.stock_actual} ${r.unidad || "uds"}
+                        ${stk} ${r.unidad || "uds"}
                       </span>
                     </td>
-                    <td style="padding:10px 14px; text-align:right; font-family:'JetBrains Mono',monospace;">$${Number(r.precio_costo).toFixed(2)}</td>
-                    <td style="padding:10px 14px; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#22c55e;">$${Number(r.precio_venta).toFixed(2)}</td>
-                    <td style="padding:10px 14px; text-align:center;">
+                    <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace;">$${cost.toFixed(2)}</td>
+                    <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:#22c55e;">$${price.toFixed(2)}</td>
+                    <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:800; color:${unitProfit >= 0 ? "var(--renacer-gold)" : "#ef4444"};">${unitProfit >= 0 ? "+" : ""}$${unitProfit.toFixed(2)}</td>
+                    <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace; color:#fca5a5;">$${rowCostTotal.toFixed(2)}</td>
+                    <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace; font-weight:900; color:var(--renacer-gold);">+$${rowProfitTotal.toFixed(2)}</td>
+                    <td style="padding:10px 12px; text-align:center;">
                       <div style="display:inline-flex; gap:6px;">
                         <button type="button" class="btn btn--primary btn--xs" onclick="openAdjustStockModal('${r.id_repuesto}')" title="Añadir o descontar unidades">
                           <i class="fas fa-boxes-packing"></i> Stock
@@ -6080,6 +6599,16 @@ function renderInventoryScreen() {
                 `;
               }).join("")}
             </tbody>
+            <tfoot>
+              <tr style="background:rgba(245, 223, 0, 0.08); border-top:1.5px solid rgba(245, 223, 0, 0.35); font-weight:900;">
+                <td colspan="3" style="padding:10px 12px; color:var(--renacer-gold); text-transform:uppercase; font-size:11.5px;">TOTALES GENERALES EN DEPÓSITO</td>
+                <td style="padding:10px 12px; text-align:center; font-family:'JetBrains Mono',monospace; color:#38bdf8;">${totalUnits} uds.</td>
+                <td colspan="3" style="padding:10px 12px; text-align:right; font-size:11px; color:var(--text-muted);">PVP Total: <strong style="color:#22c55e;">$${totalValorUSD.toFixed(2)}</strong></td>
+                <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace; color:#f87171;">$${totalCostoUSD.toFixed(2)}</td>
+                <td style="padding:10px 12px; text-align:right; font-family:'JetBrains Mono',monospace; color:var(--renacer-gold);">+$${totalGananciaUSD.toFixed(2)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>
@@ -6331,38 +6860,73 @@ function saveEditSpare(spareId) {
 
 function openInventoryHistoryModal() {
   const movs = db.movimientos_inventario || [];
+  const orphans = getOrphanedInventoryOrderExits();
+  const orphanUnits = orphans.reduce((acc, m) => acc + (Number(m.cantidad) || 0), 0);
+
   openModal({
     title: "Historial de Movimientos de Inventario",
     icon: "fa-history",
     wide: true,
     body: `
+      ${
+        orphans.length > 0
+          ? `
+            <div style="background:rgba(245, 158, 11, 0.14); border:1.5px solid rgba(245, 158, 11, 0.55); border-radius:12px; padding:10px 14px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; font-size:12px;">
+              <div>
+                <strong style="color:#fbbf24;"><i class="fas fa-triangle-exclamation"></i> ${orphans.length} salida(s) pertenece(n) a orden(es) eliminada(s) o anulada(s).</strong>
+                <div style="color:var(--text-muted); font-size:11.5px;">Devuelve sus ${orphanUnits} unidad(es) al inventario en 1 clic.</div>
+              </div>
+              <button type="button" class="btn btn--gold btn--xs" onclick="reintegrateOrphanedInventoryExits()" style="font-weight:900;">
+                <i class="fas fa-rotate-left"></i> Devolver Todo (+${orphanUnits} uds.)
+              </button>
+            </div>
+          `
+          : ""
+      }
       <div style="overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
           <thead>
             <tr style="background:rgba(0,0,0,0.12); color:var(--text-secondary); text-transform:uppercase;">
-              <th style="padding:8px 12px;">Fecha</th>
-              <th style="padding:8px 12px;">Repuesto</th>
-              <th style="padding:8px 12px; text-align:center;">Tipo</th>
-              <th style="padding:8px 12px; text-align:center;">Cantidad</th>
-              <th style="padding:8px 12px;">Referencia / Nota</th>
-              <th style="padding:8px 12px;">Responsable</th>
+              <th style="padding:8px 10px;">Fecha</th>
+              <th style="padding:8px 10px;">Repuesto</th>
+              <th style="padding:8px 10px; text-align:center;">Tipo</th>
+              <th style="padding:8px 10px; text-align:center;">Cantidad</th>
+              <th style="padding:8px 10px;">Referencia / Nota</th>
+              <th style="padding:8px 10px;">Responsable</th>
+              <th style="padding:8px 10px; text-align:right;">Acción</th>
             </tr>
           </thead>
           <tbody>
-            ${movs.length ? movs.map(m => `
-              <tr style="border-bottom:1px solid var(--border-subtle);">
-                <td style="padding:8px 12px; font-size:11px; color:var(--text-muted);">${formatDateHuman(m.fecha, true)}</td>
-                <td style="padding:8px 12px; font-weight:800; color:var(--text-main);">${m.repuesto_nombre || m.repuesto_id}</td>
-                <td style="padding:8px 12px; text-align:center;">
+            ${movs.length ? movs.map(m => {
+              const isOrphan = m.tipo === "salida_orden" && !isInventoryExitOrderValid(m);
+              const safeId = String(m.id_mov || "").replace(/'/g, "\\'");
+              return `
+              <tr style="border-bottom:1px solid var(--border-subtle); ${isOrphan ? "background:rgba(245,158,11,0.08);" : ""}">
+                <td style="padding:8px 10px; font-size:11px; color:var(--text-muted);">${formatDateHuman(m.fecha, true)}</td>
+                <td style="padding:8px 10px; font-weight:800; color:var(--text-main);">${escapeHtml(m.repuesto_nombre || m.repuesto_id)}</td>
+                <td style="padding:8px 10px; text-align:center;">
                   <span style="padding:2px 8px; border-radius:99px; font-size:10.5px; font-weight:800; background:${m.tipo === "salida_orden" || m.tipo === "salida" ? "rgba(239,68,68,0.18); color:#ef4444;" : "rgba(34,197,94,0.15); color:#22c55e;"}">
-                    ${m.tipo === "salida_orden" ? "Salida en Orden" : m.tipo}
+                    ${m.tipo === "salida_orden" ? "Salida en Orden" : escapeHtml(m.tipo)}
                   </span>
+                  ${isOrphan ? `<div style="font-size:10px; font-weight:900; color:#fbbf24; margin-top:2px;">Orden eliminada</div>` : ""}
                 </td>
-                <td style="padding:8px 12px; text-align:center; font-weight:900;">${m.cantidad}</td>
-                <td style="padding:8px 12px; font-size:11.5px; color:var(--text-muted);">${m.orden_id ? `Orden #${m.codigo_troquel || m.orden_id}` : (m.nota || "Ajuste de inventario")}</td>
-                <td style="padding:8px 12px; font-weight:700;">${m.responsable || "Javier Andrade"}</td>
+                <td style="padding:8px 10px; text-align:center; font-weight:900;">${m.cantidad}</td>
+                <td style="padding:8px 10px; font-size:11.5px; color:var(--text-muted);">${m.orden_id ? `Orden #${escapeHtml(m.codigo_troquel || m.orden_id)}` : escapeHtml(m.nota || "Ajuste de inventario")}</td>
+                <td style="padding:8px 10px; font-weight:700;">${escapeHtml(m.responsable || "Javier Andrade")}</td>
+                <td style="padding:8px 10px; text-align:right; white-space:nowrap;">
+                  ${
+                    isOrphan
+                      ? `<button type="button" class="btn btn--gold btn--xs" onclick="reintegrateOrphanedInventoryExits('${safeId}')" title="Devolver unidades al stock y limpiar salida">
+                           <i class="fas fa-rotate-left"></i> Devolver (+${m.cantidad})
+                         </button>`
+                      : `<button type="button" class="btn btn--ghost btn--xs" style="color:#ef4444;" onclick="revertSingleInventoryMovement('${safeId}')" title="Revertir / Eliminar movimiento">
+                           <i class="fas fa-trash-alt"></i>
+                         </button>`
+                  }
+                </td>
               </tr>
-            `).join("") : '<tr><td colspan="6" style="padding:20px; text-align:center; color:var(--text-muted);">Sin movimientos registrados aún.</td></tr>'}
+            `;
+            }).join("") : '<tr><td colspan="7" style="padding:20px; text-align:center; color:var(--text-muted);">Sin movimientos registrados aún.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -6667,199 +7231,158 @@ function renderDashboardScreen() {
     .map((o) => renderOrderCardTelegramStyle(o))
     .join("");
 
+  const configuredAccounts = balancesInfo.accounts || getConfiguredBankAccounts();
+
   return `
-    <div style="display:flex; flex-direction:column; gap:20px;">
+    <div style="display:flex; flex-direction:column; gap:16px;">
       
-      <!-- BANNER DE TASAS DUALES (BCV VS PARALELO / BINANCE P2P) -->
-      <div class="currency-rates-banner">
+      <!-- BANNER COMPACTO DE TASAS DUALES (ESTILO FINANZAS v48) -->
+      <div class="currency-rates-banner" style="padding:12px 16px; border-radius:16px;">
         <div class="currency-rates-info">
           <div style="display:flex; align-items:center; gap:8px;">
-            <i class="fas fa-coins" style="font-size:20px; color:var(--renacer-gold);"></i>
+            <i class="fas fa-coins" style="font-size:18px; color:var(--renacer-gold);"></i>
             <div>
-              <div style="font-size:13px; font-weight:900; color:#fff;">CONTROL DE TIPO DE CAMBIO EN VIVO</div>
+              <div style="font-size:12.5px; font-weight:900; color:#fff;">CONTROL DE TIPO DE CAMBIO EN VIVO</div>
               <div style="font-size:11px; color:#94a3b8;">
-                Tasas oficiales para facturación y cobros del taller
+                Tasas oficiales para facturación y cobros
                 ${db.config?.tasaFechaActualizacion ? `· <i class="fas fa-clock"></i> ${db.config.tasaFechaActualizacion}` : ""}
               </div>
             </div>
           </div>
           <div class="currency-rate-box">
-            <span class="currency-rate-label"><i class="fas fa-university" style="color:var(--renacer-gold); margin-right:4px;"></i> Tasa Oficial BCV:</span>
-            <span class="currency-rate-value">${tasaBcv.toFixed(2)} Bs/$</span>
+            <span class="currency-rate-label"><i class="fas fa-euro-sign" style="color:var(--renacer-gold); margin-right:4px;"></i> BCV Euro (€):</span>
+            <span class="currency-rate-value">${tasaBcv.toFixed(2)} Bs/€</span>
           </div>
           <div class="currency-rate-box">
-            <span class="currency-rate-label"><i class="fas fa-bolt" style="color:#38bdf8; margin-right:4px;"></i> Binance P2P / Paralelo:</span>
+            <span class="currency-rate-label"><i class="fas fa-bolt" style="color:#38bdf8; margin-right:4px;"></i> Binance P2P:</span>
             <span class="currency-rate-value">${tasaBinance.toFixed(2)} Bs/$</span>
           </div>
-          <div style="font-size:11.5px; color:#cbd5e1;">
-            Diferencial cambiario: <strong style="color:#fde047;">${(((tasaBinance - tasaBcv) / tasaBcv) * 100).toFixed(1)}%</strong>
+          <div style="font-size:11px; color:#cbd5e1;">
+            Diferencial: <strong style="color:#fde047;">${(((tasaBinance - tasaBcv) / tasaBcv) * 100).toFixed(1)}%</strong>
           </div>
         </div>
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <button type="button" class="btn btn--ghost btn--xs" onclick="fetchLiveExchangeRates(false)" style="padding:6px 12px; font-weight:800; border-color:rgba(245,223,0,0.4); color:#fde047;" title="Consultar última tasa en línea">
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn btn--ghost btn--xs" onclick="fetchLiveExchangeRates(false)" style="padding:6px 11px; font-weight:800; border-color:rgba(245,223,0,0.4); color:#fde047;" title="Consultar última tasa en línea">
             <i class="fas fa-rotate"></i> Actualizar en Vivo
           </button>
-          <button type="button" class="btn btn--gold btn--xs" onclick="openEditExchangeRatesModal()" style="padding:6px 14px; font-weight:900;">
+          <button type="button" class="btn btn--gold btn--xs" onclick="openEditExchangeRatesModal()" style="padding:6px 12px; font-weight:900;">
             <i class="fas fa-edit"></i> Ajustar Manual
           </button>
         </div>
       </div>
 
-      <!-- 5 PANELES FINANCIEROS INDEPENDIENTES (INGRESOS, EGRESOS, CXC, CXP, DISPONIBILIDAD TOTAL) -->
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px;">
-        
-        <!-- Panel 1: Ingresos Totales -->
-        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1px solid rgba(255,255,255,0.08); box-shadow:0 4px 20px rgba(0,0,0,0.25);">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-            <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#94a3b8;">
-              INGRESOS TOTALES (CAJA)
-            </div>
-            <i class="fas fa-arrow-down" style="color:#22c55e;"></i>
-          </div>
-          <div style="font-size:28px; font-weight:900; color:#22c55e; font-family:'JetBrains Mono',monospace; margin-top:4px;">
-            $${totalIngresos.toFixed(2)}
-          </div>
-          <div style="font-size:12px; color:#fde047; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
-            ≈ ${(totalIngresos * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
-            Pagos 100%, abonos y cobros verificados
-          </div>
+      <!-- KPI STRIP EJECUTIVO UNIFORME (MISMO ESTILO LIMPIO Y COMPACTO DE FINANZAS — v48) -->
+      <div class="kpi-strip" style="grid-template-columns:repeat(auto-fit, minmax(195px, 1fr)); margin-bottom:0;">
+        <div class="kpi-card">
+          <span class="kpi-label"><i class="fas fa-arrow-circle-down" style="color:#16a34a;"></i> Ingresos Totales (Caja)</span>
+          <div class="kpi-value" style="color:#16a34a;">$${totalIngresos.toFixed(2)}</div>
+          <div style="font-size:11.5px; color:#fde047; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ ${(totalIngresos * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.</div>
+          <span class="kpi-sub">Pagos 100%, abonos y cobros verificados</span>
         </div>
 
-        <!-- Panel 2: Egresos Totales -->
-        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1px solid rgba(255,255,255,0.08); box-shadow:0 4px 20px rgba(0,0,0,0.25);">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-            <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#94a3b8;">
-              EGRESOS TOTALES
-            </div>
-            <i class="fas fa-arrow-up" style="color:#ef4444;"></i>
-          </div>
-          <div style="font-size:28px; font-weight:900; color:#ef4444; font-family:'JetBrains Mono',monospace; margin-top:4px;">
-            $${totalEgresos.toFixed(2)}
-          </div>
-          <div style="font-size:12px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
-            ≈ ${(totalEgresos * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
-            Insumos, nómina destajo, químicos y servicios
-          </div>
+        <div class="kpi-card">
+          <span class="kpi-label"><i class="fas fa-arrow-circle-up" style="color:#dc2626;"></i> Egresos Totales</span>
+          <div class="kpi-value" style="color:#dc2626;">$${totalEgresos.toFixed(2)}</div>
+          <div style="font-size:11.5px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ ${(totalEgresos * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.</div>
+          <span class="kpi-sub">Insumos, nómina destajo y servicios</span>
         </div>
 
-        <!-- Panel 3: Cuentas por Cobrar (En la Calle) -->
-        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1.5px solid rgba(245, 158, 11, 0.4); box-shadow:0 4px 20px rgba(0,0,0,0.25); cursor:pointer;" onclick="navigateTab('accounts_receivable')" title="Ver detalle de cuentas por cobrar">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-            <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#fbbf24;">
-              CUENTAS POR COBRAR (CALLE)
-            </div>
-            <span style="font-size:11px; padding:2px 8px; border-radius:99px; background:rgba(245, 158, 11, 0.2); color:#fde047; font-weight:800;">
-              ${countCuentasPorCobrar} Facturas
-            </span>
-          </div>
-          <div style="font-size:28px; font-weight:900; color:#f59e0b; font-family:'JetBrains Mono',monospace; margin-top:4px;">
-            $${totalCuentasPorCobrar.toFixed(2)}
-          </div>
-          <div style="font-size:12px; color:#fef08a; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
-            ≈ ${(totalCuentasPorCobrar * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-          </div>
-          <div style="font-size:11px; color:#cbd5e1; margin-top:4px; line-height:1.3;">
-            <i class="fas fa-info-circle"></i> <em>Saldos en calle. No computable en caja.</em>
-          </div>
+        <div class="kpi-card" style="cursor:pointer; border:1px solid rgba(245, 158, 11, 0.35);" onclick="navigateTab('accounts_receivable')" title="Ver desglose detallado de cuentas por cobrar">
+          <span class="kpi-label" style="display:flex; justify-content:space-between; align-items:center;">
+            <span><i class="fas fa-file-invoice-dollar" style="color:#f59e0b;"></i> Cuentas por Cobrar</span>
+            <span style="font-size:10px; padding:1px 7px; border-radius:99px; background:rgba(245,158,11,0.2); color:#fde047; font-weight:800;">${countCuentasPorCobrar} Fact.</span>
+          </span>
+          <div class="kpi-value" style="color:#f59e0b;">$${totalCuentasPorCobrar.toFixed(2)}</div>
+          <div style="font-size:11.5px; color:#fef08a; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ ${(totalCuentasPorCobrar * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.</div>
+          <span class="kpi-sub">Saldos en calle · Ver detalle <i class="fas fa-arrow-right"></i></span>
         </div>
 
-        <!-- Panel 4: Cuentas por Pagar (Pasivos / Deudas) -->
-        <div style="background:var(--bg-card); border-radius:16px; padding:18px 20px; border:1.5px solid rgba(239, 68, 68, 0.4); box-shadow:0 4px 20px rgba(0,0,0,0.25); cursor:pointer;" onclick="openNewAccountPayableModal()" title="Gestionar Cuentas por Pagar">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-            <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#f87171;">
-              CUENTAS POR PAGAR (PASIVOS)
-            </div>
-            <span style="font-size:11px; padding:2px 8px; border-radius:99px; background:rgba(239, 68, 68, 0.18); color:#fca5a5; font-weight:800;">
-              ${cxpActivas.length} Activas
-            </span>
-          </div>
-          <div style="font-size:28px; font-weight:900; color:#ef4444; font-family:'JetBrains Mono',monospace; margin-top:4px;">
-            $${totalCxpPendiente.toFixed(2)}
-          </div>
-          <div style="font-size:12px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
-            ≈ ${(totalCxpPendiente * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-          </div>
-          <div style="font-size:11px; color:#cbd5e1; margin-top:4px; line-height:1.3;">
-            <i class="fas fa-file-invoice-dollar"></i> <em>Maquinaria, préstamos y proveedores.</em>
-          </div>
+        <div class="kpi-card" style="cursor:pointer; border:1px solid rgba(239, 68, 68, 0.35);" onclick="openNewAccountPayableModal()" title="Gestionar Cuentas por Pagar y Préstamos">
+          <span class="kpi-label" style="display:flex; justify-content:space-between; align-items:center;">
+            <span><i class="fas fa-industry" style="color:#f87171;"></i> Cuentas por Pagar</span>
+            <span style="font-size:10px; padding:1px 7px; border-radius:99px; background:rgba(239,68,68,0.18); color:#fca5a5; font-weight:800;">${cxpActivas.length} Act.</span>
+          </span>
+          <div class="kpi-value" style="color:#f87171;">$${totalCxpPendiente.toFixed(2)}</div>
+          <div style="font-size:11.5px; color:#fca5a5; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ ${(totalCxpPendiente * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.</div>
+          <span class="kpi-sub">Maquinaria, préstamos y proveedores</span>
         </div>
 
-        <!-- Panel 5: Disponibilidad Total en Cuentas y Caja Líquida (Control Dinámico de Cuentas) -->
-        <div class="kpi-card--assets" style="border-radius:16px; padding:18px 20px; box-shadow:0 4px 20px rgba(0,0,0,0.25); border:1.5px solid rgba(56, 189, 248, 0.45);">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:6px;">
-            <div style="font-size:11.5px; font-weight:900; letter-spacing:1px; text-transform:uppercase; color:#93c5fd;">
-              DISPONIBILIDAD TOTAL (CUENTAS Y CAJA)
-            </div>
-            <button type="button" class="btn btn--ghost btn--xs" onclick="openManageBankAccountsModal()" style="padding:2px 8px; font-size:10px; border-color:rgba(56,189,248,0.45); color:#7dd3fc;" title="Agregar, quitar o ajustar saldos de cuentas y bancos">
-              <i class="fas fa-sliders"></i> Cuentas
-            </button>
-          </div>
-          <div style="font-size:28px; font-weight:900; color:#38bdf8; font-family:'JetBrains Mono',monospace; margin-top:4px;">
-            $${cajaDisponible.toFixed(2)}
-          </div>
-          <div style="font-size:12px; color:#7dd3fc; font-weight:800; font-family:'JetBrains Mono',monospace; margin-top:2px;">
-            ≈ ${(cajaDisponible * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-          </div>
-          <div style="font-size:10px; color:#94a3b8; margin-top:2px;">
-            Balance calculado con cuentas en saldo positivo
-          </div>
-          <div style="margin-top:8px;">
-            ${(balancesInfo.accounts || []).map((acc) => {
-              const bal = Number(balances[acc.id] || 0);
-              const isPos = bal > 0;
-              const isNeg = bal < 0;
-              const valColor = isNeg ? "#f87171" : (isPos ? acc.color : "#94a3b8");
-              return `
-                <div class="kpi-breakdown-row">
-                  <span><i class="fas ${acc.icono || "fa-building-columns"}" style="color:${acc.color || "#38bdf8"};"></i> ${escapeHtml(acc.nombre)}:</span>
-                  <strong style="color:${valColor};">
-                    $${bal.toFixed(2)}${acc.moneda === "VES" ? ` <span style="font-size:10px; opacity:0.8;">(≈ ${(bal * tasaBcv).toFixed(0)} Bs)</span>` : ""}
-                  </strong>
-                </div>
-              `;
-            }).join("")}
-            <div class="kpi-breakdown-row" style="margin-top:4px; padding-top:4px; border-top:1px dashed rgba(255,255,255,0.12); opacity:0.85;">
-              <span><i class="fas fa-gears" style="color:var(--renacer-gold);"></i> Motores / Piezas en Taller:</span>
-              <strong style="color:var(--renacer-gold);">$${valorPiezasEnTaller.toFixed(2)}</strong>
-            </div>
-          </div>
+        <div class="kpi-card" style="border:1.5px solid rgba(245, 223, 0, 0.45);">
+          <span class="kpi-label"><i class="fas fa-vault" style="color:var(--renacer-gold);"></i> Disponibilidad Líquida</span>
+          <div class="kpi-value" style="color:var(--renacer-gold);">$${cajaDisponible.toFixed(2)}</div>
+          <div style="font-size:11.5px; color:#7dd3fc; font-weight:800; font-family:'JetBrains Mono',monospace;">≈ ${(cajaDisponible * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.</div>
+          <span class="kpi-sub"><i class="fas fa-gears" style="color:var(--renacer-gold);"></i> Motores en Taller: <strong style="color:var(--renacer-gold);">$${valorPiezasEnTaller.toFixed(2)}</strong></span>
         </div>
-
       </div>
 
-      <!-- BOTONERA DE ACCIÓN EJECUTIVA (DISEÑO JESÚS ANDRADE) -->
-      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-        <button type="button" class="btn btn--gold" onclick="openNewOrderModal()" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-plus-circle"></i> Nueva Orden
-        </button>
-        <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-plus-circle"></i> Ingreso Extra
-        </button>
-        <button type="button" class="btn btn--transfer-sky" onclick="openTransferBetweenAccountsModal()" style="padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-right-left"></i> Transferencia
-        </button>
-        <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')" style="font-weight:900; padding:10px 18px; border-radius:99px;">
-          <i class="fas fa-minus-circle"></i> Registrar Gasto
-        </button>
-        <button type="button" class="btn btn--ghost" onclick="openManageBankAccountsModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(56, 189, 248, 0.45); color:#38bdf8;">
-          <i class="fas fa-building-columns"></i> Gestionar Cuentas / Bancos
-        </button>
-        <button type="button" class="btn btn--ghost" onclick="openNewAccountPayableModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(239, 68, 68, 0.4); color:#f87171;">
-          <i class="fas fa-file-invoice"></i> Cuenta por Pagar / Préstamo
-        </button>
-        <button type="button" class="btn btn--ghost" onclick="openPdfArchiveAndExportModal()" style="padding:10px 18px; border-radius:99px; border-color:rgba(245, 223, 0, 0.45); color:#fde047;">
-          <i class="fas fa-file-pdf"></i> Archivo PDF / Exportar por Fecha
-        </button>
-        <button type="button" class="btn btn--ghost" onclick="navigateTab('finances_ledger')" style="padding:10px 18px; border-radius:99px; border-color:var(--border-color);">
-          <i class="fas fa-wallet"></i> Libro Diario
-        </button>
-        <button type="button" class="btn btn--ghost" onclick="navigateTab('accounts_receivable')" style="padding:10px 18px; border-radius:99px; border-color:var(--border-color); color:#f59e0b;">
-          <i class="fas fa-file-invoice-dollar"></i> Cuentas por Cobrar (${countCuentasPorCobrar})
-        </button>
+      <!-- TIRA HORIZONTAL DE CUENTAS Y BANCOS (IDÉNTICA AL ESTILO LIMPIO DE FINANZAS — v48) -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:12px 18px;">
+        <div style="font-size:11px; font-weight:900; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <span><i class="fas fa-building-columns" style="color:var(--renacer-gold);"></i> SALDOS LÍQUIDOS DISPONIBLES POR CUENTA Y CAJA (ACUMULADO GLOBAL REAL)</span>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button type="button" class="btn btn--ghost btn--xs" onclick="openManageBankAccountsModal()" style="border-color:rgba(56,189,248,0.45); color:#38bdf8;">
+              <i class="fas fa-sliders"></i> Gestionar Cuentas / Bancos
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" onclick="openPdfArchiveAndExportModal()" style="border-color:rgba(245,223,0,0.45); color:#fde047;">
+              <i class="fas fa-file-pdf"></i> Archivo PDF por Fecha
+            </button>
+            <button type="button" class="btn btn--ghost btn--xs" onclick="navigateTab('finances_ledger')">
+              <i class="fas fa-book-open"></i> Libro Diario
+            </button>
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+          ${configuredAccounts.map((acc) => {
+            const val = Number(balances[acc.id] || 0);
+            const accColor = acc.color || "#38bdf8";
+            return `
+              <div style="background:var(--bg-input); padding:9px 12px; border-radius:10px; border-left:4px solid ${accColor}; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <div style="min-width:0;">
+                  <div style="font-size:11px; font-weight:800; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    <i class="fas ${acc.icono || "fa-building-columns"}"></i> ${escapeHtml(acc.nombre)}
+                  </div>
+                  <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:${val < 0 ? "#ef4444" : accColor}; margin-top:2px;">
+                    $${val.toFixed(2)}
+                  </div>
+                  ${acc.moneda === "VES" ? `<div style="font-size:10px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">≈ ${(val * tasaBcv).toLocaleString("es-VE", { maximumFractionDigits: 0 })} Bs.</div>` : ""}
+                </div>
+                <span style="font-size:10px; font-weight:800; padding:2px 6px; border-radius:6px; background:rgba(255,255,255,0.06); color:var(--text-muted); flex-shrink:0;">${acc.moneda || "USD"}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+
+      <!-- PANEL DE ACCIONES RÁPIDAS DEL TALLER (ESTILO FINANZAS v48) -->
+      <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:16px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <div>
+          <div style="font-size:15px; font-weight:900; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-bolt" style="color:var(--renacer-gold);"></i> Acciones Rápidas de Taller y Caja
+          </div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+            Recepción de motores, movimientos de caja, préstamos y cobros en 1 clic.
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold" onclick="openNewOrderModal()" style="font-weight:900;">
+            <i class="fas fa-plus-circle"></i> Nueva Orden
+          </button>
+          <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
+            <i class="fas fa-minus-circle"></i> Registrar Gasto
+          </button>
+          <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')">
+            <i class="fas fa-plus-circle"></i> Ingreso Extra
+          </button>
+          <button type="button" class="btn btn--transfer-sky" onclick="openTransferBetweenAccountsModal()">
+            <i class="fas fa-right-left"></i> Transferencia
+          </button>
+          <button type="button" class="btn btn--ghost" onclick="openNewAccountPayableModal()" style="border-color:rgba(239, 68, 68, 0.4); color:#f87171;">
+            <i class="fas fa-file-invoice"></i> Cuenta por Pagar
+          </button>
+          <button type="button" class="btn btn--ghost" onclick="navigateTab('accounts_receivable')" style="border-color:rgba(245, 158, 11, 0.45); color:#f59e0b;">
+            <i class="fas fa-file-invoice-dollar"></i> Por Cobrar (${countCuentasPorCobrar})
+          </button>
+        </div>
       </div>
 
       <!-- MÓDULO DE PRÉSTAMOS Y CUENTAS POR PAGAR (MAQUINARIAS / PROVEEDORES) -->
@@ -6978,7 +7501,7 @@ function openEditExchangeRatesModal() {
 
         <div class="form-grid-2">
           <div class="form-field">
-            <label><i class="fas fa-university"></i> Tasa Oficial BCV (Bs. / USD) *</label>
+            <label><i class="fas fa-euro-sign"></i> Tasa Oficial BCV Euro (Bs. / €) *</label>
             <input type="number" step="0.01" min="1" id="rate-bcv-input" value="${curBcv}" required />
           </div>
           <div class="form-field">
@@ -6988,8 +7511,8 @@ function openEditExchangeRatesModal() {
         </div>
 
         <div style="background:rgba(245,223,0,0.06); border:1px solid rgba(245,223,0,0.25); border-radius:12px; padding:12px; font-size:12.5px;">
-          <div style="font-weight:800; color:var(--renacer-gold); margin-bottom:4px;">Nota de Liquidación y Cobro:</div>
-          <div>Los clientes y talleres aliados que paguen en Bolívares vía Pago Móvil liquidarán al valor calculado con la tasa BCV del día conforme a la normativa comercial.</div>
+          <div style="font-weight:800; color:var(--renacer-gold); margin-bottom:4px;">Nota de Liquidación y Referencial en Bolívares:</div>
+          <div>Todos los montos referenciales en Bolívares (Bs.) del taller se calculan automáticamente con la <strong>Tasa Oficial Euro BCV del día</strong> (conservando el símbolo $ en el resto del sistema).</div>
         </div>
 
         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
@@ -7014,12 +7537,13 @@ function saveExchangeRates() {
 
   if (!db.config) db.config = {};
   db.config.tasaBcv = bcv;
+  db.config.tasaBcvMoneda = "EUR";
   db.config.tasaBinance = binance;
 
-  saveDatabase();
+  saveDatabase("Tasa BCV Euro ajustada");
   closeModal();
   renderApp();
-  showToast(`Tasas actualizadas: BCV ${bcv.toFixed(2)} Bs / Paralelo ${binance.toFixed(2)} Bs.`, "success");
+  showToast(`Tasas actualizadas: BCV Euro ${bcv.toFixed(2)} Bs/€ | Paralelo ${binance.toFixed(2)} Bs/$.`, "success");
 }
 
 function openEditPartnerSalaryModal(userId) {
@@ -8476,6 +9000,9 @@ async function cancelOrderWithReason(orderId) {
   });
 
   if (reason) {
+    const invReint = o.estado_actual !== "archivado"
+      ? reintegrateOrderInventory(o, "annul")
+      : { restoredUnits: 0, removedMovs: [] };
     o.estado_actual = "anulado";
     o.motivo_anulacion = reason.trim();
     o.fecha_anulacion = getLocalIsoDateTime();
@@ -11303,68 +11830,99 @@ function handleLightboxMouseDown(e) {
   window.addEventListener("mouseup", onMouseUp);
 }
 
-async function compressImageForSheets(file, maxDim = 720, maxChars = 34000, uploadToDrive = true) {
-  const localResult = await new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
+/* ---------- COMPRESIÓN INTELIGENTE ULTRA-RÁPIDA (v48): ~70-130 KB nítidos en <150ms ---------- */
+async function compressImageFastLocal(file, maxDim = 1080, targetMaxChars = 195000) {
+  return new Promise((resolve) => {
+    const finishFromSrc = (src, revokeFn) => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const drawAt = (dim, q) => {
-          let w = img.width;
-          let h = img.height;
-          if (w > dim || h > dim) {
-            if (w > h) {
-              h = Math.round((h * dim) / w);
-              w = dim;
-            } else {
-              w = Math.round((w * dim) / h);
-              h = dim;
+        try {
+          const canvas = document.createElement("canvas");
+          const drawAt = (dim, q) => {
+            let w = img.width;
+            let h = img.height;
+            if (w > dim || h > dim) {
+              if (w > h) {
+                h = Math.round((h * dim) / w);
+                w = dim;
+              } else {
+                w = Math.round((w * dim) / h);
+                h = dim;
+              }
             }
+            canvas.width = Math.max(1, w);
+            canvas.height = Math.max(1, h);
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL("image/jpeg", q);
+          };
+
+          // 1 sola pasada rápida en HD (1080px, q=0.72 -> ~75-130 KB, excelente nitidez en móvil y Drive)
+          let driveDataUrl = drawAt(maxDim, 0.72);
+          if (driveDataUrl.length > targetMaxChars) {
+            driveDataUrl = drawAt(Math.min(maxDim, 960), 0.62);
           }
-          canvas.width = Math.max(1, w);
-          canvas.height = Math.max(1, h);
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          return canvas.toDataURL("image/jpeg", q);
-        };
 
-        // Versión nítida para subir directo a Google Drive (si hay internet)
-        const driveDataUrl = drawAt(Math.max(maxDim, 960), 0.78);
+          // Fallback offline compacto (<34KB) solo se usa si no hubiera conexión a Drive
+          const getFallback = () => {
+            if (driveDataUrl.length <= 34000) return driveDataUrl;
+            let d = 640;
+            let q = 0.62;
+            let out = driveDataUrl;
+            for (let i = 0; i < 4; i++) {
+              out = drawAt(d, q);
+              if (out.length <= 32000) break;
+              q = Math.max(0.35, q - 0.1);
+              d = Math.round(d * 0.78);
+            }
+            return out;
+          };
 
-        // Versión liviana de respaldo offline por si en este instante no hubiera conexión
-        let targetDim = maxDim;
-        let quality = 0.72;
-        let fallbackDataUrl = "";
-        for (let attempt = 0; attempt < 5; attempt++) {
-          fallbackDataUrl = drawAt(targetDim, quality);
-          if (fallbackDataUrl.length <= Math.min(maxChars, 26000)) break;
-          quality = Math.max(0.35, quality - 0.12);
-          targetDim = Math.round(targetDim * 0.78);
+          if (revokeFn) revokeFn();
+          resolve({ driveDataUrl, getFallback });
+        } catch (e) {
+          if (revokeFn) revokeFn();
+          resolve({ driveDataUrl: "", getFallback: () => "" });
         }
-        resolve({ driveDataUrl, fallbackDataUrl });
       };
       img.onerror = () => {
-        const safe = String(ev.target.result || "").slice(0, maxChars);
-        resolve({ driveDataUrl: safe, fallbackDataUrl: safe });
+        if (revokeFn) revokeFn();
+        resolve({ driveDataUrl: "", getFallback: () => "" });
       };
-      img.src = ev.target.result;
+      img.src = src;
     };
+
+    if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+      try {
+        const objUrl = URL.createObjectURL(file);
+        finishFromSrc(objUrl, () => {
+          try { URL.revokeObjectURL(objUrl); } catch (e) {}
+        });
+        return;
+      } catch (e) {}
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => finishFromSrc(ev.target.result, null);
+    reader.onerror = () => resolve({ driveDataUrl: "", getFallback: () => "" });
     reader.readAsDataURL(file);
   });
+}
 
-  // SUBIDA DIRECTA A GOOGLE DRIVE (v44): guarda solo un enlace de 69 chars en Sheets (360x más ligero)
+async function compressImageForSheets(file, maxDim = 1080, maxChars = 34000, uploadToDrive = true, driveMeta = null) {
+  const local = await compressImageFastLocal(file, Math.max(maxDim, 960), 195000);
+  if (!local.driveDataUrl) return "";
+
   if (uploadToDrive && GAS_API_URL && (typeof navigator === "undefined" || navigator.onLine !== false)) {
-    const uploadedUrl = await uploadImageDataUrlToDrive(localResult.driveDataUrl, "renacer_foto", 14000);
+    const uploadedUrl = await uploadImageDataUrlToDrive(local.driveDataUrl, "renacer_foto", 14000, driveMeta);
     if (uploadedUrl && uploadedUrl.startsWith("http")) {
       return uploadedUrl;
     }
   }
-  return localResult.fallbackDataUrl;
+  return local.getFallback().slice(0, Math.max(maxChars, 34000));
 }
 
-function readFileAsCompressedDataUrl(file) {
-  return compressImageForSheets(file, 720, 32000, true);
+function readFileAsCompressedDataUrl(file, driveMeta = null) {
+  return compressImageForSheets(file, 1080, 34000, true, driveMeta);
 }
 
 /* ============================================================================
@@ -12007,17 +12565,46 @@ function addDemoPhotoToTempOrder(galleryType) {
 async function handleNewOrderGalleryUpload(event, galleryType) {
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
-  showToast(`Procesando ${files.length} foto(s) en alta resolución...`);
-  for (const file of files) {
-    const dataUrl = await readFileAsCompressedDataUrl(file);
+  const troqVal = (document.getElementById("new-ord-troquel")?.value || "").trim();
+  const modeloVal = (document.getElementById("new-ord-modelo")?.value || "").trim();
+  const marcaVal = (document.getElementById("new-ord-marca")?.value || "").trim();
+  const cliVal = (document.getElementById("new-cli-name")?.value || "").trim();
+  const orderFolder = buildOrderDriveFolderName({ codigo_troquel: troqVal, modelo: modeloVal, marca: marcaVal, nombre_cliente: cliVal });
+  const category = galleryType === "pieza" ? "recepcion_pieza" : "recepcion_repuestos";
+
+  // 1. Comprimir TODAS en paralelo (<200ms) y mostrar vista previa AL INSTANTE sin congelar la pantalla
+  const compressedList = await Promise.all(files.map((f) => compressImageFastLocal(f, 1080, 195000)));
+  const validItems = compressedList.filter((item) => item && item.driveDataUrl);
+  if (!validItems.length) return;
+
+  validItems.forEach((item) => {
+    const previewUrl = item.getFallback();
+    item._localPreview = previewUrl;
     if (galleryType === "pieza") {
-      tempNewOrderState.galeriaPieza.push(dataUrl);
+      tempNewOrderState.galeriaPieza.push(previewUrl);
     } else {
-      tempNewOrderState.galeriaRepuestos.push(dataUrl);
+      tempNewOrderState.galeriaRepuestos.push(previewUrl);
     }
-  }
+  });
   renderTempOrderGalleries();
-  showToast(`${files.length} foto(s) agregada(s) exitosamente.`);
+  showToast(`${validItems.length} foto(s) lista(s) · respaldando en carpeta ${orderFolder} de Drive...`, "info");
+
+  // 2. Subir a Drive en paralelo en segundo plano hacia la carpeta del pedido y reemplazar URLs silenciosamente
+  Promise.all(
+    validItems.map(async (item) => {
+      const driveUrl = await uploadImageDataUrlToDrive(item.driveDataUrl, category, 14000, {
+        orderFolder,
+        codigoTroquel: troqVal,
+        clienteNombre: cliVal,
+        category
+      });
+      if (driveUrl && driveUrl.startsWith("http")) {
+        replacePhotoDataUrlEverywhere(item._localPreview, driveUrl);
+      }
+    })
+  ).then(() => {
+    if (document.getElementById("preview-gallery-pieza")) renderTempOrderGalleries();
+  });
 }
 
 function removeTempGalleryPhoto(galleryType, idx) {
@@ -16358,11 +16945,13 @@ function pauseSubtaskWork(subtaskId) {
 
 /* ---------- FASE 3 PUNTO 5: REQUISITO FOTOGRÁFICO OBLIGATORIO DE FINALIZACIÓN ---------- */
 let tempFinishSubtaskPhoto = "";
+let currentFinishSubtaskOrderId = "";
 
 function openCompleteSubtaskModal(subtaskId) {
   const sub = db.subtareas.find((s) => s.id_subtarea === subtaskId);
   if (!sub) return;
   const ord = db.ordenes.find((o) => o.id_orden === sub.orden_id);
+  currentFinishSubtaskOrderId = ord ? ord.id_orden : (sub.orden_id || "");
 
   // Fase 3 Punto 5: La foto inicia VACÍA y el botón de envío permanece BLOQUEADO hasta adjuntarla
   tempFinishSubtaskPhoto = "";
@@ -16456,9 +17045,24 @@ function unlockFinishSubtaskButton(photoUrl) {
 async function handleSubtaskFinishPhoto(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-  const dataUrl = await readFileAsCompressedDataUrl(file);
-  unlockFinishSubtaskButton(dataUrl);
-  showToast("Fotografía obligatoria de pieza terminada cargada.");
+  const ord = (db.ordenes || []).find((o) => o.id_orden === currentFinishSubtaskOrderId);
+  const orderFolder = ord ? buildOrderDriveFolderName(ord) : "General_Pedidos";
+  // Compresión local ultrarrápida (<150ms): desbloquea el botón AL INSTANTE
+  const local = await compressImageFastLocal(file, 1080, 195000);
+  if (!local || !local.driveDataUrl) return;
+  const previewUrl = local.getFallback();
+  unlockFinishSubtaskButton(previewUrl);
+  showToast("Foto comprimida lista · respaldando en Drive...", "info");
+  // Subida en segundo plano directa a la subcarpeta del pedido en Drive
+  uploadImageDataUrlToDrive(local.driveDataUrl, "evidencia_terminado", 14000, {
+    orderFolder,
+    codigoTroquel: ord ? ord.codigo_troquel : "",
+    category: "evidencia_terminado"
+  }).then((driveUrl) => {
+    if (driveUrl && driveUrl.startsWith("http")) {
+      replacePhotoDataUrlEverywhere(previewUrl, driveUrl);
+    }
+  });
 }
 
 function useDemoFinishSubtaskPhoto() {
@@ -16687,6 +17291,7 @@ function openCompleteWorkerTroquelModal(orderId, workerId) {
   );
   if (!pendingSubs.length) return;
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
+  currentFinishSubtaskOrderId = orderId;
   const totalCommBatch = pendingSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
 
   tempFinishSubtaskPhoto = "";
@@ -17827,26 +18432,49 @@ async function handleInspectionMultiUpload(event, orderId, galleryType) {
   if (!order) return;
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
-  showToast(`Procesando ${files.length} foto(s) en alta definición (2K/4K)...`);
+  const orderFolder = buildOrderDriveFolderName(order);
+  const category = galleryType === "pieza" ? "recepcion_pieza" : "recepcion_repuestos";
+
+  // Compresión paralela en <200ms -> visualización inmediata
+  const compressedList = await Promise.all(files.map((f) => compressImageFastLocal(f, 1080, 195000)));
+  const validItems = compressedList.filter((item) => item && item.driveDataUrl);
+  if (!validItems.length) return;
+
   if (galleryType === "pieza") {
     if (!order.galeria_fotos_pieza) order.galeria_fotos_pieza = [];
-    for (const file of files) {
-      const dataUrl = await readFileAsCompressedDataUrl(file);
-      order.galeria_fotos_pieza.push(dataUrl);
-    }
+    validItems.forEach((item) => {
+      item._localPreview = item.getFallback();
+      order.galeria_fotos_pieza.push(item._localPreview);
+    });
   } else {
     if (!order.galeria_fotos_repuestos) order.galeria_fotos_repuestos = [];
-    for (const file of files) {
-      const dataUrl = await readFileAsCompressedDataUrl(file);
-      order.galeria_fotos_repuestos.push(dataUrl);
-    }
+    validItems.forEach((item) => {
+      item._localPreview = item.getFallback();
+      order.galeria_fotos_repuestos.push(item._localPreview);
+    });
   }
-  saveDatabase();
+  saveDatabase(`Fotos agregadas Troquel #${order.codigo_troquel}`);
   openDualGalleryInspector(orderId);
-  showToast(`${files.length} foto(s) agregada(s) exitosamente.`);
+  showToast(`${validItems.length} foto(s) agregada(s) · respaldando en Drive (${orderFolder})...`, "info");
+
+  // Subida en paralelo a Google Drive en la carpeta del pedido + sustitución silenciosa
+  Promise.all(
+    validItems.map(async (item) => {
+      const driveUrl = await uploadImageDataUrlToDrive(item.driveDataUrl, category, 14000, {
+        orderFolder,
+        codigoTroquel: order.codigo_troquel,
+        clienteNombre: order.nombre_cliente,
+        category
+      });
+      if (driveUrl && driveUrl.startsWith("http")) {
+        replacePhotoDataUrlEverywhere(item._localPreview, driveUrl);
+      }
+    })
+  );
 }
 
 let tempCrmPhotoUrl = "";
+let currentCrmOrderId = "";
 let currentCrmFilterMode = "chat"; // 'chat' | 'all'
 
 function setCrmFilterMode(mode, orderId) {
@@ -17858,6 +18486,7 @@ function openOrderCrmModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
   tempCrmPhotoUrl = "";
+  currentCrmOrderId = orderId;
   markOrderBitacoraAsRead(orderId, true);
 
   const allMessages = db.bitacora.filter((m) => m.orden_id === orderId);
@@ -17987,9 +18616,37 @@ function openOrderCrmModal(orderId) {
 async function handleCrmPhotoSelect(event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-  tempCrmPhotoUrl = await readFileAsCompressedDataUrl(file);
   const st = document.getElementById("crm-photo-status");
-  if (st) st.innerHTML = '<i class="fas fa-check-circle" style="color:#16a34a;"></i> Foto lista';
+  if (st) st.innerHTML = '<i class="fas fa-spinner fa-spin" style="color:var(--renacer-gold);"></i> Comprimiendo...';
+
+  const ord = (db.ordenes || []).find((o) => o.id_orden === currentCrmOrderId);
+  const orderFolder = ord ? buildOrderDriveFolderName(ord) : "General_Pedidos";
+
+  // Compresión local ultrarrápida (<150ms) -> permite publicar al instante sin esperar 10s
+  const local = await compressImageFastLocal(file, 1080, 195000);
+  if (!local || !local.driveDataUrl) {
+    if (st) st.innerHTML = "";
+    return;
+  }
+  const previewUrl = local.getFallback();
+  tempCrmPhotoUrl = previewUrl;
+  if (st) st.innerHTML = '<i class="fas fa-check-circle" style="color:#16a34a;"></i> Foto lista <span style="color:#38bdf8; font-size:10.5px;">(respaldando en Drive...)</span>';
+
+  // Subir en segundo plano directo a la subcarpeta del pedido y actualizar URL (incluso si ya pulsó Publicar)
+  uploadImageDataUrlToDrive(local.driveDataUrl, "bitacora", 14000, {
+    orderFolder,
+    codigoTroquel: ord ? ord.codigo_troquel : "",
+    clienteNombre: ord ? ord.nombre_cliente : "",
+    category: "bitacora"
+  }).then((driveUrl) => {
+    if (driveUrl && driveUrl.startsWith("http")) {
+      replacePhotoDataUrlEverywhere(previewUrl, driveUrl);
+      const stNow = document.getElementById("crm-photo-status");
+      if (stNow && tempCrmPhotoUrl === driveUrl) {
+        stNow.innerHTML = '<i class="fas fa-cloud-check" style="color:#16a34a;"></i> Foto lista y respaldada en Drive';
+      }
+    }
+  });
 }
 
 function sendCrmMessage(orderId) {
