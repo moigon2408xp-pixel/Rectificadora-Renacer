@@ -2419,6 +2419,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 [data-theme="light"] .order-clean-block {
   background: #f8fafc;
@@ -2426,16 +2429,37 @@ body {
 }
 
 .order-clean-block-title {
-  font-size: 1.15rem;
+  font-size: 1.08rem;
   font-weight: 800;
   color: #facc15;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.order-clean-block-title .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 [data-theme="light"] .order-clean-block-title {
   color: #b45309;
+}
+@media (max-width: 600px) {
+  .order-clean-block {
+    padding: 12px;
+  }
+  .order-clean-block-title {
+    font-size: 0.96rem;
+    gap: 6px;
+  }
+  .order-clean-block-title .btn {
+    font-size: 11px !important;
+    padding: 5px 10px !important;
+  }
 }
 
 .order-clean-services-list {
@@ -7493,6 +7517,97 @@ html[data-theme="light"] .worker-inline-photo-chip {
   background: rgba(100, 116, 139, 0.14);
   color: var(--text-muted);
   border-color: rgba(100, 116, 139, 0.35);
+}
+
+/* 8. Calculadora Integrada Bs. -> USD (Finanzas: Gasto / Ingreso / Edición — v49.2) */
+.bs-calc-panel {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(245, 223, 0, 0.08);
+  border: 1.5px solid rgba(245, 223, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+[data-theme="light"] .bs-calc-panel {
+  background: #fffbeb;
+  border-color: #eab308;
+}
+.bs-calc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bs-calc-title {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--gold-readable, #facc15);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bs-calc-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bs-calc-rate-chip {
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+  border-radius: 99px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.bs-calc-rate-chip:hover {
+  border-color: var(--renacer-gold);
+  background: rgba(245, 223, 0, 0.16);
+}
+.bs-calc-result-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+}
+.bs-calc-result-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 900;
+  color: #16a34a;
+}
+[data-theme="dark"] .bs-calc-result-val {
+  color: #4ade80;
+}
+.bs-calc-toggle-btn {
+  padding: 2px 8px !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  border-radius: 99px !important;
+}
+.migration-preset-btn {
+  border: 1.5px solid rgba(2, 132, 199, 0.55) !important;
+  color: #0284c7 !important;
+  background: rgba(2, 132, 199, 0.08) !important;
+  font-weight: 800 !important;
+  padding: 4px 10px !important;
+  font-size: 11px !important;
+  border-radius: 99px !important;
+}
+[data-theme="dark"] .migration-preset-btn {
+  color: #38bdf8 !important;
+  border-color: rgba(56, 189, 248, 0.55) !important;
+  background: rgba(56, 189, 248, 0.12) !important;
 }
 
 
