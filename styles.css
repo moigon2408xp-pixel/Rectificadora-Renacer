@@ -17,11 +17,15 @@
   --bg-elevated:        #ffffff;
   --bg-card:            #ffffff;
   --bg-subtle:          #f8fafc;
+  --bg-input:           #f8fafc;
   --text-main:          #0f172a;
   --text-secondary:     #334155;
   --text-muted:         #64748b;
   --border-color:       #cbd5e1;
   --border-subtle:      #e2e8f0;
+  --gold-readable:      #92400e;
+  --gold-readable-bg:   rgba(217, 119, 6, 0.12);
+  --gold-readable-bdr:  rgba(217, 119, 6, 0.42);
 
   /* Estados Semánticos */
   --status-diag:        #6366f1;
@@ -45,11 +49,15 @@
   --bg-elevated:        #131c31;
   --bg-card:            #162038;
   --bg-subtle:          #1e293b;
+  --bg-input:           #0f172a;
   --text-main:          #f8fafc;
   --text-secondary:     #e2e8f0;
   --text-muted:         #94a3b8;
   --border-color:       #2dd4bf22;
   --border-subtle:      #263554;
+  --gold-readable:      #f5df00;
+  --gold-readable-bg:   rgba(245, 223, 0, 0.15);
+  --gold-readable-bdr:  rgba(245, 223, 0, 0.45);
   --shadow-sm:          0 2px 8px rgba(0, 0, 0, 0.45);
   --shadow-md:          0 10px 28px rgba(0, 0, 0, 0.55);
   --shadow-lg:          0 20px 48px rgba(0, 0, 0, 0.75);
@@ -7112,6 +7120,379 @@ html[data-theme="light"] .worker-inline-photo-chip {
   .worker-top-compact-bar {
     padding: 10px 12px;
   }
+}
+
+/* ============================================================================
+   v49: CONTRASTE TOTAL MODO CLARO / OSCURO + SIN SCROLL HORIZONTAL MÓVIL
+        + LIBRO DIARIO COMPACTO + GOOGLE MAPS + INFORMES + ASISTENCIA SICS
+   ============================================================================ */
+
+/* 1. Contraste universal de textos amarillos/dorados en Modo Claro */
+.btn-gold-outline {
+  border-color: var(--gold-readable-bdr) !important;
+  color: var(--gold-readable) !important;
+}
+[data-theme="light"] .btn-gold-outline {
+  background: rgba(217, 119, 6, 0.08) !important;
+}
+[data-theme="light"] .main-workspace [style*="color:#fde047"],
+[data-theme="light"] .main-workspace [style*="color: #fde047"],
+[data-theme="light"] .main-workspace [style*="color:#fef08a"],
+[data-theme="light"] .main-workspace [style*="color: #fef08a"],
+[data-theme="light"] .main-workspace [style*="color:var(--renacer-gold)"],
+[data-theme="light"] .main-workspace [style*="color: var(--renacer-gold)"] {
+  color: #92400e !important;
+}
+[data-theme="light"] .main-workspace [style*="color:#86efac"],
+[data-theme="light"] .main-workspace [style*="color: #86efac"] {
+  color: #15803d !important;
+}
+[data-theme="light"] .main-workspace [style*="color:#fca5a5"],
+[data-theme="light"] .main-workspace [style*="color: #fca5a5"] {
+  color: #b91c1c !important;
+}
+[data-theme="light"] .main-workspace [style*="color:#38bdf8"],
+[data-theme="light"] .main-workspace [style*="color: #38bdf8"],
+[data-theme="light"] .main-workspace [style*="color:#7dd3fc"],
+[data-theme="light"] .main-workspace [style*="color: #7dd3fc"] {
+  color: #0369a1 !important;
+}
+/* Bloque Control de Tipo de Cambio en Vivo -> Blanco limpio en Modo Claro (pedido de Jesús) */
+[data-theme="light"] .currency-rates-banner {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06) !important;
+}
+[data-theme="light"] .currency-rates-banner [style*="color:#fff"],
+[data-theme="light"] .currency-rates-banner [style*="color: #fff"] {
+  color: #0f172a !important;
+}
+[data-theme="light"] .currency-rates-banner [style*="color:#94a3b8"],
+[data-theme="light"] .currency-rates-banner [style*="color:#cbd5e1"] {
+  color: #475569 !important;
+}
+[data-theme="light"] .currency-rates-banner .currency-rate-box {
+  background: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+}
+[data-theme="light"] .currency-rates-banner .currency-rate-label {
+  color: #475569 !important;
+}
+[data-theme="light"] .currency-rates-banner .currency-rate-value {
+  color: #92400e !important;
+}
+[data-theme="light"] .currency-rates-banner .btn--ghost {
+  color: #92400e !important;
+  border-color: rgba(217, 119, 6, 0.48) !important;
+  background: rgba(217, 119, 6, 0.08) !important;
+}
+[data-theme="light"] .currency-rates-banner .btn--ghost:hover {
+  background: rgba(217, 119, 6, 0.16) !important;
+}
+[data-theme="light"] .stage-pill-btn .count-badge {
+  background: rgba(24, 34, 84, 0.1) !important;
+  color: #182254 !important;
+}
+[data-theme="light"] .stage-pill-btn.active,
+[data-theme="light"] .stage-pill-btn.active * {
+  color: #f5df00 !important;
+}
+[data-theme="light"] .stage-pill-btn.active .count-badge {
+  background: rgba(245, 223, 0, 0.24) !important;
+  color: #f5df00 !important;
+}
+[data-theme="light"] .btn--gold,
+[data-theme="light"] .btn--gold * {
+  color: #0f1638 !important;
+}
+[data-theme="light"] .btn--primary,
+[data-theme="light"] .btn--primary *,
+[data-theme="light"] .btn--success,
+[data-theme="light"] .btn--success *,
+[data-theme="light"] .btn--danger,
+[data-theme="light"] .btn--danger *,
+[data-theme="light"] .btn--transfer-sky,
+[data-theme="light"] .btn--transfer-sky * {
+  color: #ffffff !important;
+}
+
+/* 2. Contraste de teléfonos y direcciones Google Maps en Modo Oscuro y Claro */
+.client-phone-link {
+  color: #182254;
+  font-weight: 800;
+  text-decoration: none;
+  font-family: 'JetBrains Mono', monospace;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+[data-theme="dark"] .client-phone-link {
+  color: #f1f5f9 !important;
+}
+.client-phone-link:hover {
+  text-decoration: underline;
+  color: #0284c7;
+}
+[data-theme="dark"] .client-phone-link:hover {
+  color: #7dd3fc !important;
+}
+
+.maps-addr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #0369a1;
+  font-weight: 700;
+  text-decoration: none;
+  word-break: break-word;
+}
+[data-theme="dark"] .maps-addr-link {
+  color: #38bdf8;
+}
+.maps-addr-link:hover {
+  text-decoration: underline;
+}
+
+/* 3. Etapas de Seguimiento de Órdenes: CERO scroll horizontal en móvil */
+@media (max-width: 768px) {
+  .renacer-filter-pill-bar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    overflow-x: visible !important;
+    padding-bottom: 0 !important;
+    margin-bottom: 14px !important;
+  }
+  .renacer-filter-pill-bar .stage-pill-btn {
+    width: 100% !important;
+    justify-content: space-between !important;
+    padding: 8px 10px !important;
+    font-size: 10.5px !important;
+    gap: 4px !important;
+    border-radius: 12px !important;
+    white-space: normal !important;
+    line-height: 1.15 !important;
+    min-width: 0 !important;
+  }
+  .renacer-filter-pill-bar .stage-pill-btn .count-badge {
+    flex-shrink: 0;
+    min-width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+  .renacer-filter-pill-bar .stage-pill-reset {
+    width: 100% !important;
+    height: auto !important;
+    padding: 8px 10px !important;
+    border-radius: 12px !important;
+    font-size: 11px !important;
+    gap: 6px;
+  }
+  .renacer-filter-pill-bar .stage-pill-reset::after {
+    content: "Ver Todas";
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+}
+
+/* 4. Libro Diario: Desktop Tabla / Móvil Tarjetas Compactas (CERO scroll horizontal) */
+.ledger-desktop-view {
+  display: block;
+}
+.ledger-mobile-view {
+  display: none;
+}
+@media (max-width: 768px) {
+  .ledger-desktop-view {
+    display: none !important;
+  }
+  .ledger-mobile-view {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+.ledger-mobile-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 13px;
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.ledger-mobile-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ledger-mobile-card__concept {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--text-main);
+  line-height: 1.25;
+  word-break: break-word;
+}
+.ledger-mobile-card__cat {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+.ledger-mobile-card__bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+/* 5. Centro de Informes Ejecutivos (v49) */
+.reports-tabs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.report-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.18s ease;
+}
+.report-tab-btn:hover {
+  border-color: var(--renacer-navy);
+}
+.report-tab-btn.active {
+  background: #182254;
+  border-color: var(--renacer-gold);
+  color: #f5df00 !important;
+  box-shadow: 0 4px 14px rgba(24, 34, 84, 0.3);
+}
+.report-tab-btn.active * {
+  color: #f5df00 !important;
+}
+.report-cost-bar-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--border-subtle);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.report-cost-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #182254, #0284c7);
+}
+
+/* 6. Matriz de Asistencia Semanal Estilo SICS (v49) */
+.sics-att-table th,
+.sics-att-table td {
+  text-align: center;
+  vertical-align: middle;
+  padding: 8px 6px !important;
+}
+.sics-att-table th:first-child,
+.sics-att-table td:first-child {
+  text-align: left;
+  min-width: 155px;
+}
+.sics-cell-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 5px 6px;
+  border-radius: 9px;
+  border: 1.5px solid var(--border-subtle);
+  background: var(--bg-input);
+  cursor: pointer;
+  font-weight: 900;
+  font-size: 12px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.sics-cell-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+.sics-cell-btn small {
+  font-size: 9.5px;
+  font-weight: 700;
+  opacity: 0.9;
+  margin-top: 1px;
+}
+.sics-cell--P {
+  background: rgba(22, 163, 74, 0.16);
+  border-color: rgba(22, 163, 74, 0.55);
+  color: #15803d;
+}
+[data-theme="dark"] .sics-cell--P { color: #4ade80; }
+.sics-cell--T {
+  background: rgba(217, 119, 6, 0.16);
+  border-color: rgba(217, 119, 6, 0.55);
+  color: #b45309;
+}
+[data-theme="dark"] .sics-cell--T { color: #fbbf24; }
+.sics-cell--F {
+  background: rgba(220, 38, 38, 0.16);
+  border-color: rgba(220, 38, 38, 0.55);
+  color: #b91c1c;
+}
+[data-theme="dark"] .sics-cell--F { color: #f87171; }
+.sics-cell--J {
+  background: rgba(2, 132, 199, 0.16);
+  border-color: rgba(2, 132, 199, 0.55);
+  color: #0369a1;
+}
+[data-theme="dark"] .sics-cell--J { color: #38bdf8; }
+.sics-cell--L {
+  background: rgba(100, 116, 139, 0.14);
+  border-color: rgba(100, 116, 139, 0.4);
+  color: var(--text-muted);
+}
+
+/* 7. Chips de Vínculo Lista A -> Lista B */
+.lista-ab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(22, 163, 74, 0.13);
+  color: #15803d;
+  border: 1px solid rgba(22, 163, 74, 0.35);
+}
+[data-theme="dark"] .lista-ab-chip {
+  color: #4ade80;
+}
+.lista-ab-chip--pending {
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+  border-color: rgba(217, 119, 6, 0.4);
+}
+[data-theme="dark"] .lista-ab-chip--pending {
+  color: #fbbf24;
+}
+.lista-ab-chip--neutral {
+  background: rgba(100, 116, 139, 0.14);
+  color: var(--text-muted);
+  border-color: rgba(100, 116, 139, 0.35);
 }
 
 
