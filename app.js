@@ -68,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.27.v49";
+const CURRENT_APP_VERSION = "2026.11.27.v49.3";
 
 /* ---------- Helpers Globales v49 (Saldos Iniciales, Adelantos Universales, Google Maps y Lista A->B) ---------- */
 function normalizeTextPlain(str) {
@@ -116,6 +116,93 @@ function getPendingUserAdvances(userId) {
   const list = (db?.finanzas_movimientos || []).filter((m) => isAdvanceMovementForUser(m, userId));
   const total = Number(list.reduce((acc, m) => acc + (Number(m.monto) || 0), 0).toFixed(2));
   return { list, total };
+}
+
+function getPendingUserAdvancesForIds(userIds) {
+  const ids = Array.from(new Set((Array.isArray(userIds) ? userIds : [userIds]).map((x) => String(x || "")).filter(Boolean)));
+  if (!ids.length) return { list: [], total: 0 };
+  const list = (db?.finanzas_movimientos || []).filter((m) => ids.some((uid) => isAdvanceMovementForUser(m, uid)));
+  const total = Number(list.reduce((acc, m) => acc + (Number(m.monto) || 0), 0).toFixed(2));
+  return { list, total };
+}
+
+/* ---------- Unificación Automática de Perfiles Gemelos (Taller + Administración / Gerencia — v49.1) ---------- */
+function normalizePersonBaseName(rawName) {
+  const plain = normalizeTextPlain(rawName || "");
+  if (!plain) return "";
+  return plain
+    .replace(/\(\s*(taller|administracion|administrativo|admin|gerencia|gerente|tecnico|socio|jefe|jefe de taller|recepcion|operaciones)\s*\)/g, " ")
+    .replace(/[-–—]\s*(taller|administracion|administrativo|admin|gerencia|gerente|tecnico|socio|jefe|jefe de taller|recepcion|operaciones)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getLinkedWorkshopUserIdsForPartner(partnerUser) {
+  if (!partnerUser || !partnerUser.id_usuario) return [];
+  const ids = [partnerUser.id_usuario];
+  if (!isPartnerInManagementPayroll(partnerUser)) return ids;
+  const baseName = normalizePersonBaseName(partnerUser.nombre);
+  const users = Array.isArray(db?.usuarios) ? db.usuarios : [];
+  users.forEach((u) => {
+    if (!u || !u.id_usuario || u.id_usuario === partnerUser.id_usuario) return;
+    if (isExternalUser(u)) return;
+    if (u.rol !== "tecnico") return;
+    const explicitLink = partnerUser.linked_taller_user_id && u.id_usuario === partnerUser.linked_taller_user_id;
+    const samePerson = baseName.length >= 5 && normalizePersonBaseName(u.nombre) === baseName;
+    if ((explicitLink || samePerson) && !ids.includes(u.id_usuario)) {
+      ids.push(u.id_usuario);
+    }
+  });
+  return ids;
+}
+
+function getLinkedManagementPartnerForTech(techUser) {
+  if (!techUser || !techUser.id_usuario || isExternalUser(techUser) || techUser.rol !== "tecnico") return null;
+  const users = Array.isArray(db?.usuarios) ? db.usuarios : [];
+  return (
+    users.find(
+      (p) =>
+        p &&
+        p.id_usuario !== techUser.id_usuario &&
+        isPartnerInManagementPayroll(p) &&
+        getLinkedWorkshopUserIdsForPartner(p).includes(techUser.id_usuario)
+    ) || null
+  );
+}
+
+/* ---------- Entidad Oculta de Migración & Cuentas por Cobrar Independientes (v49.3) ---------- */
+const MIGRATION_ENTITY_CLIENT_ID = "CLI-MIGRACION";
+
+function isMigrationHiddenClient(c) {
+  if (!c) return false;
+  if (c.es_entidad_migracion === true || c.id_cliente === MIGRATION_ENTITY_CLIENT_ID) return true;
+  const doc = String(c.documento_identidad || "").trim().toUpperCase();
+  if (doc === "MIGRACION" || doc === "SIN-CEDULA") return true;
+  const nm = normalizeTextPlain(c.nombre_completo || c.nombre_cliente || "");
+  return nm === "migracion sistema anterior" || nm === "migracion historica" || nm === "orden migrada";
+}
+
+function isOrderMigrationEntity(o) {
+  if (!o) return false;
+  if (o.es_orden_migrada === true || o.cliente_id === MIGRATION_ENTITY_CLIENT_ID) return true;
+  const doc = String(o.documento_cliente || "").trim().toUpperCase();
+  if (doc === "MIGRACION" || doc === "SIN-CEDULA") return true;
+  const nm = normalizeTextPlain(o.nombre_cliente || "");
+  return nm === "migracion sistema anterior" || nm === "migracion historica";
+}
+
+function getActiveManualReceivables() {
+  return (db?.cuentas_por_cobrar_manuales || []).filter(
+    (c) => c && c.estado !== "cobrada" && Number(c.saldo_pendiente) > 0.01
+  );
+}
+
+function getTotalManualReceivablesPending() {
+  return Number(
+    getActiveManualReceivables()
+      .reduce((acc, c) => acc + (Number(c.saldo_pendiente) || 0), 0)
+      .toFixed(2)
+  );
 }
 
 function buildGoogleMapsUrl(rawAddr) {
@@ -966,6 +1053,7 @@ function getInitialDatabase() {
     bitacora: [],
     finanzas_movimientos: [],
     cuentas_por_pagar: [],
+    cuentas_por_cobrar_manuales: [],
     inventario_repuestos: [],
     movimientos_inventario: [],
     asistencias: [],
@@ -1013,6 +1101,31 @@ function normalizeDatabaseSchema(d) {
   }
   if (!Array.isArray(d.cuentas_por_pagar)) {
     d.cuentas_por_pagar = getInitialDatabase().cuentas_por_pagar || [];
+  }
+  if (!Array.isArray(d.cuentas_por_cobrar_manuales)) {
+    d.cuentas_por_cobrar_manuales = [];
+  } else {
+    d.cuentas_por_cobrar_manuales = d.cuentas_por_cobrar_manuales
+      .filter((c) => c && String(c.id_cxc || c.deudor || "").trim() !== "")
+      .map((c) => {
+        const total = Number(c.monto_total) || 0;
+        const abonado = Number(c.monto_abonado) || 0;
+        const saldo = c.saldo_pendiente !== undefined ? Math.max(0, Number(c.saldo_pendiente) || 0) : Math.max(0, Number((total - abonado).toFixed(2)));
+        return {
+          id_cxc: String(c.id_cxc || ("CXC-" + Date.now().toString().slice(-5))),
+          deudor: String(c.deudor || "Deudor"),
+          telefono: String(c.telefono || ""),
+          tipo: String(c.tipo || "migracion"),
+          concepto: String(c.concepto || ""),
+          monto_total: total,
+          monto_abonado: abonado,
+          saldo_pendiente: saldo,
+          fecha_registro: cleanDateISO(c.fecha_registro || "", false) || getLocalIsoDate(),
+          estado: saldo <= 0.01 ? "cobrada" : (String(c.estado || "activa") === "cobrada" ? "cobrada" : "activa"),
+          desconto_caja_al_crear: Boolean(c.desconto_caja_al_crear),
+          historial_abonos: Array.isArray(c.historial_abonos) ? c.historial_abonos : []
+        };
+      });
   }
   if (!Array.isArray(d.vouchers_nomina)) {
     d.vouchers_nomina = [];
@@ -1751,6 +1864,18 @@ function prepareSheetsPayload(sourceDb) {
       }))
     : [];
 
+  const safeCxcManual = Array.isArray(d.cuentas_por_cobrar_manuales)
+    ? d.cuentas_por_cobrar_manuales.map((cxc) => ({
+        ...cxc,
+        historial_abonos: Array.isArray(cxc.historial_abonos)
+          ? cxc.historial_abonos.map((ab) => ({
+              ...ab,
+              comprobante_foto: (ab.comprobante_foto && String(ab.comprobante_foto).startsWith("data:")) ? "" : (ab.comprobante_foto || "")
+            }))
+          : []
+      }))
+    : [];
+
   const metaState = {
     v: 2,
     config: {
@@ -1782,6 +1907,7 @@ function prepareSheetsPayload(sourceDb) {
     text_customizations: d.text_customizations || {},
     finanzas_categorias: d.finanzas_categorias || undefined,
     cuentas_por_pagar: safeCxp,
+    cuentas_por_cobrar_manuales: safeCxcManual,
     inventario_repuestos: Array.isArray(d.inventario_repuestos)
       ? d.inventario_repuestos.map((r) => ({ ...r, foto: (r.foto && String(r.foto).startsWith("data:")) ? "" : (r.foto || "") }))
       : [],
@@ -1995,7 +2121,8 @@ function prepareSheetsPayload(sourceDb) {
     { clave: "finanzas_categorias", valor_json: sanitizeSheetsCellStr(JSON.stringify(metaState.finanzas_categorias || {}), 44000), ultima_actualizacion: nowStr },
     { clave: "finanzas_extras", valor_json: sanitizeSheetsCellStr(JSON.stringify(finanzasExtras || {}), 44000), ultima_actualizacion: nowStr },
     { clave: "usuarios_extras", valor_json: sanitizeSheetsCellStr(JSON.stringify(usuariosExtras || {}), 44000), ultima_actualizacion: nowStr },
-    { clave: "movimientos_inventario", valor_json: sanitizeSheetsCellStr(JSON.stringify((d.movimientos_inventario || []).slice(-180)), 44000), ultima_actualizacion: nowStr }
+    { clave: "movimientos_inventario", valor_json: sanitizeSheetsCellStr(JSON.stringify((d.movimientos_inventario || []).slice(-180)), 44000), ultima_actualizacion: nowStr },
+    { clave: "cuentas_por_cobrar_manuales", valor_json: sanitizeSheetsCellStr(JSON.stringify(safeCxcManual), 44000), ultima_actualizacion: nowStr }
   ];
 
   const papelera_respaldo = (d.papelera_respaldo || []).slice(0, 200).map((p) => ({
@@ -2574,6 +2701,9 @@ function hydrateDatabaseFromSheets(cloudData) {
     text_customizations: cloudTextSource || (db && db.text_customizations) || {},
     finanzas_categorias: cfgTab.finanzas_categorias || meta.finanzas_categorias || (db && db.finanzas_categorias) || base.finanzas_categorias,
     cuentas_por_pagar: dedicatedCxp.length > 0 ? dedicatedCxp : (Array.isArray(meta.cuentas_por_pagar) ? meta.cuentas_por_pagar : []),
+    cuentas_por_cobrar_manuales: Array.isArray(cfgTab.cuentas_por_cobrar_manuales)
+      ? cfgTab.cuentas_por_cobrar_manuales
+      : (Array.isArray(meta.cuentas_por_cobrar_manuales) ? meta.cuentas_por_cobrar_manuales : []),
     inventario_repuestos: dedicatedInv.length > 0 ? dedicatedInv : (Array.isArray(meta.inventario_repuestos) ? meta.inventario_repuestos : []),
     movimientos_inventario: Array.isArray(cfgTab.movimientos_inventario)
       ? cfgTab.movimientos_inventario
@@ -3102,6 +3232,7 @@ function captureSyncedRecordDigests(sourceDb) {
     finanzas_movimientos: buildMap(d.finanzas_movimientos, (x) => x && (x.id_mov || x.id_movimiento)),
     asistencias: buildMap(d.asistencias, (x) => x && (x.id_asist || x.id_asistencia)),
     cuentas_por_pagar: buildMap(d.cuentas_por_pagar, (x) => x && x.id_cxp),
+    cuentas_por_cobrar_manuales: buildMap(d.cuentas_por_cobrar_manuales, (x) => x && x.id_cxc),
     inventario_repuestos: buildMap(d.inventario_repuestos, (x) => x && (x.id_repuesto || x.id)),
     vouchers_nomina: buildMap(d.vouchers_nomina, (x) => x && x.id_voucher)
   };
@@ -3530,6 +3661,9 @@ function mergeDatabasesNonDestructive(serverDb, localDb, overrideActorRole = nul
     cuentas_por_pagar: localCanOverrideCatalogs
       ? mergeCollection3Way(s.cuentas_por_pagar, l.cuentas_por_pagar, baseDigests.cuentas_por_pagar, (x) => x && x.id_cxp, null, true)
       : s.cuentas_por_pagar,
+    cuentas_por_cobrar_manuales: localCanOverrideCatalogs
+      ? mergeCollection3Way(s.cuentas_por_cobrar_manuales, l.cuentas_por_cobrar_manuales, baseDigests.cuentas_por_cobrar_manuales, (x) => x && x.id_cxc, null, true)
+      : s.cuentas_por_cobrar_manuales,
     inventario_repuestos: mergeCollection3Way(s.inventario_repuestos, l.inventario_repuestos, baseDigests.inventario_repuestos, (x) => x && (x.id_repuesto || x.id), null, canDeleteAdminRecords),
     movimientos_inventario: mergeArrayByKey(s.movimientos_inventario, l.movimientos_inventario, (x) => x && (x.id_mov || x.id)),
     asistencias: mergedAsistencias,
@@ -4466,6 +4600,12 @@ async function restoreFromRecycleBin(delId) {
         d.linkedMovs.forEach((m) => { db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, m, (x) => x.id_mov || x.id_movimiento); });
       }
       break;
+    case "cuenta_por_cobrar_manual":
+      if (d.cxc) db.cuentas_por_cobrar_manuales = upsertByKey(db.cuentas_por_cobrar_manuales, d.cxc, (x) => x.id_cxc);
+      if (Array.isArray(d.linkedMovs)) {
+        d.linkedMovs.forEach((m) => { db.finanzas_movimientos = upsertByKey(db.finanzas_movimientos, m, (x) => x.id_mov || x.id_movimiento); });
+      }
+      break;
     case "cuenta_bancaria": {
       if (!db.config) db.config = {};
       const curList = getConfiguredBankAccounts();
@@ -4631,20 +4771,6 @@ function openCloudSyncModal() {
           <i class="fas fa-arrows-rotate"></i> Forzar Actualización Remota para Todos
         </button>
       </div>
-
-      <div class="form-section-box" style="border-color:rgba(220,38,38,0.35); margin-bottom:0;">
-        <div class="form-section-title" style="color:#dc2626;">
-          <i class="fas fa-broom"></i> Limpieza de Pedidos de Prueba y Control de Demostración
-        </div>
-        <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
-          Usa estas opciones para eliminar todos los pedidos/órdenes de prueba y dejar el sistema en cero listo para producción real, conservando usuarios, catálogo y personalizaciones.
-        </p>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--danger" onclick="clearAllTestOrders()">
-            <i class="fas fa-trash-alt"></i> Limpiar Pedidos de Prueba (Dejar en Cero)
-          </button>
-        </div>
-      </div>
     `,
     footer: `
       <button type="button" class="btn btn--ghost" onclick="closeModal()">Cerrar</button>
@@ -4670,50 +4796,9 @@ function openCloudSyncModal() {
 }
 
 function clearAllTestOrders() {
-  Swal.fire({
-    title: "¿Limpiar todas las órdenes y movimientos de prueba?",
-    text: "Se reseteará el sistema a CERO: se borrarán las órdenes de prueba, subtareas, bitácora y movimientos financieros tanto en la app como en Google Sheets, conservando intactos los usuarios, catálogo de precios y personalizaciones de texto.",
-    icon: "warning",
-    showCancelButton: true,
-    confirmButtonColor: "#dc2626",
-    cancelButtonColor: "#64748b",
-    cancelButtonText: "Cancelar",
-    confirmButtonText: "Sí, dejar en cero real"
-  }).then(async (res) => {
-    if (res.isConfirmed) {
-      archiveToRecycleBin(
-        "limpieza_lote",
-        "CLEAR-" + Date.now(),
-        `Limpieza masiva (${(db.ordenes || []).length} órdenes · ${(db.finanzas_movimientos || []).length} movs)`,
-        {
-          ordenes: db.ordenes || [],
-          subtareas: db.subtareas || [],
-          bitacora: db.bitacora || [],
-          finanzas_movimientos: db.finanzas_movimientos || [],
-          cuentas_por_pagar: db.cuentas_por_pagar || []
-        },
-        "Limpieza de pedidos de prueba (respaldado antes de limpiar)"
-      );
-      db.ordenes = [];
-      db.subtareas = [];
-      db.bitacora = [];
-      db.finanzas_movimientos = [];
-      db.finanzas = [];
-      db.cuentas_por_pagar = [];
-      db.movimientos_inventario = [];
-      if (db.config) {
-        db.config.correlativoTroquelActual = 5022;
-        db.config.correlativoOrdenActual = 1008;
-      }
-      saveLocalOnly();
-      markLocalChangesDirty();
-      showToast("Limpiando y sincronizando con Google Sheets...", "info");
-      await flushCloudPush(false, { force: true, forceBackup: true, reason: "Limpieza de pedidos de prueba" });
-      closeModal();
-      if (currentUser) renderApp();
-      showToast("Sistema en cero real sincronizado con Google Sheets (respaldo guardado en Papelera).");
-    }
-  });
+  // Desactivado intencionalmente en v49.2 para proteger órdenes reales y datos migrados del taller
+  showToast("La limpieza masiva de pruebas fue desactivada para proteger los datos reales y migrados.", "warning");
+  return false;
 }
 
 function deleteOrder(orderId) {
@@ -6262,7 +6347,9 @@ function attemptSwitchUserWithPin(userId) {
 
 /* ---------- Pestañas Limpias por Rol (Diseño Oficial de Barra Lateral - Jesús Andrade) ---------- */
 function getTabsForRole(role) {
-  const countAR = db.ordenes.filter((o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado").length;
+  const countAR =
+    db.ordenes.filter((o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado").length +
+    getActiveManualReceivables().length;
   const lowStockCount = (db.inventario_repuestos || []).filter((r) => Number(r.stock_actual) <= Number(r.stock_minimo)).length;
 
   // PERFIL ESPECÍFICO JAVIER ANDRADE (v43): Solo 3 ventanas completas (Inventario, Personal y Comisiones, Facturas por Cobrar)
@@ -6496,8 +6583,11 @@ function renderApp() {
 
   const btnKiosk = document.getElementById("btn-topbar-attendance-kiosk");
   if (btnKiosk) {
-    // Solo visible en barra superior para Recepción y Admin
-    if (currentUser.rol === "recepcion" || currentUser.rol === "admin") {
+    // Visible en barra superior para Admin, Jefes de Taller (Jesús/Enrique) y Recepción (oculto para Técnicos y Javier restringido)
+    const canOpenTopbarKiosk =
+      !isJavierRestrictedUser(currentUser) &&
+      (currentUser.rol === "recepcion" || currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
+    if (canOpenTopbarKiosk) {
       btnKiosk.classList.remove("hidden");
     } else {
       btnKiosk.classList.add("hidden");
@@ -7598,12 +7688,16 @@ function renderDashboardScreen() {
     .filter((m) => m.tipo === "egreso" && !isNonOperatingMovement(m))
     .reduce((acc, m) => acc + (Number(m.monto) || 0), 0);
 
-  // 2. Cuentas por Cobrar Independientes (Órdenes en Taller con saldo + Facturas entregadas a crédito)
+  // 2. Cuentas por Cobrar Independientes (Órdenes en Taller con saldo + Préstamos y Cuentas Migradas)
   const ordenesPorCobrar = db.ordenes.filter(
     (o) => Number(o.saldo_pendiente) > 0 && o.estado_actual !== "anulado"
   );
-  const totalCuentasPorCobrar = ordenesPorCobrar.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
-  const countCuentasPorCobrar = ordenesPorCobrar.length;
+  const manualCxcActivas = getActiveManualReceivables();
+  const totalManualCxc = getTotalManualReceivablesPending();
+  const totalCuentasPorCobrar = Number(
+    (ordenesPorCobrar.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0) + totalManualCxc).toFixed(2)
+  );
+  const countCuentasPorCobrar = ordenesPorCobrar.length + manualCxcActivas.length;
 
   // 3. Activos Totales del Taller: Valor de piezas en producción activa (Informativo de planta)
   const piezasEnTaller = db.ordenes.filter(
@@ -7770,6 +7864,9 @@ function renderDashboardScreen() {
           <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
             <i class="fas fa-minus-circle"></i> Registrar Gasto
           </button>
+          <button type="button" class="btn btn--warning" onclick="openQuickUniversalAdvanceModal()" style="font-weight:900;" title="Registrar vale o adelanto a Gerencia, Técnicos o Aliados viendo su saldo disponible">
+            <i class="fas fa-money-bill-transfer"></i> Vales / Adelantos
+          </button>
           <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')">
             <i class="fas fa-plus-circle"></i> Ingreso Extra
           </button>
@@ -7859,11 +7956,6 @@ function renderDashboardScreen() {
             </tbody>
           </table>
         </div>
-      </div>
-
-      <!-- MÓDULO INTEGRADO EN INICIO: MONITOREO DE HORARIOS, ENTRADA, ALMUERZO Y SALIDA (9:00 AM - 6:00 PM) -->
-      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:16px; padding:18px 20px;">
-        ${renderAttendanceMonitorWidget({ embeddedInDashboard: true })}
       </div>
 
       <!-- SECCIÓN INFERIOR: ÓRDENES RECIENTES EN EJECUCIÓN (CON BOTÓN DE TICKET Y WHATSAPP) -->
@@ -8188,15 +8280,20 @@ function openLiquidatePartnerWeeklyModal(userId) {
 
   const activePayroll = isPartnerPayrollActive(p);
   const salarioFijo = activePayroll ? getUserWeeklySalary(p) : 0;
+  const linkedIds = getLinkedWorkshopUserIdsForPartner(p);
+  const linkedTallerNames = linkedIds
+    .slice(1)
+    .map((id) => db.usuarios.find((u) => u.id_usuario === id)?.nombre)
+    .filter(Boolean);
   const extraSubs = db.subtareas.filter(
-    (s) => s.tecnico_id === p.id_usuario && s.estado_subtarea === "terminado" && !s.comision_pagada
+    (s) => linkedIds.includes(s.tecnico_id) && s.estado_subtarea === "terminado" && !s.comision_pagada
   );
-  const totalExtras = extraSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+  const totalExtras = Number(extraSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0).toFixed(2));
 
-  const advInfoPartner = getPendingUserAdvances(p.id_usuario);
+  const advInfoPartner = getPendingUserAdvancesForIds(linkedIds);
   const adelantosMovs = advInfoPartner.list;
   const totalAdelantos = advInfoPartner.total;
-  const netoSemanal = Math.max(0, salarioFijo + totalExtras - totalAdelantos);
+  const netoSemanal = Math.max(0, Number((salarioFijo + totalExtras - totalAdelantos).toFixed(2)));
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
 
   initMultiPaymentState({
@@ -8226,8 +8323,8 @@ function openLiquidatePartnerWeeklyModal(userId) {
               <input type="checkbox" id="liq-partner-save-new-base" style="accent-color:var(--renacer-gold);" />
               Guardar este nuevo sueldo como base para próximas semanas
             </label>
-            <div style="display:flex; justify-content:space-between;">
-              <span><i class="fas fa-cogs"></i> Trabajos Extras / Comisiones (${extraSubs.length} subtareas):</span>
+            <div style="display:flex; justify-content:space-between; gap:8px;">
+              <span><i class="fas fa-cogs"></i> Trabajos Extras / Comisiones (${extraSubs.length} subtareas${linkedTallerNames.length ? ` · incluye ${escapeHtml(linkedTallerNames.join(", "))}` : ""}):</span>
               <strong style="color:var(--renacer-gold);">+$${totalExtras.toFixed(2)}</strong>
             </div>
             <div style="display:flex; justify-content:space-between;">
@@ -8304,9 +8401,13 @@ function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
   const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const tsBase = Date.now();
 
+  const linkedIds = getLinkedWorkshopUserIdsForPartner(p);
   const paidPartnerSubs = db.subtareas.filter(
-    (s) => s.tecnico_id === userId && s.estado_subtarea === "terminado" && !s.comision_pagada
+    (s) => linkedIds.includes(s.tecnico_id) && s.estado_subtarea === "terminado" && !s.comision_pagada
   );
+  const effectiveExtras = paidPartnerSubs.length
+    ? Number(paidPartnerSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0).toFixed(2))
+    : Number(totalExtras || 0);
 
   // Preparar pagos con IDs de movimiento independientes para cada línea (Partida Doble)
   const pagosDetalle = payments.map((pay, idx) => ({
@@ -8325,7 +8426,7 @@ function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
     user: p,
     subtasksPaid: paidPartnerSubs,
     sueldoBase: baseUsed,
-    totalComisiones: Number(totalExtras || 0),
+    totalComisiones: effectiveExtras,
     totalAdelantos: Number(totalAdelantos || 0),
     montoPagado: Number(neto),
     metodoPago: summaryMethod,
@@ -8335,10 +8436,10 @@ function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
     movimientoId: movimientosIds[0] || "",
     movimientosIds,
     pagosDetalle,
-    notas: `Base semanal: $${baseUsed.toFixed(2)}${pagosDetalle.length > 1 ? ` · ${pagosDetalle.length} cuentas (Partida Doble)` : ""}`
+    notas: `Base semanal: $${baseUsed.toFixed(2)}${linkedIds.length > 1 ? ` · Nómina Unificada (Gerencia + Taller)` : ""}${pagosDetalle.length > 1 ? ` · ${pagosDetalle.length} cuentas (Partida Doble)` : ""}`
   });
 
-  // Marcar subtareas extras como pagadas y vincular al voucher
+  // Marcar subtareas extras (propias y de perfil Taller vinculado) como pagadas y vincular al voucher
   paidPartnerSubs.forEach((s) => {
     s.comision_pagada = true;
     s.fecha_comision_pagada = nowStr;
@@ -8346,9 +8447,9 @@ function confirmPartnerWeeklyLiquidation(userId, totalExtras, totalAdelantos) {
     s.id_liquidacion = voucher.id_voucher;
   });
 
-  // Marcar adelantos como liquidados
+  // Marcar adelantos (propios y de perfil Taller vinculado) como liquidados
   (db.finanzas_movimientos || []).forEach((m) => {
-    if (isAdvanceMovementForUser(m, userId)) {
+    if (linkedIds.some((uid) => isAdvanceMovementForUser(m, uid))) {
       m.liquidado_en_nomina = true;
       m.voucher_id = voucher.id_voucher;
     }
@@ -8620,6 +8721,590 @@ function deleteAccountPayable(cxpId) {
     await flushCloudPush(true);
     showToast(`Deuda "${cxp.acreedor}" eliminada (recuperable en Papelera).`);
   });
+}
+
+/* ============================================================================
+   CUENTAS POR COBRAR INDEPENDIENTES (PRÉSTAMOS Y CUENTAS VIEJAS MIGRADAS — v49.3)
+   Espejo exacto de Cuentas por Pagar pero a la inversa: vive en Facturas por Cobrar,
+   permite registrar deudas sin orden de taller ni facturas ficticias, cobrar/abonar
+   con ingreso automático a Caja/Bancos y dar seguimiento total.
+   ============================================================================ */
+let tempManualCxcPhoto = "";
+
+function formatManualCxcTypeLabel(tipo) {
+  if (tipo === "prestamo") return { label: "PRÉSTAMO OTORGADO", cls: "state-badge--exec", icon: "fa-hand-holding-dollar" };
+  if (tipo === "otro") return { label: "SALDO POR COBRAR", cls: "state-badge--diag", icon: "fa-file-invoice-dollar" };
+  return { label: "MIGRACIÓN / CUENTA VIEJA", cls: "state-badge--wait", icon: "fa-clock-rotate-left" };
+}
+
+function openNewManualReceivableModal() {
+  const realClients = (db.clientes || []).filter((c) => !isMigrationHiddenClient(c));
+  const staffNames = (db.usuarios || []).map((u) => u.nombre).filter(Boolean);
+  const suggestions = Array.from(new Set([...realClients.map((c) => c.nombre_completo || c.nombre_cliente).filter(Boolean), ...staffNames]));
+  const bankOptions = getConfiguredBankAccounts()
+    .map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`)
+    .join("");
+
+  openModal({
+    title: "Agregar Cuenta por Cobrar (Independiente de Facturas)",
+    icon: "fa-hand-holding-usd",
+    body: `
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="background:rgba(245,223,0,0.08); border:1px solid rgba(245,223,0,0.35); border-radius:10px; padding:9px 12px; font-size:12px; color:var(--text-main); line-height:1.4;">
+          <i class="fas fa-circle-info" style="color:var(--gold-readable, var(--renacer-gold));"></i>
+          Registra aquí <strong>préstamos que otorgues</strong> o <strong>cuentas viejas por cobrar migradas</strong> del sistema anterior sin necesidad de crear una orden de taller. Cuando te abonen o paguen, el dinero entrará automáticamente a tu Caja/Banco.
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-field">
+            <label><i class="fas fa-user"></i> Deudor / Cliente / Persona *</label>
+            <input type="text" id="cxc-man-debtor" list="cxc-man-debtor-list" placeholder="Ej: Taller Los Robles / Juan Pérez" required />
+            <datalist id="cxc-man-debtor-list">
+              ${suggestions.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("")}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-tag"></i> Tipo de Cuenta por Cobrar *</label>
+            <select id="cxc-man-type" onchange="const chk=document.getElementById('cxc-man-deduct-box'); if(chk && this.value==='prestamo'){ chk.checked=true; toggleManualCxcDeductBox(true); }">
+              <option value="migracion">Cuenta Vieja Migrada (Saldo anterior)</option>
+              <option value="prestamo">Préstamo Otorgado (Personal / Tercero)</option>
+              <option value="otro">Otro Saldo por Cobrar</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-phone"></i> Teléfono / WhatsApp (Opcional)</label>
+            <input type="text" id="cxc-man-phone" placeholder="0414-XXXXXXX (para cobrar por WhatsApp)" />
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-calendar"></i> Fecha de Registro</label>
+            <input type="date" id="cxc-man-date" value="${getLocalIsoDate()}" />
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-align-left"></i> Concepto / Motivo *</label>
+            <input type="text" id="cxc-man-concept" placeholder="Ej: Factura vieja #1492 cámara Aveo / Préstamo efectivo" required />
+          </div>
+          <div class="form-field">
+            <label style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+              <span><i class="fas fa-dollar-sign"></i> Monto Total ($ USD) *</span>
+              <button type="button" class="btn btn--gold btn--xs bs-calc-toggle-btn" onclick="toggleBsUsdCalc('cxcnew')" title="Convertir Bolívares a Dólares">
+                <i class="fas fa-calculator"></i> Calc. Bs → $
+              </button>
+            </label>
+            <input type="number" step="0.01" min="0.01" id="cxc-man-total" placeholder="Ej: 120.00" style="font-family:'JetBrains Mono',monospace; font-weight:900;" required />
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-check-double"></i> Ya Abonado Anteriormente ($ USD)</label>
+            <input type="number" step="0.01" min="0" id="cxc-man-initial" value="0" style="font-family:'JetBrains Mono',monospace; font-weight:800;" />
+          </div>
+          <div style="grid-column:1/-1;">
+            ${renderBsToUsdCalculatorWidget("cxcnew", "cxc-man-total", "cxc-man-concept")}
+          </div>
+        </div>
+
+        <div style="background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:10px; padding:10px 12px;">
+          <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:12px; font-weight:700;">
+            <input type="checkbox" id="cxc-man-deduct-box" onchange="toggleManualCxcDeductBox(this.checked)" style="width:16px; height:16px; margin-top:2px; accent-color:var(--renacer-gold);" />
+            <span>
+              <strong>Registrar salida de dinero de Caja / Banco hoy</strong> (márcalo solo si estás entregando un préstamo en dinero hoy; déjalo desmarcado si estás migrando una deuda vieja).
+            </span>
+          </label>
+          <div id="cxc-man-origin-wrap" class="hidden" style="margin-top:10px;">
+            <label style="font-size:11.5px; font-weight:800; display:block; margin-bottom:4px;">Cuenta / Caja de donde sale el préstamo:</label>
+            <select id="cxc-man-origin-account" style="width:100%; font-weight:800;">
+              ${bankOptions}
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+          <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+          <button type="button" class="btn btn--gold" onclick="saveNewManualReceivable()">
+            <i class="fas fa-save"></i> Guardar Cuenta por Cobrar
+          </button>
+        </div>
+      </div>
+    `
+  });
+}
+
+function toggleManualCxcDeductBox(checked) {
+  const wrap = document.getElementById("cxc-man-origin-wrap");
+  if (!wrap) return;
+  if (checked) wrap.classList.remove("hidden");
+  else wrap.classList.add("hidden");
+}
+
+function saveNewManualReceivable() {
+  const deudor = (document.getElementById("cxc-man-debtor")?.value || "").trim();
+  const tipo = document.getElementById("cxc-man-type")?.value || "migracion";
+  const telefono = (document.getElementById("cxc-man-phone")?.value || "").trim();
+  const fecha = (document.getElementById("cxc-man-date")?.value || "").trim() || getLocalIsoDate();
+  const concepto = (document.getElementById("cxc-man-concept")?.value || "").trim();
+  const total = Number(document.getElementById("cxc-man-total")?.value) || 0;
+  const initialPaid = Math.max(0, Number(document.getElementById("cxc-man-initial")?.value) || 0);
+  const deductToday = Boolean(document.getElementById("cxc-man-deduct-box")?.checked);
+  const originAccount = document.getElementById("cxc-man-origin-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
+
+  if (!deudor || !concepto || total <= 0) {
+    showToast("Completa Deudor, Concepto y un Monto Total mayor a cero.", "error");
+    return;
+  }
+
+  const saldo = Math.max(0, Number((total - initialPaid).toFixed(2)));
+  const uidSuffix = Date.now().toString().slice(-5) + "-" + Math.floor(Math.random() * 900 + 100);
+  const newCxc = {
+    id_cxc: "CXC-" + uidSuffix,
+    deudor,
+    telefono,
+    tipo,
+    concepto,
+    monto_total: Number(total.toFixed(2)),
+    monto_abonado: Number(initialPaid.toFixed(2)),
+    saldo_pendiente: saldo,
+    fecha_registro: fecha,
+    estado: saldo <= 0.01 ? "cobrada" : "activa",
+    desconto_caja_al_crear: deductToday,
+    historial_abonos: initialPaid > 0
+      ? [{
+          id_abono: "AB-" + uidSuffix,
+          fecha,
+          monto: Number(initialPaid.toFixed(2)),
+          metodo: "anterior",
+          cuenta: "",
+          referencia: "Abono previo a migración",
+          comprobante_foto: "",
+          registrado_por: currentUser ? currentUser.nombre : "Sistema"
+        }]
+      : []
+  };
+
+  if (!Array.isArray(db.cuentas_por_cobrar_manuales)) db.cuentas_por_cobrar_manuales = [];
+  db.cuentas_por_cobrar_manuales.unshift(newCxc);
+
+  if (deductToday && total > 0) {
+    db.finanzas_movimientos.unshift({
+      id_mov: "MOV-PREST-" + Date.now().toString().slice(-6),
+      fecha,
+      hora: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      tipo: "egreso",
+      categoria: "Préstamo Otorgado / Cuenta por Cobrar",
+      concepto: `Préstamo a ${deudor} (${concepto})`,
+      monto: Number(total.toFixed(2)),
+      metodo: suggestMethodForBankAccount(originAccount),
+      cuenta: originAccount,
+      orden_id: newCxc.id_cxc,
+      codigo_troquel: "-",
+      registrado_por: currentUser ? currentUser.nombre : "Sistema"
+    });
+  }
+
+  saveDatabase(`Cuenta por cobrar registrada: ${deudor}`);
+  closeModal();
+  renderApp();
+  showToast(`Cuenta por cobrar a ${deudor} ($${saldo.toFixed(2)} pendiente) registrada con éxito.`);
+}
+
+async function handleManualCxcPhotoUpload(input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  const local = await compressImageFastLocal(file, 960, 180000);
+  if (!local || !local.driveDataUrl) return;
+  const preview = local.getFallback();
+  tempManualCxcPhoto = preview;
+  const prevEl = document.getElementById("collect-cxc-man-photo-preview");
+  if (prevEl) {
+    prevEl.innerHTML = `<img src="${preview}" style="max-height:95px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
+  }
+  uploadImageDataUrlToDrive(local.driveDataUrl, "cobro_cxc", 14000, {
+    orderFolder: "General_Finanzas_y_Vouchers",
+    category: "cobro_cxc"
+  }).then((driveUrl) => {
+    if (driveUrl && driveUrl.startsWith("http")) {
+      if (tempManualCxcPhoto === preview) tempManualCxcPhoto = driveUrl;
+      replacePhotoDataUrlEverywhere(preview, driveUrl);
+    }
+  }).catch(() => {});
+}
+
+function openCollectManualReceivableModal(cxcId) {
+  const cxc = (db.cuentas_por_cobrar_manuales || []).find((c) => c.id_cxc === cxcId);
+  if (!cxc) return;
+  tempManualCxcPhoto = "";
+  const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
+  const bankOptions = getConfiguredBankAccounts()
+    .map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`)
+    .join("");
+
+  openModal({
+    title: `Cobrar / Abonar Cuenta — ${escapeHtml(cxc.deudor)}`,
+    icon: "fa-hand-holding-usd",
+    body: `
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.35); border-radius:12px; padding:12px; font-size:13px;">
+          <div><strong>Deudor:</strong> ${escapeHtml(cxc.deudor)}</div>
+          <div><strong>Concepto:</strong> ${escapeHtml(cxc.concepto)}</div>
+          <div style="margin-top:4px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
+            <span><strong>Saldo Pendiente:</strong></span>
+            <span style="font-size:19px; font-weight:900; color:#dc2626; font-family:'JetBrains Mono',monospace;">$${Number(cxc.saldo_pendiente).toFixed(2)}</span>
+            <span style="font-size:12px; font-weight:800; color:#0284c7;">≈ ${(Number(cxc.saldo_pendiente) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.</span>
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-field">
+            <label style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+              <span><i class="fas fa-dollar-sign"></i> Monto Cobrado ($ USD) *</span>
+              <button type="button" class="btn btn--gold btn--xs bs-calc-toggle-btn" onclick="toggleBsUsdCalc('cxccol')" title="Convertir Bolívares a Dólares">
+                <i class="fas fa-calculator"></i> Calc. Bs → $
+              </button>
+            </label>
+            <input type="number" step="0.01" min="0.01" max="${Number(cxc.saldo_pendiente).toFixed(2)}" id="collect-cxc-man-amount" value="${Number(cxc.saldo_pendiente).toFixed(2)}" style="font-family:'JetBrains Mono',monospace; font-weight:900;" required />
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-building-columns"></i> Cuenta / Caja Destino *</label>
+            <select id="collect-cxc-man-account" style="font-weight:800;">
+              ${bankOptions}
+            </select>
+          </div>
+          <div style="grid-column:1/-1;">
+            ${renderBsToUsdCalculatorWidget("cxccol", "collect-cxc-man-amount", "collect-cxc-man-ref")}
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-receipt"></i> Referencia o Nota (Opcional)</label>
+            <input type="text" id="collect-cxc-man-ref" placeholder="Ej: Pago móvil ref #4821 / Efectivo" />
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-camera"></i> Comprobante Fotográfico (Opcional)</label>
+            <input type="file" id="collect-cxc-man-photo" accept="image/*" style="display:none;" onchange="handleManualCxcPhotoUpload(this)" />
+            <button type="button" class="btn btn--ghost btn--xs" onclick="document.getElementById('collect-cxc-man-photo').click()">
+              <i class="fas fa-upload"></i> Adjuntar Capture / Foto
+            </button>
+            <div id="collect-cxc-man-photo-preview" style="margin-top:6px;"></div>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+          <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+          <button type="button" class="btn btn--success" onclick="saveManualReceivableCobro('${escapeHtml(cxc.id_cxc)}')">
+            <i class="fas fa-check-circle"></i> Confirmar Cobro e Ingresar a Caja
+          </button>
+        </div>
+      </div>
+    `
+  });
+}
+
+function saveManualReceivableCobro(cxcId) {
+  const cxc = (db.cuentas_por_cobrar_manuales || []).find((c) => c.id_cxc === cxcId);
+  if (!cxc) return;
+
+  const rawAmount = Number(document.getElementById("collect-cxc-man-amount")?.value) || 0;
+  const cuenta = document.getElementById("collect-cxc-man-account")?.value || getConfiguredBankAccounts()[0]?.id || "efectivo";
+  const method = suggestMethodForBankAccount(cuenta);
+  const ref = (document.getElementById("collect-cxc-man-ref")?.value || "").trim();
+
+  if (rawAmount <= 0) {
+    showToast("Ingresa un monto válido mayor a cero.", "error");
+    return;
+  }
+  const amount = Math.min(Number(cxc.saldo_pendiente) || rawAmount, Number(rawAmount.toFixed(2)));
+  const today = getLocalIsoDate();
+
+  cxc.monto_abonado = Number(((Number(cxc.monto_abonado) || 0) + amount).toFixed(2));
+  cxc.saldo_pendiente = Math.max(0, Number(((Number(cxc.saldo_pendiente) || 0) - amount).toFixed(2)));
+  if (cxc.saldo_pendiente <= 0.01) {
+    cxc.saldo_pendiente = 0;
+    cxc.estado = "cobrada";
+  }
+
+  if (!Array.isArray(cxc.historial_abonos)) cxc.historial_abonos = [];
+  cxc.historial_abonos.push({
+    id_abono: "AB-" + Date.now().toString().slice(-4),
+    fecha: today,
+    monto: amount,
+    metodo: method,
+    cuenta,
+    referencia: ref,
+    comprobante_foto: tempManualCxcPhoto || "",
+    registrado_por: currentUser ? currentUser.nombre : "Sistema"
+  });
+
+  // Registrar ingreso real en Libro Diario
+  const isLoan = cxc.tipo === "prestamo";
+  db.finanzas_movimientos.unshift({
+    id_mov: "MOV-CXC-" + Date.now().toString().slice(-6),
+    fecha: today,
+    hora: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    tipo: "ingreso",
+    categoria: isLoan ? "Cobro de Préstamo / Cuenta por Cobrar" : "Cobro de Cuenta por Cobrar (Migrada)",
+    concepto: `Cobro a ${cxc.deudor} — ${cxc.concepto}`,
+    monto: amount,
+    metodo: method,
+    cuenta,
+    referencia: ref || "S/R",
+    comprobante_foto: tempManualCxcPhoto || "",
+    orden_id: cxc.id_cxc,
+    codigo_troquel: "-",
+    registrado_por: currentUser ? currentUser.nombre : "Sistema"
+  });
+
+  tempManualCxcPhoto = "";
+  saveDatabase(`Cobro CxC manual: ${cxc.deudor}`);
+  closeModal();
+  renderApp();
+  showToast(`Cobro de $${amount.toFixed(2)} registrado de ${cxc.deudor} e ingresado en Caja/Banco.`, "success");
+}
+
+function openEditManualReceivableModal(cxcId) {
+  const cxc = (db.cuentas_por_cobrar_manuales || []).find((c) => c.id_cxc === cxcId);
+  if (!cxc) return;
+
+  openModal({
+    title: `Editar Cuenta por Cobrar — ${escapeHtml(cxc.deudor)}`,
+    icon: "fa-pen-to-square",
+    body: `
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <div class="form-grid-2">
+          <div class="form-field">
+            <label>Deudor / Cliente *</label>
+            <input type="text" id="edit-cxc-man-debtor" value="${escapeHtml(cxc.deudor)}" required />
+          </div>
+          <div class="form-field">
+            <label>Tipo</label>
+            <select id="edit-cxc-man-type">
+              <option value="migracion" ${cxc.tipo === "migracion" ? "selected" : ""}>Cuenta Vieja Migrada</option>
+              <option value="prestamo" ${cxc.tipo === "prestamo" ? "selected" : ""}>Préstamo Otorgado</option>
+              <option value="otro" ${cxc.tipo === "otro" ? "selected" : ""}>Otro Saldo por Cobrar</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Teléfono / WhatsApp</label>
+            <input type="text" id="edit-cxc-man-phone" value="${escapeHtml(cxc.telefono || "")}" />
+          </div>
+          <div class="form-field">
+            <label>Fecha</label>
+            <input type="date" id="edit-cxc-man-date" value="${cleanDateISO(cxc.fecha_registro, false) || getLocalIsoDate()}" />
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label>Concepto *</label>
+            <input type="text" id="edit-cxc-man-concept" value="${escapeHtml(cxc.concepto)}" required />
+          </div>
+          <div class="form-field">
+            <label>Monto Total ($ USD) *</label>
+            <input type="number" step="0.01" min="0.01" id="edit-cxc-man-total" value="${Number(cxc.monto_total || 0).toFixed(2)}" required />
+          </div>
+          <div class="form-field">
+            <label>Abonado ($ USD)</label>
+            <input type="number" step="0.01" min="0" id="edit-cxc-man-paid" value="${Number(cxc.monto_abonado || 0).toFixed(2)}" />
+          </div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+          <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+          <button type="button" class="btn btn--gold" onclick="saveEditedManualReceivable('${escapeHtml(cxc.id_cxc)}')">
+            <i class="fas fa-save"></i> Guardar Cambios
+          </button>
+        </div>
+      </div>
+    `
+  });
+}
+
+function saveEditedManualReceivable(cxcId) {
+  const cxc = (db.cuentas_por_cobrar_manuales || []).find((c) => c.id_cxc === cxcId);
+  if (!cxc) return;
+  const deudor = (document.getElementById("edit-cxc-man-debtor")?.value || "").trim();
+  const tipo = document.getElementById("edit-cxc-man-type")?.value || cxc.tipo;
+  const telefono = (document.getElementById("edit-cxc-man-phone")?.value || "").trim();
+  const fecha = (document.getElementById("edit-cxc-man-date")?.value || "").trim() || cxc.fecha_registro;
+  const concepto = (document.getElementById("edit-cxc-man-concept")?.value || "").trim();
+  const total = Number(document.getElementById("edit-cxc-man-total")?.value) || 0;
+  const paid = Math.max(0, Number(document.getElementById("edit-cxc-man-paid")?.value) || 0);
+
+  if (!deudor || !concepto || total <= 0) {
+    showToast("Completa Deudor, Concepto y Monto Total.", "error");
+    return;
+  }
+
+  cxc.deudor = deudor;
+  cxc.tipo = tipo;
+  cxc.telefono = telefono;
+  cxc.fecha_registro = fecha;
+  cxc.concepto = concepto;
+  cxc.monto_total = Number(total.toFixed(2));
+  cxc.monto_abonado = Number(paid.toFixed(2));
+  cxc.saldo_pendiente = Math.max(0, Number((total - paid).toFixed(2)));
+  cxc.estado = cxc.saldo_pendiente <= 0.01 ? "cobrada" : "activa";
+
+  saveDatabase(`Cuenta por cobrar editada: ${deudor}`);
+  closeModal();
+  renderApp();
+  showToast(`Cuenta por cobrar de ${deudor} actualizada.`);
+}
+
+function deleteManualReceivable(cxcId) {
+  const cxc = (db.cuentas_por_cobrar_manuales || []).find((c) => c.id_cxc === cxcId);
+  if (!cxc) return;
+
+  const linkedMovs = (db.finanzas_movimientos || []).filter((m) => m.orden_id === cxc.id_cxc);
+  const linkedNote = linkedMovs.length
+    ? ` También se eliminarán ${linkedMovs.length} movimiento(s) asociados en el Libro Diario.`
+    : "";
+
+  Swal.fire({
+    title: `¿Eliminar cuenta por cobrar de "${cxc.deudor}"?`,
+    text: `Concepto: ${cxc.concepto} ($${Number(cxc.monto_total || 0).toFixed(2)}).${linkedNote} Quedará respaldada en la Papelera.`,
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonColor: "#dc2626",
+    cancelButtonColor: "#64748b",
+    cancelButtonText: "Cancelar",
+    confirmButtonText: "Sí, eliminar"
+  }).then(async (res) => {
+    if (!res.isConfirmed) return;
+    archiveToRecycleBin("cuenta_por_cobrar_manual", cxc.id_cxc, `${cxc.deudor} — ${cxc.concepto} ($${Number(cxc.monto_total || 0).toFixed(2)})`, { cxc, linkedMovs }, "Eliminación de Cuenta por Cobrar Independiente");
+    db.cuentas_por_cobrar_manuales = (db.cuentas_por_cobrar_manuales || []).filter((c) => c.id_cxc !== cxcId);
+    if (linkedMovs.length) {
+      db.finanzas_movimientos = (db.finanzas_movimientos || []).filter((m) => m.orden_id !== cxcId);
+    }
+    saveDatabase(`Cuenta por cobrar eliminada: ${cxc.deudor}`);
+    renderApp();
+    await flushCloudPush(true);
+    showToast(`Cuenta por cobrar de "${cxc.deudor}" eliminada (recuperable en Papelera).`);
+  });
+}
+
+function sendManualReceivableWhatsApp(cxcId) {
+  const cxc = (db.cuentas_por_cobrar_manuales || []).find((c) => c.id_cxc === cxcId);
+  if (!cxc) return;
+  const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
+  const saldoBs = (Number(cxc.saldo_pendiente) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const msg = `Saludos ${cxc.deudor}, le escribimos de Rectificadora Renacer. Recordatorio de saldo pendiente por "${cxc.concepto}": $${Number(cxc.saldo_pendiente).toFixed(2)} (ref. Bs. ${saldoBs} a tasa BCV € ${tasaBcv.toFixed(2)}). Quedamos atentos.`;
+  const cleanPhone = String(cxc.telefono || "").replace(/\D/g, "");
+  const phonePrefix = cleanPhone ? (cleanPhone.startsWith("58") ? cleanPhone : "58" + cleanPhone.replace(/^0/, "")) : "";
+  const url = phonePrefix
+    ? `https://wa.me/${phonePrefix}?text=${encodeURIComponent(msg)}`
+    : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+  window.open(url, "_blank");
+}
+
+function renderManualReceivablesSectionHtml(tasaBcv, filterMode = "all") {
+  let list = (db.cuentas_por_cobrar_manuales || []).slice();
+  if (filterMode === "pendientes") {
+    list = list.filter((c) => c.estado !== "cobrada" && Number(c.saldo_pendiente) > 0.01);
+  } else if (filterMode === "cobradas") {
+    list = list.filter((c) => c.estado === "cobrada" || Number(c.saldo_pendiente) <= 0.01);
+  }
+  if (searchQuery) {
+    list = list.filter((c) => `${c.id_cxc} ${c.deudor} ${c.concepto} ${c.tipo}`.toLowerCase().includes(searchQuery));
+  }
+  if (arDateFrom) list = list.filter((c) => cleanDateISO(c.fecha_registro) >= arDateFrom);
+  if (arDateTo) list = list.filter((c) => cleanDateISO(c.fecha_registro) <= arDateTo);
+
+  const activePendingSum = list
+    .filter((c) => c.estado !== "cobrada" && Number(c.saldo_pendiente) > 0.01)
+    .reduce((acc, c) => acc + (Number(c.saldo_pendiente) || 0), 0);
+
+  return `
+    <div style="background:var(--bg-card); border:1.5px solid rgba(245,158,11,0.4); border-radius:16px; padding:16px 18px; margin-bottom:18px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+        <div>
+          <span style="font-size:10.5px; font-weight:900; color:var(--gold-readable, var(--renacer-gold)); text-transform:uppercase; letter-spacing:0.6px;">
+            INDEPENDIENTES DE ÓRDENES DE TALLER
+          </span>
+          <h3 style="font-size:16.5px; font-weight:900; margin-top:2px;">
+            <i class="fas fa-hand-holding-usd" style="color:var(--gold-readable, var(--renacer-gold));"></i> Préstamos y Cuentas por Cobrar Migradas (${list.length})
+          </h3>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <span style="font-size:12.5px; font-weight:800; color:var(--text-muted);">
+            Pendiente: <strong style="color:#dc2626; font-family:'JetBrains Mono',monospace;">$${activePendingSum.toFixed(2)}</strong>
+          </span>
+          <button type="button" class="btn btn--gold btn--sm" onclick="openNewManualReceivableModal()" style="font-weight:900;">
+            <i class="fas fa-plus-circle"></i> + Agregar Cuenta por Cobrar
+          </button>
+        </div>
+      </div>
+
+      <div class="data-table-wrapper">
+        <table class="renacer-table">
+          <thead>
+            <tr>
+              <th>Deudor / Tipo</th>
+              <th>Concepto / Fecha</th>
+              <th>Total</th>
+              <th>Cobrado</th>
+              <th>Saldo Pendiente</th>
+              <th>Estado</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              list.length
+                ? list
+                    .map((c) => {
+                      const tInfo = formatManualCxcTypeLabel(c.tipo);
+                      const isDone = c.estado === "cobrada" || Number(c.saldo_pendiente) <= 0.01;
+                      const saldoBs = (Number(c.saldo_pendiente || 0) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      return `
+                        <tr>
+                          <td>
+                            <div style="font-weight:900; font-size:13.5px;">${escapeHtml(c.deudor)}</div>
+                            <span class="state-badge ${tInfo.cls}" style="font-size:9.5px; margin-top:3px;">
+                              <i class="fas ${tInfo.icon}"></i> ${tInfo.label}
+                            </span>
+                          </td>
+                          <td>
+                            <div style="font-weight:700; font-size:13px;">${escapeHtml(c.concepto)}</div>
+                            <div style="font-size:11px; color:var(--text-muted);">
+                              ${formatDateHuman(c.fecha_registro, false)}${c.telefono ? ` · <i class="fas fa-phone"></i> ${escapeHtml(c.telefono)}` : ""}
+                            </div>
+                          </td>
+                          <td style="font-family:'JetBrains Mono',monospace; font-weight:800;">$${Number(c.monto_total || 0).toFixed(2)}</td>
+                          <td style="font-family:'JetBrains Mono',monospace; font-weight:800; color:#16a34a;">$${Number(c.monto_abonado || 0).toFixed(2)}</td>
+                          <td>
+                            ${
+                              isDone
+                                ? `<span style="font-family:'JetBrains Mono',monospace; font-weight:900; color:#16a34a;">$0.00</span>`
+                                : `<div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:14.5px; color:#dc2626;">$${Number(c.saldo_pendiente || 0).toFixed(2)}</div><div style="font-size:10px; color:#0284c7;">≈ Bs. ${saldoBs}</div>`
+                            }
+                          </td>
+                          <td>
+                            <span class="state-badge ${isDone ? "state-badge--done" : "state-badge--wait"}">
+                              ${isDone ? "COBRADA 100%" : "PENDIENTE"}
+                            </span>
+                          </td>
+                          <td>
+                            <div style="display:flex; gap:5px; flex-wrap:wrap;">
+                              ${
+                                !isDone
+                                  ? `<button type="button" class="btn btn--gold btn--xs" onclick="openCollectManualReceivableModal('${escapeHtml(c.id_cxc)}')" title="Registrar abono o cobro total">
+                                       <i class="fas fa-dollar-sign"></i> Cobrar
+                                     </button>
+                                     <button type="button" class="btn btn--ghost btn--xs" onclick="sendManualReceivableWhatsApp('${escapeHtml(c.id_cxc)}')" title="Enviar recordatorio por WhatsApp">
+                                       <i class="fab fa-whatsapp" style="color:#16a34a;"></i>
+                                     </button>`
+                                  : ""
+                              }
+                              <button type="button" class="btn btn--ghost btn--xs" onclick="openEditManualReceivableModal('${escapeHtml(c.id_cxc)}')" title="Editar cuenta por cobrar">
+                                <i class="fas fa-pen"></i>
+                              </button>
+                              <button type="button" class="btn btn--ghost btn--xs" style="color:#dc2626;" onclick="deleteManualReceivable('${escapeHtml(c.id_cxc)}')" title="Eliminar">
+                                <i class="fas fa-trash-alt"></i>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join("")
+                : `<tr><td colspan="7" style="text-align:center; padding:18px; color:var(--text-muted);">No hay préstamos ni cuentas por cobrar independientes registradas. Pulsa <strong>+ Agregar Cuenta por Cobrar</strong> para migrar deudas viejas o registrar préstamos.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 /* ---------- CONTROL DINÁMICO DE CUENTAS BANCARIAS Y CAJA (AGREGAR, QUITAR, SUMAR/RESTAR SALDO) ---------- */
@@ -12600,8 +13285,11 @@ function openNewOrderModal() {
         <div class="form-section-box">
           <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
             <span><i class="fas fa-id-card"></i> 1. Identificación del Cliente / Taller Aliado</span>
-            <div class="allied-fast-search-row">
-              <span style="font-size:11px; font-weight:800; color:var(--renacer-gold); white-space:nowrap;"><i class="fas fa-handshake"></i> ¿Es Taller Aliado?:</span>
+            <div class="allied-fast-search-row" style="gap:8px;">
+              <button type="button" id="btn-new-order-migration-mode" class="btn btn--ghost btn--xs migration-preset-btn" onclick="applyMigrationClientPreset('new')" title="Completar como orden migrada del sistema anterior (sin exigir cédula ni teléfono)">
+                <i class="fas fa-clock-rotate-left"></i> Orden Vieja / Migración (Sin Cédula)
+              </button>
+              <span style="font-size:11px; font-weight:800; color:var(--gold-readable, var(--renacer-gold)); white-space:nowrap;"><i class="fas fa-handshake"></i> ¿Es Taller Aliado?:</span>
               <div class="fin-cat-combobox allied-fast-combobox">
                 <div class="fin-cat-combobox-input-wrap">
                   <input
@@ -12624,20 +13312,20 @@ function openNewOrderModal() {
           </div>
           <div class="form-grid-3">
             <div class="form-field">
-              <label>Documento de Identidad (Cédula / RIF) *</label>
+              <label>Documento (Cédula / RIF) <span style="font-size:10px; font-weight:700; color:var(--text-muted);">(Opcional en Migración)</span></label>
               <div style="display:flex; gap:6px;">
-                <select id="new-cli-doc-type" onchange="handleNewOrderDocInput()" style="width:115px; font-weight:800; background:var(--bg-input); color:var(--text-main); border:1.5px solid var(--border-color); border-radius:10px; padding:7px 8px;">
+                <select id="new-cli-doc-type" onchange="handleNewOrderDocInput()" style="width:122px; font-weight:800; background:var(--bg-input); color:var(--text-main); border:1.5px solid var(--border-color); border-radius:10px; padding:7px 8px;">
                   <option value="V-">V- (Venezolano)</option>
                   <option value="J-">J- (Jurídico / RIF)</option>
                   <option value="E-">E- (Extranjero)</option>
                   <option value="G-">G- (Gubernamental)</option>
+                  <option value="S/D">S/D (Sin Cédula / Migración)</option>
                 </select>
                 <input
                   type="text"
                   id="new-cli-doc-num"
-                  placeholder="Número..."
+                  placeholder="Número (o dejar vacío)"
                   inputmode="numeric"
-                  required
                   oninput="handleNewOrderDocInput()"
                   style="flex:1;"
                 />
@@ -12647,7 +13335,7 @@ function openNewOrderModal() {
               </div>
               <input type="hidden" id="new-cli-doc" value="V-" />
               <span id="cli-lookup-status" style="font-size:11px; font-weight:700; color:var(--text-muted); margin-top:4px; display:block;">
-                Selecciona el tipo (V-, J-, E-, G-) e ingresa el número para autocompletar o registrar sin errores.
+                Si migras una orden vieja sin cédula, deja el número vacío o pulsa <strong>Orden Vieja / Migración</strong> (no necesitas usar tu cédula).
               </span>
             </div>
             <div class="form-field">
@@ -12655,7 +13343,7 @@ function openNewOrderModal() {
               <input
                 type="text"
                 id="new-cli-name"
-                placeholder="Nombre del cliente o taller aliado"
+                placeholder="Nombre del cliente, taller o 'Migración Sistema Anterior'"
                 list="renacer-clientes-autocomplete"
                 oninput="handleClientNameAutocomplete(this.value)"
                 required
@@ -12665,8 +13353,8 @@ function openNewOrderModal() {
               </datalist>
             </div>
             <div class="form-field">
-              <label>Teléfono / WhatsApp *</label>
-              <input type="text" id="new-cli-phone" placeholder="0414-XXXXXXX" required />
+              <label>Teléfono / WhatsApp <span style="font-size:10px; font-weight:700; color:var(--text-muted);">(Opcional en Migración)</span></label>
+              <input type="text" id="new-cli-phone" placeholder="0414-XXXXXXX (opcional)" />
             </div>
           </div>
           <div class="form-grid-2" style="margin-top:10px;">
@@ -12680,6 +13368,28 @@ function openNewOrderModal() {
                 <option value="false">Cliente Particular</option>
                 <option value="true">Mecánico / Taller Aliado Recurrente</option>
               </select>
+            </div>
+          </div>
+
+          <!-- Panel Modo Migración (Entidad Oculta que NO crea cliente ficticio en el Directorio ni infla ventas nuevas) -->
+          <div id="new-order-migration-banner" class="hidden" style="margin-top:12px; padding:11px 14px; border-radius:12px; background:rgba(2,132,199,0.09); border:1.5px solid rgba(2,132,199,0.4);">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; font-weight:900; color:#0284c7;">
+                <input type="checkbox" id="new-ord-is-migration" style="width:16px; height:16px; accent-color:#0284c7;" />
+                <span><i class="fas fa-clock-rotate-left"></i> Entidad de Migración (Solo orden de taller · NO aparece en Directorio de Clientes ni suma como venta nueva)</span>
+              </label>
+            </div>
+            <div class="form-grid-2">
+              <div class="form-field" style="margin:0;">
+                <label style="font-size:11.5px;">Monto YA Pagado en Sistema Anterior ($ USD)</label>
+                <input type="number" step="0.01" min="0" id="new-ord-prev-paid" value="0" placeholder="Ej: 40 (no duplica caja)" style="font-family:'JetBrains Mono',monospace; font-weight:800;" />
+              </div>
+              <div class="form-field" style="margin:0; justify-content:center;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:800; margin-top:16px;">
+                  <input type="checkbox" id="new-ord-prev-paid-full" style="width:16px; height:16px; accent-color:#16a34a;" />
+                  <span>Ya estaba 100% saldada antes (Saldo \$0 · solo falta terminar trabajo / comisión)</span>
+                </label>
+              </div>
             </div>
           </div>
         </div>
@@ -13292,14 +14002,58 @@ function renderTempBudgetItems() {
   `;
 }
 
+function applyMigrationClientPreset(mode = "new") {
+  if (mode === "edit") {
+    const nameEl = document.getElementById("edit-cli-name");
+    const docEl = document.getElementById("edit-cli-doc");
+    const phoneEl = document.getElementById("edit-cli-phone");
+    const migChk = document.getElementById("edit-ord-is-migration");
+    if (nameEl && (!nameEl.value.trim() || normalizeTextPlain(nameEl.value).includes("jesus andrade"))) {
+      nameEl.value = "Migración Sistema Anterior";
+    }
+    if (docEl) docEl.value = "MIGRACION";
+    if (phoneEl && !phoneEl.value.trim()) phoneEl.value = "Sin teléfono";
+    if (migChk) migChk.checked = true;
+    showToast("Entidad de Migración aplicada: no figura en Directorio de Clientes ni infla ventas nuevas.", "info");
+    return;
+  }
+
+  const docTypeEl = document.getElementById("new-cli-doc-type");
+  const docNumEl = document.getElementById("new-cli-doc-num");
+  const docHiddenEl = document.getElementById("new-cli-doc");
+  const nameEl = document.getElementById("new-cli-name");
+  const phoneEl = document.getElementById("new-cli-phone");
+  const statusEl = document.getElementById("cli-lookup-status");
+  const migBanner = document.getElementById("new-order-migration-banner");
+  const migChk = document.getElementById("new-ord-is-migration");
+
+  if (docTypeEl) docTypeEl.value = "S/D";
+  if (docNumEl) docNumEl.value = "";
+  if (docHiddenEl) docHiddenEl.value = "MIGRACION";
+  if (nameEl && !nameEl.value.trim()) {
+    nameEl.value = "Migración Sistema Anterior";
+  }
+  if (phoneEl && !phoneEl.value.trim()) {
+    phoneEl.value = "Sin teléfono";
+  }
+  if (migBanner) migBanner.classList.remove("hidden");
+  if (migChk) migChk.checked = true;
+  if (statusEl) {
+    statusEl.innerHTML = `<span style="color:#0284c7;"><i class="fas fa-clock-rotate-left"></i> <strong>Entidad de Migración activa:</strong> NO crea cliente ficticio en el Directorio y NO suma como venta nueva. Puedes indicar abajo si ya estaba pagada.</span>`;
+  }
+  showToast("Entidad de Migración activada (sin cliente ficticio en Directorio).", "info");
+}
+
 function saveNewOrder(targetMode = false) {
   const advanceToService = targetMode === true || targetMode === "servicio";
   const advanceToDiag = targetMode === "diagnostico";
   const docType = document.getElementById("new-cli-doc-type")?.value || "V-";
   const docNum = (document.getElementById("new-cli-doc-num")?.value || "").trim().replace(/[^0-9A-Za-z-]/g, "");
-  const doc = docNum ? (docType + docNum).toUpperCase() : (document.getElementById("new-cli-doc")?.value || "").trim().toUpperCase();
+  const rawHiddenDoc = (document.getElementById("new-cli-doc")?.value || "").trim().toUpperCase();
+  const isMigrationChecked = Boolean(document.getElementById("new-ord-is-migration")?.checked);
+  const isNoDocMode = isMigrationChecked || docType === "S/D" || !docNum;
   const name = (document.getElementById("new-cli-name")?.value || "").trim();
-  const phone = (document.getElementById("new-cli-phone")?.value || "").trim();
+  const phone = (document.getElementById("new-cli-phone")?.value || "").trim() || "Sin teléfono";
   const address = (document.getElementById("new-cli-address")?.value || "").trim();
   const isAllied = document.getElementById("new-cli-allied")?.value === "true";
 
@@ -13312,8 +14066,8 @@ function saveNewOrder(targetMode = false) {
   const serial = (document.getElementById("new-ord-serial")?.value || "").trim() || "S/N";
   const obs = (document.getElementById("new-ord-obs")?.value || "").trim();
 
-  if (!doc || !name || !troquel || !marca || !modelo) {
-    showToast("Por favor completa Cédula/RIF, Nombre, Código de Troquel, Marca y Modelo.", "error");
+  if (!name || !troquel || !marca || !modelo) {
+    showToast("Por favor completa Nombre del Cliente, Código de Troquel, Marca y Modelo.", "error");
     return;
   }
 
@@ -13322,30 +14076,71 @@ function saveNewOrder(targetMode = false) {
     return;
   }
 
-  let clientObj = db.clientes.find((c) => c.documento_identidad.toUpperCase() === doc);
-  if (!clientObj) {
+  const cleanTroquel = troquel.replace(/^#/, "").trim();
+  const isGenericMigration =
+    isMigrationChecked ||
+    normalizeTextPlain(name) === "migracion sistema anterior" ||
+    normalizeTextPlain(name) === "migracion historica";
+
+  let clientObj = null;
+  let doc = "";
+  if (isGenericMigration) {
+    // Entidad oculta de migración: JAMÁS contamina db.clientes con clientes ficticios
+    doc = "MIGRACION";
     clientObj = {
-      id_cliente: "CLI-" + Date.now().toString().slice(-6),
-      documento_identidad: doc,
+      id_cliente: MIGRATION_ENTITY_CLIENT_ID,
+      documento_identidad: "MIGRACION",
       nombre_completo: name,
-      telefono: phone,
-      direccion: address,
-      es_taller_aliado: isAllied
+      telefono: phone
     };
-    db.clientes.push(clientObj);
   } else {
-    clientObj.nombre_completo = name;
-    clientObj.telefono = phone;
-    clientObj.direccion = address;
-    clientObj.es_taller_aliado = isAllied;
+    if (!isNoDocMode) {
+      doc = (docType + docNum).toUpperCase();
+    } else if (rawHiddenDoc && !["V-", "J-", "E-", "G-", "S/D", "SIN-CEDULA", "MIGRACION"].includes(rawHiddenDoc)) {
+      doc = rawHiddenDoc;
+    } else {
+      doc = `S/D-${cleanTroquel || Date.now().toString().slice(-4)}`;
+    }
+
+    if (!isNoDocMode) {
+      clientObj = db.clientes.find((c) => String(c.documento_identidad || "").toUpperCase() === doc);
+    }
+    if (!clientObj) {
+      const normName = normalizeTextPlain(name);
+      clientObj = db.clientes.find((c) => normalizeTextPlain(c.nombre_completo || c.nombre_cliente || "") === normName);
+    }
+
+    if (!clientObj) {
+      clientObj = {
+        id_cliente: "CLI-" + Date.now().toString().slice(-6),
+        documento_identidad: doc,
+        nombre_completo: name,
+        telefono: phone,
+        direccion: address,
+        es_taller_aliado: isAllied
+      };
+      db.clientes.push(clientObj);
+    } else {
+      clientObj.nombre_completo = name;
+      if (phone && phone !== "Sin teléfono") clientObj.telefono = phone;
+      if (address) clientObj.direccion = address;
+      clientObj.es_taller_aliado = isAllied;
+    }
   }
 
-  const cleanTroquel = troquel.replace(/^#/, "").trim();
   const baseOrderId = `ORD-${cleanTroquel}`;
   const newOrderId = db.ordenes.some((o) => o.id_orden === baseOrderId)
     ? `${baseOrderId}-${db.ordenes.length + 1}`
     : baseOrderId;
   const montoTotal = tempNewOrderState.itemsPresupuesto.reduce((acc, it) => acc + (Number(it.monto) || 0), 0);
+  const prevPaidFull = isGenericMigration && Boolean(document.getElementById("new-ord-prev-paid-full")?.checked);
+  const prevPaidInput = isGenericMigration ? Math.max(0, Number(document.getElementById("new-ord-prev-paid")?.value) || 0) : 0;
+  const montoAbonadoInicial = prevPaidFull ? montoTotal : Math.min(montoTotal, prevPaidInput);
+  const saldoPendienteInicial = Math.max(0, Number((montoTotal - montoAbonadoInicial).toFixed(2)));
+  const tipoCondInicial =
+    montoAbonadoInicial > 0
+      ? (saldoPendienteInicial <= 0.01 ? "pago_total" : "abono")
+      : "pendiente_definir";
   const nowStr = cleanDateISO(new Date().toISOString(), true);
 
   const newOrder = {
@@ -13354,22 +14149,23 @@ function saveNewOrder(targetMode = false) {
     documento_cliente: clientObj.documento_identidad,
     nombre_cliente: clientObj.nombre_completo,
     telefono_cliente: clientObj.telefono,
+    es_orden_migrada: Boolean(isGenericMigration),
     codigo_troquel: cleanTroquel,
     datos_motor: {
       tipo_pieza: pieza,
       marca,
       modelo,
       serial,
-      observaciones: obs || "Recepción inicial con registro fotográfico."
+      observaciones: obs || (isGenericMigration ? "Orden migrada del sistema anterior." : "Recepción inicial con registro fotográfico.")
     },
     galeria_fotos_pieza: tempNewOrderState.galeriaPieza.length ? tempNewOrderState.galeriaPieza : [DEMO_PHOTOS.camaraCorsa],
     galeria_fotos_repuestos: tempNewOrderState.galeriaRepuestos,
     estado_actual: advanceToService ? "servicio" : (advanceToDiag ? "diagnostico" : "diagnostico_presupuesto"),
     subestado_ejecucion: advanceToService ? "en_proceso" : "pendiente",
-    tipo_condicion_pago: "pendiente_definir",
+    tipo_condicion_pago: tipoCondInicial,
     monto_total: montoTotal,
-    monto_abonado: 0,
-    saldo_pendiente: montoTotal,
+    monto_abonado: montoAbonadoInicial,
+    saldo_pendiente: saldoPendienteInicial,
     metodo_pago: "n/a",
     comprobante_pago_foto: "",
     prioridad_alta: false,
@@ -16275,11 +17071,20 @@ function renderAccountsReceivableScreen() {
   const allCollectedOrders = validOrders.filter((o) => Number(o.monto_total) > 0 && Number(o.saldo_pendiente) <= 0);
   const allTotalOrders = validOrders.filter((o) => Number(o.monto_total) > 0);
 
+  const allManualCxc = db.cuentas_por_cobrar_manuales || [];
+  const activeManualCxc = getActiveManualReceivables();
+  const collectedManualCxc = allManualCxc.filter((c) => c.estado === "cobrada" || Number(c.saldo_pendiente) <= 0.01);
+  const totalManualResto = getTotalManualReceivablesPending();
+  const totalManualFacturado = allManualCxc.reduce((acc, c) => acc + (Number(c.monto_total) || 0), 0);
+  const totalManualAbonado = allManualCxc.reduce((acc, c) => acc + (Number(c.monto_abonado) || 0), 0);
+  const totalManualCollected = collectedManualCxc.reduce((acc, c) => acc + (Number(c.monto_total) || 0), 0);
+
   const tasaBcv = Number(db.config?.tasaBcv || db.configuracion?.tasaBcv) || 45.80;
-  const totalGeneralResto = allPendingOrders.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
-  const totalGeneralFacturado = allTotalOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
-  const totalGeneralAbonado = allTotalOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0);
-  const totalCollectedAmount = allCollectedOrders.reduce((acc, o) => acc + Number(o.monto_total), 0);
+  const totalOrdersResto = allPendingOrders.reduce((acc, o) => acc + Number(o.saldo_pendiente), 0);
+  const totalGeneralResto = Number((totalOrdersResto + totalManualResto).toFixed(2));
+  const totalGeneralFacturado = Number((allTotalOrders.reduce((acc, o) => acc + Number(o.monto_total), 0) + totalManualFacturado).toFixed(2));
+  const totalGeneralAbonado = Number((allTotalOrders.reduce((acc, o) => acc + Number(o.monto_abonado), 0) + totalManualAbonado).toFixed(2));
+  const totalCollectedAmount = Number((allCollectedOrders.reduce((acc, o) => acc + Number(o.monto_total), 0) + totalManualCollected).toFixed(2));
 
   // Determinar conjunto activo según pestaña
   let baseSet = allPendingOrders;
@@ -16331,9 +17136,10 @@ function renderAccountsReceivableScreen() {
 
   const groupsList = Object.values(groupedByClient);
 
+  const realArClients = (db.clientes || []).filter((c) => !isMigrationHiddenClient(c));
   const clientOptionsHtml =
-    `<option value="all">Todos los Clientes / Mecánicos (${(db.clientes || []).length})</option>` +
-    (db.clientes || [])
+    `<option value="all">Todos los Clientes / Mecánicos (${realArClients.length})</option>` +
+    realArClients
       .map(
         (c) =>
           `<option value="${c.id_cliente}" ${arFilterClient === c.id_cliente ? "selected" : ""}>${c.nombre_cliente || c.nombre_completo} (${c.documento_identidad})</option>`
@@ -16493,16 +17299,20 @@ function renderAccountsReceivableScreen() {
           </span>
           <div style="display:flex; align-items:baseline; gap:12px; margin-top:4px; flex-wrap:wrap;">
             <span style="font-family:'JetBrains Mono',monospace; font-size:34px; font-weight:900; color:${arActiveTab === "cobradas" ? "#22c55e" : "#dc2626"};">
-              $${(arActiveTab === "cobradas" ? totalCollectedAmount : totalGeneralResto).toFixed(2)}
+              $${(arActiveTab === "cobradas" ? totalCollectedAmount : (arActiveTab === "manuales" ? totalManualResto : totalGeneralResto)).toFixed(2)}
             </span>
             <span style="font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:800; color:#0284c7;">
-              ≈ Bs. ${(((arActiveTab === "cobradas" ? totalCollectedAmount : totalGeneralResto)) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ≈ Bs. ${(((arActiveTab === "cobradas" ? totalCollectedAmount : (arActiveTab === "manuales" ? totalManualResto : totalGeneralResto))) * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
-            <span style="font-size:12px; color:var(--text-muted); font-weight:700;">(Tasa BCV: Bs. ${tasaBcv.toFixed(2)})</span>
+            <span style="font-size:12px; color:var(--text-muted); font-weight:700;">(Tasa BCV €: Bs. ${tasaBcv.toFixed(2)})</span>
           </div>
+          ${totalManualResto > 0 && arActiveTab !== "cobradas" ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:4px; font-weight:700;">Facturas de Taller: <strong>$${totalOrdersResto.toFixed(2)}</strong> · Préstamos y Cuentas Migradas: <strong style="color:var(--gold-readable, var(--renacer-gold));">$${totalManualResto.toFixed(2)}</strong></div>` : ""}
         </div>
 
-        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="btn btn--gold" onclick="openNewManualReceivableModal()" style="font-weight:900; padding:10px 14px;" title="Agregar préstamo o cuenta vieja por cobrar independiente a las facturas de taller">
+            <i class="fas fa-plus-circle"></i> Agregar Cuenta por Cobrar
+          </button>
           <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
             <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">TOTAL FACTURADO</span>
             <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--text-main);">
@@ -16516,9 +17326,9 @@ function renderAccountsReceivableScreen() {
             </div>
           </div>
           <div style="background:var(--bg-input); padding:10px 16px; border-radius:12px; border:1px solid var(--border-subtle); text-align:center;">
-            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">PIEZAS EN VISTA</span>
-            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--renacer-gold);">
-              ${filtered.length} pz
+            <span style="font-size:10.5px; color:var(--text-muted); font-weight:800; text-transform:uppercase;">PENDIENTES</span>
+            <div style="font-family:'JetBrains Mono',monospace; font-weight:900; font-size:16px; color:var(--gold-readable, var(--renacer-gold));">
+              ${allPendingOrders.length + activeManualCxc.length}
             </div>
           </div>
         </div>
@@ -16546,23 +17356,32 @@ function renderAccountsReceivableScreen() {
       </div>
     </div>
 
-    <!-- PESTAÑAS EJECUTIVAS: PENDIENTES VS HISTORIAL COBRADAS 100% -->
+    <!-- PESTAÑAS EJECUTIVAS: PENDIENTES, PRÉSTAMOS/MIGRADAS, COBRADAS Y TODAS -->
     <div class="ar-tabs-nav">
       <button type="button" class="ar-tab-btn ${arActiveTab === "pendientes" ? "active" : ""}" onclick="setArActiveTab('pendientes')">
-        <i class="fas fa-hourglass-half"></i> Saldos Pendientes (${allPendingOrders.length})
+        <i class="fas fa-hourglass-half"></i> Saldos Pendientes (${allPendingOrders.length + activeManualCxc.length})
+      </button>
+      <button type="button" class="ar-tab-btn ${arActiveTab === "manuales" ? "active" : ""}" onclick="setArActiveTab('manuales')">
+        <i class="fas fa-hand-holding-usd"></i> Préstamos y Migradas (${allManualCxc.length})
       </button>
       <button type="button" class="ar-tab-btn ${arActiveTab === "cobradas" ? "active" : ""}" onclick="setArActiveTab('cobradas')">
-        <i class="fas fa-check-circle"></i> Historial Cobradas / Pagadas 100% (${allCollectedOrders.length})
+        <i class="fas fa-check-circle"></i> Historial Cobradas 100% (${allCollectedOrders.length + collectedManualCxc.length})
       </button>
       <button type="button" class="ar-tab-btn ${arActiveTab === "todas" ? "active" : ""}" onclick="setArActiveTab('todas')">
-        <i class="fas fa-list-ul"></i> Todas las Órdenes (${allTotalOrders.length})
+        <i class="fas fa-list-ul"></i> Todas (${allTotalOrders.length + allManualCxc.length})
       </button>
     </div>
 
-    <!-- VISTA EJECUTIVA EN TARJETAS DE CLIENTE -->
-    <div class="ar-cards-container">
-      ${clientCardsHtml}
-    </div>
+    ${
+      arActiveTab === "manuales"
+        ? renderManualReceivablesSectionHtml(tasaBcv, "all")
+        : (
+            (arActiveTab === "pendientes" && activeManualCxc.length > 0 ? renderManualReceivablesSectionHtml(tasaBcv, "pendientes") : "") +
+            (arActiveTab === "cobradas" && collectedManualCxc.length > 0 ? renderManualReceivablesSectionHtml(tasaBcv, "cobradas") : "") +
+            (arActiveTab === "todas" && allManualCxc.length > 0 ? renderManualReceivablesSectionHtml(tasaBcv, "all") : "") +
+            `<div class="ar-cards-container">${clientCardsHtml}</div>`
+          )
+    }
   `;
 }
 
@@ -18161,16 +18980,17 @@ function buildLivePreVoucherForUser(userId) {
   const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
   if (!user) return null;
   const week = getCurrentPayrollWeekRange();
+  const isPartner = isPartnerInManagementPayroll(user);
+  const scopeIds = isPartner ? getLinkedWorkshopUserIdsForPartner(user) : [userId];
   const unpaidDone = (db.subtareas || []).filter(
-    (s) => s.tecnico_id === userId && s.estado_subtarea === "terminado" && !s.comision_pagada
+    (s) => scopeIds.includes(s.tecnico_id) && s.estado_subtarea === "terminado" && !s.comision_pagada
   );
   const ordenesDetalle = groupSubtasksByOrderForVoucher(unpaidDone);
   const totalComisiones = Number(
     unpaidDone.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0).toFixed(2)
   );
-  const isPartner = isPartnerInManagementPayroll(user);
   const sueldoBase = isPartner && isPartnerPayrollActive(user) ? getUserWeeklySalary(user) : 0;
-  const advInfo = getPendingUserAdvances(userId);
+  const advInfo = getPendingUserAdvancesForIds(scopeIds);
   const totalAdelantos = advInfo.total;
   const montoPagado = Math.max(0, Number((sueldoBase + totalComisiones - totalAdelantos).toFixed(2)));
 
@@ -18262,8 +19082,14 @@ function renderUserVouchersHistorySectionHtml(userId, options = {}) {
     options.allowDelete && currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller")
   );
   const reopenOnDelete = options.reopenUserId || "";
-  const preVoucher = buildLivePreVoucherForUser(userId);
-  const savedVouchers = (db.vouchers_nomina || []).filter((v) => v.usuario_id === userId);
+  const linkedPartnerForVch = getLinkedManagementPartnerForTech(user);
+  const canUseLinkedPartnerPre = Boolean(linkedPartnerForVch && (!currentUser || currentUser.rol !== "tecnico"));
+  const voucherScopeIds = isPartnerInManagementPayroll(user)
+    ? getLinkedWorkshopUserIdsForPartner(user)
+    : (linkedPartnerForVch ? [userId, linkedPartnerForVch.id_usuario] : [userId]);
+  const preVoucherTargetId = canUseLinkedPartnerPre ? linkedPartnerForVch.id_usuario : userId;
+  const preVoucher = buildLivePreVoucherForUser(preVoucherTargetId);
+  const savedVouchers = (db.vouchers_nomina || []).filter((v) => voucherScopeIds.includes(v.usuario_id));
 
   const preTroquelesHtml = preVoucher && preVoucher.ordenes_detalle.length
     ? preVoucher.ordenes_detalle
@@ -18357,7 +19183,7 @@ function renderUserVouchersHistorySectionHtml(userId, options = {}) {
               </span>
             </td>
             <td style="text-align:right; white-space:nowrap;">
-              <button type="button" class="btn btn--gold btn--xs" onclick="openLivePreVoucherModal('${user.id_usuario}')">
+              <button type="button" class="btn btn--gold btn--xs" onclick="openLivePreVoucherModal('${preVoucherTargetId}')">
                 <i class="fas fa-receipt"></i> Ver Pre-Voucher
               </button>
             </td>
@@ -18376,10 +19202,15 @@ function openWorkerVouchersHistoryModal(userId) {
   }
   const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
   if (!user) return;
-  const savedCount = (db.vouchers_nomina || []).filter((v) => v.usuario_id === userId).length;
+  const linkedPartner = getLinkedManagementPartnerForTech(user);
+  const voucherScopeIds = isPartnerInManagementPayroll(user)
+    ? getLinkedWorkshopUserIdsForPartner(user)
+    : (linkedPartner ? [userId, linkedPartner.id_usuario] : [userId]);
+  const savedCount = (db.vouchers_nomina || []).filter((v) => voucherScopeIds.includes(v.usuario_id)).length;
   const canManage = currentUser && (currentUser.rol === "admin" || currentUser.rol === "jefe_taller");
   const canDeliver = canManage || (currentUser && currentUser.rol === "recepcion");
-  const preVoucher = buildLivePreVoucherForUser(userId);
+  const preVoucherUserId = linkedPartner ? linkedPartner.id_usuario : userId;
+  const preVoucher = buildLivePreVoucherForUser(preVoucherUserId);
 
   openModal({
     title: `Vouchers de Nómina y Liquidaciones — ${user.nombre}`,
@@ -18392,7 +19223,7 @@ function openWorkerVouchersHistoryModal(userId) {
           <div style="font-size:12px; color:var(--text-muted);">${escapeHtml(user.especialidad || user.rol_label || "")} · ${savedCount} liquidación(es) pagada(s) en historial</div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button type="button" class="btn btn--gold btn--sm" onclick="openLivePreVoucherModal('${user.id_usuario}')">
+          <button type="button" class="btn btn--gold btn--sm" onclick="openLivePreVoucherModal('${preVoucherUserId}')">
             <i class="fas fa-receipt"></i> Abrir Pre-Voucher Semanal ($${preVoucher ? preVoucher.monto_pagado.toFixed(2) : "0.00"})
           </button>
         </div>
@@ -19337,6 +20168,8 @@ function renderCommissionsAndStaffScreen() {
 
       const advInfo = getPendingUserAdvances(t.id_usuario);
       const netToPay = Math.max(0, Number((totalToPay - advInfo.total).toFixed(2)));
+      const linkedMgmtPartner = getLinkedManagementPartnerForTech(t);
+      const isUnifiedWithManagement = Boolean((isPartnerInManagementPayroll(t) && isPartnerPayrollActive(t)) || linkedMgmtPartner);
       const fullAddressHtml = t.direccion ? ` · ${renderGoogleMapsAddressHtml(t.direccion, { compact: true, emptyLabel: "" })}` : "";
       const cedulaText = t.cedula ? ` · C.I.: <code>${escapeHtml(t.cedula)}</code>` : "";
 
@@ -19345,7 +20178,7 @@ function renderCommissionsAndStaffScreen() {
           <td>
             <div style="font-weight:900; font-size:14.5px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
               ${escapeHtml(t.nombre)}
-              ${isPartnerInManagementPayroll(t) && isPartnerPayrollActive(t) ? `<span style="font-size:10px; font-weight:800; padding:2px 7px; border-radius:99px; background:rgba(245,223,0,0.16); color:var(--gold-readable, var(--renacer-gold)); border:1px solid rgba(245,223,0,0.4);"><i class="fas fa-user-tie"></i> Nómina Unificada Abajo</span>` : ""}
+              ${isUnifiedWithManagement ? `<span style="font-size:10px; font-weight:800; padding:2px 7px; border-radius:99px; background:rgba(245,223,0,0.16); color:var(--gold-readable, var(--renacer-gold)); border:1px solid rgba(245,223,0,0.4);"><i class="fas fa-link"></i> Nómina Unificada Abajo${linkedMgmtPartner ? ` (${escapeHtml(linkedMgmtPartner.nombre)})` : ""}</span>` : ""}
             </div>
             <div style="font-size:11.5px; color:var(--text-muted);">${escapeHtml(t.especialidad || "")}${cedulaText} · <i class="fas fa-phone"></i> ${escapeHtml(t.telefono || "-")} · PIN: <code>${escapeHtml(t.pin || "1234")}</code>${fullAddressHtml}</div>
           </td>
@@ -19380,12 +20213,16 @@ function renderCommissionsAndStaffScreen() {
                 <i class="fas fa-clipboard-list"></i> Ficha / Trabajos y Tiempos
               </button>
               <button type="button" class="btn btn--gold" style="padding:5px 9px; font-size:11.5px;" onclick="openWorkerVouchersHistoryModal('${t.id_usuario}')" title="Ver Pre-Voucher semanal y recibos de pago por orden">
-                <i class="fas fa-receipt"></i> Vouchers${(() => { const c = (db.vouchers_nomina || []).filter((v) => v.usuario_id === t.id_usuario).length; return c > 0 ? ` (${c})` : ""; })()}
+                <i class="fas fa-receipt"></i> Vouchers${(() => { const ids = linkedMgmtPartner ? [t.id_usuario, linkedMgmtPartner.id_usuario] : [t.id_usuario]; const c = (db.vouchers_nomina || []).filter((v) => ids.includes(v.usuario_id)).length; return c > 0 ? ` (${c})` : ""; })()}
               </button>
               <button type="button" class="btn btn--ghost" style="padding:5px 9px; font-size:11.5px;" onclick="openEditWorkerModal('${t.id_usuario}')" title="Editar nombre, cédula, dirección, teléfono o PIN">
                 <i class="fas fa-edit"></i> Editar
               </button>
-              ${(totalToPay > 0 || advInfo.total > 0) ? `<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateWorkerModal('${t.id_usuario}', ${totalToPay})"><i class="fas fa-hand-holding-usd"></i> Liquidar ($${netToPay.toFixed(2)})</button>` : ""}
+              ${(totalToPay > 0 || advInfo.total > 0)
+                ? (linkedMgmtPartner
+                    ? `<button type="button" class="btn btn--gold" style="padding:5px 10px; font-size:11.5px; font-weight:800;" onclick="openLiquidatePartnerWeeklyModal('${linkedMgmtPartner.id_usuario}')" title="Liquidar unificado con su sueldo base y adelantos en Gerencia"><i class="fas fa-link"></i> Liquidar en Gerencia</button>`
+                    : `<button type="button" class="btn btn--success" style="padding:5px 10px; font-size:11.5px;" onclick="openLiquidateWorkerModal('${t.id_usuario}', ${totalToPay})"><i class="fas fa-hand-holding-usd"></i> Liquidar ($${netToPay.toFixed(2)})</button>`)
+                : ""}
               <button type="button" class="btn btn--ghost" style="padding:5px 8px; font-size:11.5px; color:#dc2626;" onclick="deleteWorker('${t.id_usuario}')" title="Eliminar trabajador">
                 <i class="fas fa-trash-alt"></i>
               </button>
@@ -19622,21 +20459,27 @@ function renderCommissionsAndStaffScreen() {
       const partnersRemunData = partners.map((p) => {
         const payrollActive = isPartnerPayrollActive(p);
         const salarioBase = payrollActive ? getUserWeeklySalary(p) : 0;
+        const linkedIds = getLinkedWorkshopUserIdsForPartner(p);
+        const linkedTallerNames = linkedIds
+          .slice(1)
+          .map((id) => db.usuarios.find((u) => u.id_usuario === id)?.nombre)
+          .filter(Boolean);
         const extraSubs = db.subtareas.filter(
-          (s) => s.tecnico_id === p.id_usuario && s.estado_subtarea === "terminado" && !s.comision_pagada
+          (s) => linkedIds.includes(s.tecnico_id) && s.estado_subtarea === "terminado" && !s.comision_pagada
         );
-        const totalExtras = extraSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
+        const totalExtras = Number(extraSubs.reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0).toFixed(2));
 
-        const advInfoP = getPendingUserAdvances(p.id_usuario);
+        const advInfoP = getPendingUserAdvancesForIds(linkedIds);
         const adelantosMovs = advInfoP.list;
         const totalAdelantos = advInfoP.total;
-        const netoSemanal = Math.max(0, salarioBase + totalExtras - totalAdelantos);
+        const netoSemanal = Math.max(0, Number((salarioBase + totalExtras - totalAdelantos).toFixed(2)));
 
         return {
           user: p,
           payrollActive,
           configuredSalary: getUserWeeklySalary(p),
           salarioBase,
+          linkedTallerNames,
           extraSubsCount: extraSubs.length,
           totalExtras,
           adelantosCount: adelantosMovs.length,
@@ -19658,6 +20501,13 @@ function renderCommissionsAndStaffScreen() {
                 <span class="state-badge ${p.payrollActive ? "state-badge--done" : "state-badge--wait"}" style="font-size:10px;">
                   ${p.payrollActive ? "PAGOS ACTIVOS" : "INACTIVO / INERTE"}
                 </span>
+                ${
+                  p.linkedTallerNames && p.linkedTallerNames.length
+                    ? `<span class="state-badge" style="font-size:10px; background:rgba(245,223,0,0.14); color:var(--gold-readable, var(--renacer-gold)); border:1px solid rgba(245,223,0,0.38);" title="Suma automáticamente las comisiones de taller en esta nómina">
+                         <i class="fas fa-link"></i> + ${escapeHtml(p.linkedTallerNames.join(", "))}
+                       </span>`
+                    : ""
+                }
               </div>
             </div>
             <div style="text-align:right;">
@@ -19908,13 +20758,21 @@ function openRegisterStaffAdvanceModal(userId, contextType = "external") {
 
         <div class="form-grid-2">
           <div class="form-field">
-            <label><i class="fas fa-dollar-sign"></i> Monto del Adelanto / Abono (USD $) *</label>
-            <input type="number" step="0.5" min="0.5" id="staff-adv-amount" placeholder="Ej: 25" required oninput="const n=Number(this.value)||0; const el=document.getElementById('staff-adv-bs'); if(el) el.textContent=n>0?'≈ '+(n*${tasaBcv}).toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})+' Bs (BCV € '+${tasaBcv}.toFixed(2)+')':'';" />
+            <label style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+              <span><i class="fas fa-dollar-sign"></i> Monto del Adelanto / Abono (USD $) *</span>
+              <button type="button" class="btn btn--gold btn--xs bs-calc-toggle-btn" onclick="toggleBsUsdCalc('staffadv')" title="Convertir Bolívares a Dólares">
+                <i class="fas fa-calculator"></i> Calc. Bs → $
+              </button>
+            </label>
+            <input type="number" step="0.01" min="0.01" id="staff-adv-amount" placeholder="Ej: 25" required oninput="const n=Number(this.value)||0; const el=document.getElementById('staff-adv-bs'); if(el) el.textContent=n>0?'≈ '+(n*${tasaBcv}).toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})+' Bs (BCV € '+${tasaBcv}.toFixed(2)+')':'';" />
             <div id="staff-adv-bs" style="font-size:11.5px; color:var(--gold-readable, #b45309); margin-top:3px; font-weight:800;"></div>
           </div>
           <div class="form-field">
             <label><i class="fas fa-calendar"></i> Fecha *</label>
             <input type="date" id="staff-adv-date" value="${getLocalIsoDate()}" required />
+          </div>
+          <div style="grid-column:1/-1;">
+            ${renderBsToUsdCalculatorWidget("staffadv", "staff-adv-amount", "staff-adv-concept")}
           </div>
           <div class="form-field" style="grid-column:1/-1;">
             <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
@@ -19956,19 +20814,27 @@ function openRegisterStaffAdvanceModal(userId, contextType = "external") {
 async function handleStaffAdvancePhotoUpload(input) {
   const file = input && input.files && input.files[0];
   if (!file) return;
-  const compressed = typeof compressImageFastLocal === "function"
-    ? await compressImageFastLocal(file, 960, 0.72)
-    : await compressImageForSheets(file, 700, 34000);
-  tempStaffAdvancePhoto = compressed;
+  let previewUrl = "";
+  let drivePayload = "";
+  if (typeof compressImageFastLocal === "function") {
+    const local = await compressImageFastLocal(file, 960, 180000);
+    if (!local || !local.driveDataUrl) return;
+    previewUrl = local.getFallback();
+    drivePayload = local.driveDataUrl;
+  } else {
+    previewUrl = await compressImageForSheets(file, 700, 34000);
+    drivePayload = previewUrl;
+  }
+  tempStaffAdvancePhoto = previewUrl;
   const nameEl = document.getElementById("staff-adv-photo-name");
   const prevEl = document.getElementById("staff-adv-photo-preview");
   if (nameEl) nameEl.textContent = `✓ ${file.name} (lista para respaldo en Drive)`;
   if (prevEl) {
     prevEl.innerHTML = `<img src="${tempStaffAdvancePhoto}" style="max-height:110px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
   }
-  if (typeof uploadImageDataUrlToDrive === "function") {
-    const localRef = compressed;
-    uploadImageDataUrlToDrive(localRef, "adelanto_vale", 15000, {
+  if (typeof uploadImageDataUrlToDrive === "function" && drivePayload) {
+    const localRef = previewUrl;
+    uploadImageDataUrlToDrive(drivePayload, "adelanto_vale", 15000, {
       orderFolder: "General_Finanzas_y_Vouchers",
       category: "adelanto_vale"
     }).then((driveUrl) => {
@@ -19978,6 +20844,265 @@ async function handleStaffAdvancePhotoUpload(input) {
       }
     }).catch(() => {});
   }
+}
+
+/* ---------- SELECTOR RÁPIDO UNIVERSAL DE VALES / ADELANTOS (INICIO Y FINANZAS — v49.3) ---------- */
+function getAllAdvanceBeneficiariesWithBalances() {
+  const users = Array.isArray(db?.usuarios) ? db.usuarios : [];
+  const items = [];
+
+  // 1) Gerencia / Socios (incluye comisiones unificadas de perfiles gemelos Taller + Administración)
+  users
+    .filter((u) => u && isPartnerInManagementPayroll(u))
+    .forEach((u) => {
+      const linkedIds = getLinkedWorkshopUserIdsForPartner(u);
+      const salaryBase = isPartnerPayrollActive(u) ? getUserWeeklySalary(u) : 0;
+      const subsTotal = Number(
+        (db.subtareas || [])
+          .filter((s) => linkedIds.includes(s.tecnico_id) && s.estado_subtarea === "terminado" && !s.comision_pagada)
+          .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0)
+          .toFixed(2)
+      );
+      const bruto = Number((salaryBase + subsTotal).toFixed(2));
+      const advInfo = getPendingUserAdvancesForIds(linkedIds);
+      const netoDisponible = Math.max(0, Number((bruto - advInfo.total).toFixed(2)));
+      items.push({
+        user: u,
+        group: "partner",
+        groupLabel: "Gerencia / Socios",
+        salaryBase,
+        subsTotal,
+        bruto,
+        prevAdvances: advInfo.total,
+        prevAdvancesList: advInfo.list,
+        netoDisponible
+      });
+    });
+
+  // 2) Personal Técnico interno (excluye perfiles gemelos ya unificados arriba en Gerencia)
+  users
+    .filter((u) => u && u.rol === "tecnico" && !isExternalUser(u) && !getLinkedManagementPartnerForTech(u))
+    .forEach((u) => {
+      const subsTotal = Number(
+        (db.subtareas || [])
+          .filter((s) => s.tecnico_id === u.id_usuario && s.estado_subtarea === "terminado" && !s.comision_pagada)
+          .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0)
+          .toFixed(2)
+      );
+      const advInfo = getPendingUserAdvances(u.id_usuario);
+      const netoDisponible = Math.max(0, Number((subsTotal - advInfo.total).toFixed(2)));
+      items.push({
+        user: u,
+        group: "worker",
+        groupLabel: "Personal Técnico (Destajo)",
+        salaryBase: 0,
+        subsTotal,
+        bruto: subsTotal,
+        prevAdvances: advInfo.total,
+        prevAdvancesList: advInfo.list,
+        netoDisponible
+      });
+    });
+
+  // 3) Talleres Externos / Aliados (Javier Repuestos, Solteca, etc.)
+  users
+    .filter((u) => u && isExternalUser(u))
+    .forEach((u) => {
+      const subsTotal = Number(
+        (db.subtareas || [])
+          .filter((s) => s.tecnico_id === u.id_usuario && !s.comision_pagada)
+          .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0)
+          .toFixed(2)
+      );
+      const advInfo = getPendingUserAdvances(u.id_usuario);
+      const netoDisponible = Math.max(0, Number((subsTotal - advInfo.total).toFixed(2)));
+      items.push({
+        user: u,
+        group: "external",
+        groupLabel: "Talleres Aliados / Externos",
+        salaryBase: 0,
+        subsTotal,
+        bruto: subsTotal,
+        prevAdvances: advInfo.total,
+        prevAdvancesList: advInfo.list,
+        netoDisponible
+      });
+    });
+
+  return items;
+}
+
+function renderQuickAdvanceBalanceCardHtml(item, typedAmount = 0) {
+  if (!item) {
+    return `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:10px;">Selecciona un beneficiario arriba para ver su saldo disponible.</div>`;
+  }
+  const amt = Math.max(0, Number(typedAmount) || 0);
+  const afterNeto = Number((item.netoDisponible - amt).toFixed(2));
+  const afterHtml = amt > 0
+    ? `<div style="margin-top:8px; padding:6px 10px; border-radius:8px; background:${afterNeto >= 0 ? "rgba(22,163,74,0.12)" : "rgba(217,119,6,0.14)"}; border:1px solid ${afterNeto >= 0 ? "rgba(22,163,74,0.35)" : "rgba(217,119,6,0.4)"}; font-size:12px; font-weight:800; display:flex; justify-content:space-between; align-items:center;">
+         <span>${afterNeto >= 0 ? "Saldo que le quedará por liquidar:" : "Excedente a favor del taller (se descuenta al liquidar):"}</span>
+         <span style="font-family:'JetBrains Mono',monospace; font-size:14px; color:${afterNeto >= 0 ? "#16a34a" : "#d97706"};">$${Math.abs(afterNeto).toFixed(2)}</span>
+       </div>`
+    : "";
+  const prevListHtml = item.prevAdvancesList.length
+    ? `<div style="margin-top:8px; font-size:11px; color:var(--text-muted); border-top:1px dashed var(--border-subtle); padding-top:6px;">
+         <strong style="color:#dc2626;">Vales previos sin liquidar (${item.prevAdvancesList.length}):</strong>
+         ${item.prevAdvancesList.slice(0, 3).map((m) => `<span>${formatDateHuman(m.fecha, false)}: <strong>-$${Number(m.monto || 0).toFixed(2)}</strong></span>`).join(" · ")}
+       </div>`
+    : "";
+
+  return `
+    <div style="font-size:11px; font-weight:900; color:#d97706; text-transform:uppercase; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+      <span><i class="fas fa-user-check"></i> ${escapeHtml(item.user.nombre)}</span>
+      <span class="state-badge state-badge--exec" style="font-size:9.5px;">${escapeHtml(item.groupLabel)}</span>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; text-align:center;">
+      <div style="background:var(--bg-card); padding:7px; border-radius:9px; border:1px solid var(--border-subtle);">
+        <div style="font-size:10px; font-weight:800; color:var(--text-muted);">BRUTO ACUMULADO</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:var(--text-main);">$${item.bruto.toFixed(2)}</div>
+      </div>
+      <div style="background:var(--bg-card); padding:7px; border-radius:9px; border:1px solid var(--border-subtle);">
+        <div style="font-size:10px; font-weight:800; color:var(--text-muted);">VALES PREVIOS</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:#dc2626;">-$${item.prevAdvances.toFixed(2)}</div>
+      </div>
+      <div style="background:var(--bg-card); padding:7px; border-radius:9px; border:1px solid var(--border-subtle);">
+        <div style="font-size:10px; font-weight:800; color:var(--text-muted);">DISPONIBLE HOY</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:900; color:#16a34a;">$${item.netoDisponible.toFixed(2)}</div>
+      </div>
+    </div>
+    ${afterHtml}
+    ${prevListHtml}
+  `;
+}
+
+function refreshQuickAdvanceBalanceCard(userId) {
+  const list = getAllAdvanceBeneficiariesWithBalances();
+  const item = list.find((x) => x.user.id_usuario === userId) || list[0];
+  const cardEl = document.getElementById("quick-adv-balance-card");
+  const amtVal = Number(document.getElementById("staff-adv-amount")?.value) || 0;
+  if (cardEl) cardEl.innerHTML = renderQuickAdvanceBalanceCardHtml(item, amtVal);
+  const conceptEl = document.getElementById("staff-adv-concept");
+  if (conceptEl && item && (!conceptEl.value.trim() || conceptEl.dataset.autoConcept === "1")) {
+    conceptEl.value = item.group === "external"
+      ? `Abono / Vale a ${item.user.nombre}`
+      : (item.group === "partner" ? `Vale / Retiro personal — ${item.user.nombre}` : `Vale / Adelanto — ${item.user.nombre}`);
+    conceptEl.dataset.autoConcept = "1";
+  }
+}
+
+function openQuickUniversalAdvanceModal(preselectedUserId = "") {
+  const items = getAllAdvanceBeneficiariesWithBalances();
+  if (!items.length) {
+    showToast("No hay personal ni aliados registrados para emitir vales.", "warning");
+    return;
+  }
+  const selectedItem = items.find((x) => x.user.id_usuario === preselectedUserId) || items[0];
+  const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
+  const groups = [
+    { key: "partner", label: "Gerencia / Socios" },
+    { key: "worker", label: "Personal Técnico (Destajo)" },
+    { key: "external", label: "Talleres Aliados / Externos" }
+  ];
+  const selectOptionsHtml = groups
+    .map((g) => {
+      const gItems = items.filter((x) => x.group === g.key);
+      if (!gItems.length) return "";
+      return `<optgroup label="${escapeHtml(g.label)}">${gItems
+        .map(
+          (x) =>
+            `<option value="${escapeHtml(x.user.id_usuario)}" ${x.user.id_usuario === selectedItem.user.id_usuario ? "selected" : ""}>${escapeHtml(x.user.nombre)} — Disp: $${x.netoDisponible.toFixed(2)}${x.prevAdvances > 0 ? ` (Vales: -$${x.prevAdvances.toFixed(2)})` : ""}</option>`
+        )
+        .join("")}</optgroup>`;
+    })
+    .join("");
+
+  const defaultConcept = selectedItem.group === "external"
+    ? `Abono / Vale a ${selectedItem.user.nombre}`
+    : (selectedItem.group === "partner" ? `Vale / Retiro personal — ${selectedItem.user.nombre}` : `Vale / Adelanto — ${selectedItem.user.nombre}`);
+
+  tempStaffAdvancePhoto = "";
+  openModal({
+    title: "Registrar Vale / Adelanto (Descuento Automático en Nómina)",
+    icon: "fa-money-bill-transfer",
+    body: `
+      <div style="display:flex; flex-direction:column; gap:13px;">
+        <div class="form-field" style="margin:0;">
+          <label><i class="fas fa-users"></i> ¿A quién le entregas el Vale / Adelanto? (Con Saldo Disponible) *</label>
+          <select id="quick-adv-user" onchange="refreshQuickAdvanceBalanceCard(this.value)" style="font-weight:800;">
+            ${selectOptionsHtml}
+          </select>
+        </div>
+
+        <div id="quick-adv-balance-card" style="background:var(--bg-input); border:1.5px solid rgba(245,158,11,0.45); border-radius:12px; padding:11px 13px;">
+          ${renderQuickAdvanceBalanceCardHtml(selectedItem, 0)}
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-field">
+            <label style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+              <span><i class="fas fa-dollar-sign"></i> Monto del Vale ($ USD) *</span>
+              <button type="button" class="btn btn--gold btn--xs bs-calc-toggle-btn" onclick="toggleBsUsdCalc('quickadv')" title="Convertir Bolívares a Dólares con tasa manipulable">
+                <i class="fas fa-calculator"></i> Calc. Bs → $
+              </button>
+            </label>
+            <input type="number" step="0.01" min="0.01" id="staff-adv-amount" placeholder="Ej: 20.00" style="font-family:'JetBrains Mono',monospace; font-weight:900;" required oninput="const n=Number(this.value)||0; const el=document.getElementById('staff-adv-bs'); if(el) el.textContent=n>0?'≈ '+(n*${tasaBcv}).toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})+' Bs (BCV € '+${tasaBcv}.toFixed(2)+')':''; refreshQuickAdvanceBalanceCard(document.getElementById('quick-adv-user')?.value);" />
+            <div id="staff-adv-bs" style="font-size:11.5px; color:var(--gold-readable, #b45309); margin-top:3px; font-weight:800;"></div>
+          </div>
+          <div class="form-field">
+            <label><i class="fas fa-calendar"></i> Fecha *</label>
+            <input type="date" id="staff-adv-date" value="${getLocalIsoDate()}" required />
+          </div>
+          <div style="grid-column:1/-1;">
+            ${renderBsToUsdCalculatorWidget("quickadv", "staff-adv-amount", "staff-adv-concept")}
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-building-columns"></i> Cuenta / Caja Origen *</label>
+            <select id="staff-adv-account" style="font-weight:800;">
+              ${getConfiguredBankAccounts().map((b) => `<option value="${b.id}">${escapeHtml(b.nombre)} (${b.moneda})</option>`).join("")}
+            </select>
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-comment-alt"></i> Concepto / Motivo *</label>
+            <input type="text" id="staff-adv-concept" data-auto-concept="1" oninput="this.dataset.autoConcept='0'" value="${escapeHtml(defaultConcept)}" required />
+          </div>
+          <div class="form-field" style="grid-column:1/-1;">
+            <label><i class="fas fa-camera"></i> Foto del Comprobante / Transferencia / Billetes (OBLIGATORIO) *</label>
+            <input type="file" id="staff-adv-photo-cam" accept="image/*" capture="environment" style="display:none;" onchange="handleStaffAdvancePhotoUpload(this)" />
+            <input type="file" id="staff-adv-photo-gal" accept="image/*" style="display:none;" onchange="handleStaffAdvancePhotoUpload(this)" />
+            <div style="display:flex; gap:8px; align-items:center; margin-top:4px; flex-wrap:wrap;">
+              <button type="button" class="btn btn--gold btn--sm" onclick="document.getElementById('staff-adv-photo-cam').click()">
+                <i class="fas fa-camera"></i> Tomar Foto
+              </button>
+              <button type="button" class="btn btn--ghost btn--sm" onclick="document.getElementById('staff-adv-photo-gal').click()">
+                <i class="fas fa-images"></i> Galería / Capture
+              </button>
+              <span id="staff-adv-photo-name" style="font-size:12px; color:var(--text-muted); font-style:italic;">Soporte obligatorio sin seleccionar</span>
+            </div>
+            <div id="staff-adv-photo-preview" style="margin-top:8px;"></div>
+          </div>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button type="button" class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button type="button" class="btn btn--warning btn--lg" style="font-weight:900;" onclick="saveQuickUniversalAdvance()">
+        <i class="fas fa-check-circle"></i> Registrar Vale y Descontar Automáticamente
+      </button>
+    `
+  });
+}
+
+function saveQuickUniversalAdvance() {
+  const userId = document.getElementById("quick-adv-user")?.value;
+  const user = (db.usuarios || []).find((u) => u.id_usuario === userId);
+  if (!user) {
+    showToast("Selecciona un beneficiario válido.", "error");
+    return;
+  }
+  const ctx = isExternalUser(user)
+    ? "external"
+    : (isPartnerInManagementPayroll(user) ? "partner" : "worker");
+  saveStaffAdvance(user.id_usuario, ctx);
 }
 
 function saveStaffAdvance(userId, contextType = "external") {
@@ -22122,7 +23247,14 @@ function renderFinancesLedgerScreen() {
   // Saldos líquidos reales SIEMPRE globales acumulados (jamás alterados por filtros de fecha)
   const balances = getBalancesPorCuenta();
   const utilidadNeta = balances.totalLiquido;
-  const cuentasPorCobrar = db.ordenes.reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0);
+  const cuentasPorCobrar = Number(
+    (
+      db.ordenes
+        .filter((o) => o.estado_actual !== "anulado")
+        .reduce((acc, o) => acc + (Number(o.saldo_pendiente) || 0), 0) +
+      getTotalManualReceivablesPending()
+    ).toFixed(2)
+  );
 
   // Filtrado compuesto avanzado
   let filteredMovs = allMovs.slice();
@@ -22207,9 +23339,10 @@ function renderFinancesLedgerScreen() {
       (b) => `<option value="${b.id}" ${ledgerAccountFilter === b.id ? "selected" : ""}>${escapeHtml(b.nombre)} ($${(balances.balances[b.id] || 0).toFixed(2)})</option>`
     ).join("");
 
+  const realLedgerClients = (db.clientes || []).filter((c) => !isMigrationHiddenClient(c));
   const clientFilterOptions =
-    `<option value="all">Todos los Clientes / Terceros (${db.clientes.length})</option>` +
-    db.clientes
+    `<option value="all">Todos los Clientes / Terceros (${realLedgerClients.length})</option>` +
+    realLedgerClients
       .map(
         (c) =>
           `<option value="${c.id_cliente}" ${ledgerClientFilter === c.id_cliente ? "selected" : ""}>${escapeHtml(c.nombre_completo || c.nombre_cliente)} (${escapeHtml(c.documento_identidad)})</option>`
@@ -22437,6 +23570,9 @@ function renderFinancesLedgerScreen() {
           <button type="button" class="btn btn--danger" onclick="openNewFinanceMovementModal('egreso')">
             <i class="fas fa-minus-circle"></i> Registrar Gasto
           </button>
+          <button type="button" class="btn btn--warning" onclick="openQuickUniversalAdvanceModal()" style="font-weight:900;" title="Registrar vale o adelanto rápido a Gerencia, Técnicos o Talleres Aliados viendo su saldo disponible">
+            <i class="fas fa-money-bill-transfer"></i> Vales / Adelantos
+          </button>
           <button type="button" class="btn btn--success" onclick="openNewFinanceMovementModal('ingreso')" title="Registrar ingresos adicionales (venta de mercancía, cobro de préstamos, etc.)">
             <i class="fas fa-plus-circle"></i> Ingreso Extra
           </button>
@@ -22639,8 +23775,16 @@ function openEditFinanceMovementModal(movId) {
             </select>
           </div>
           <div class="form-field">
-            <label>Monto (USD $) *</label>
+            <label style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+              <span>Monto (USD $) *</span>
+              <button type="button" class="btn btn--gold btn--xs bs-calc-toggle-btn" onclick="toggleBsUsdCalc('editfin')" title="Convertir Bolívares a Dólares con tasa manipulable">
+                <i class="fas fa-calculator"></i> Calc. Bs → $
+              </button>
+            </label>
             <input type="number" step="0.01" min="0.01" id="edit-fin-amount" value="${Number(m.monto || 0).toFixed(2)}" style="font-family:'JetBrains Mono',monospace; font-weight:900;" required />
+          </div>
+          <div style="grid-column:1/-1;">
+            ${renderBsToUsdCalculatorWidget("editfin", "edit-fin-amount", "edit-fin-concept")}
           </div>
           <div class="form-field" style="grid-column:1/-1;">
             <label>Referencia (opcional)</label>
@@ -22682,17 +23826,25 @@ function openEditFinanceMovementModal(movId) {
 async function handleEditFinancePhotoUpload(input) {
   const file = input && input.files && input.files[0];
   if (!file) return;
-  const compressed = typeof compressImageFastLocal === "function"
-    ? await compressImageFastLocal(file, 960, 0.72)
-    : await compressImageForSheets(file, 700, 34000);
-  tempEditFinancePhoto = compressed;
+  let previewUrl = "";
+  let drivePayload = "";
+  if (typeof compressImageFastLocal === "function") {
+    const local = await compressImageFastLocal(file, 960, 180000);
+    if (!local || !local.driveDataUrl) return;
+    previewUrl = local.getFallback();
+    drivePayload = local.driveDataUrl;
+  } else {
+    previewUrl = await compressImageForSheets(file, 700, 34000);
+    drivePayload = previewUrl;
+  }
+  tempEditFinancePhoto = previewUrl;
   const prevEl = document.getElementById("edit-fin-photo-preview");
   if (prevEl) {
     prevEl.innerHTML = `<img src="${tempEditFinancePhoto}" style="max-height:110px; border-radius:8px; border:1.5px solid var(--renacer-gold);" />`;
   }
-  if (typeof uploadImageDataUrlToDrive === "function") {
-    const localRef = compressed;
-    uploadImageDataUrlToDrive(localRef, "finanzas_edit", 15000, {
+  if (typeof uploadImageDataUrlToDrive === "function" && drivePayload) {
+    const localRef = previewUrl;
+    uploadImageDataUrlToDrive(drivePayload, "finanzas_edit", 15000, {
       orderFolder: "General_Finanzas_y_Vouchers",
       category: "finanzas"
     }).then((driveUrl) => {
@@ -23384,6 +24536,164 @@ async function handleMovementPhotoUpload(input) {
   }
 }
 
+/* ---------- CALCULADORA RÁPIDA Bs. -> $ CON TASA MANIPULABLE (v49.2) ---------- */
+function parseFlexibleBsExpression(rawText) {
+  const cleaned = String(rawText || "").replace(/\s+/g, "").replace(/bs\.?/gi, "");
+  if (!cleaned) return 0;
+  // Permite sumas/restas simples (ej: "12000+3500" o "15.400,50+2.100,25")
+  const tokens = cleaned.match(/[+-]?[^+-]+/g) || [];
+  let total = 0;
+  for (const tok of tokens) {
+    const sign = tok.startsWith("-") ? -1 : 1;
+    let numStr = tok.replace(/^[+-]/, "").replace(/[^0-9.,]/g, "");
+    if (!numStr) continue;
+    const hasDot = numStr.includes(".");
+    const hasComma = numStr.includes(",");
+    if (hasDot && hasComma) {
+      if (numStr.lastIndexOf(",") > numStr.lastIndexOf(".")) {
+        // Formato venezolano 25.420,50 -> 25420.50
+        numStr = numStr.replace(/\./g, "").replace(",", ".");
+      } else {
+        // Formato 25,420.50 -> 25420.50
+        numStr = numStr.replace(/,/g, "");
+      }
+    } else if (hasComma) {
+      const parts = numStr.split(",");
+      numStr = parts.length > 2 ? parts.join("") : numStr.replace(",", ".");
+    } else if (hasDot) {
+      const parts = numStr.split(".");
+      if (parts.length > 2) numStr = parts.join("");
+    }
+    const val = parseFloat(numStr);
+    if (Number.isFinite(val)) total += sign * val;
+  }
+  return Math.max(0, Number(total.toFixed(2)));
+}
+
+function renderBsToUsdCalculatorWidget(prefix, targetAmountInputId, conceptInputId = "") {
+  const bcvRate = Number(db?.config?.tasaBcv || db?.configuracion?.tasaBcv) || 45.80;
+  const binanceRate = Number(db?.config?.tasaBinance || db?.configuracion?.tasaBinance) || 52.40;
+  const safePrefix = escapeHtml(prefix);
+  const safeTarget = escapeHtml(targetAmountInputId);
+  const safeConcept = escapeHtml(conceptInputId || "");
+
+  return `
+    <div id="bs-calc-box-${safePrefix}" class="bs-calc-panel hidden">
+      <div class="bs-calc-header">
+        <span class="bs-calc-title">
+          <i class="fas fa-calculator"></i> Calculadora Bolívares (Bs.) → Dólares ($)
+        </span>
+        <div class="bs-calc-chips">
+          <button type="button" class="bs-calc-rate-chip" onclick="setBsCalcRate('${safePrefix}', ${bcvRate.toFixed(2)}, '${safeTarget}')" title="Usar Tasa Oficial BCV Euro">
+            BCV € (${bcvRate.toFixed(2)})
+          </button>
+          <button type="button" class="bs-calc-rate-chip" onclick="setBsCalcRate('${safePrefix}', ${binanceRate.toFixed(2)}, '${safeTarget}')" title="Usar Tasa Paralelo / Binance">
+            Binance (${binanceRate.toFixed(2)})
+          </button>
+        </div>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="form-field" style="margin:0;">
+          <label style="font-size:11.5px;">Monto en Bolívares (Bs.) <span style="font-weight:600; color:var(--text-muted);">(soporta sumas: 12000+3500)</span></label>
+          <input
+            type="text"
+            inputmode="decimal"
+            id="bs-calc-bs-${safePrefix}"
+            placeholder="Ej: 15420,50 o 12000+3420"
+            oninput="recalcBsToUsd('${safePrefix}', '${safeTarget}', true)"
+            style="font-family:'JetBrains Mono',monospace; font-weight:800;"
+          />
+        </div>
+        <div class="form-field" style="margin:0;">
+          <label style="font-size:11.5px;">Tasa Manipulable (Bs. por $ / €)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            id="bs-calc-rate-${safePrefix}"
+            value="${bcvRate.toFixed(2)}"
+            oninput="recalcBsToUsd('${safePrefix}', '${safeTarget}', true)"
+            style="font-family:'JetBrains Mono',monospace; font-weight:800;"
+          />
+        </div>
+      </div>
+
+      <div class="bs-calc-result-row">
+        <div>
+          <div style="font-size:10.5px; font-weight:800; color:var(--text-muted); text-transform:uppercase;">Equivalente calculado (se aplica automáticamente al monto)</div>
+          <div id="bs-calc-formula-${safePrefix}" style="font-size:11.5px; color:var(--text-muted); font-family:'JetBrains Mono',monospace;">Escribe el monto en Bs. arriba...</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span id="bs-calc-result-${safePrefix}" class="bs-calc-result-val">$0.00</span>
+          <button type="button" class="btn btn--success btn--xs" onclick="recalcBsToUsd('${safePrefix}', '${safeTarget}', true, true)" title="Aplicar este monto en dólares al formulario">
+            <i class="fas fa-check"></i> Usar
+          </button>
+          ${safeConcept ? `<button type="button" class="btn btn--ghost btn--xs" onclick="appendBsCalcNoteToConcept('${safePrefix}', '${safeConcept}')" title="Anotar el monto en Bs. y la tasa dentro del Concepto">
+            <i class="fas fa-note-sticky"></i> + Nota Bs
+          </button>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleBsUsdCalc(prefix) {
+  const box = document.getElementById(`bs-calc-box-${prefix}`);
+  if (!box) return;
+  const isNowHidden = box.classList.toggle("hidden");
+  if (!isNowHidden) {
+    const bsInput = document.getElementById(`bs-calc-bs-${prefix}`);
+    if (bsInput && typeof bsInput.focus === "function") bsInput.focus();
+  }
+}
+
+function setBsCalcRate(prefix, rateVal, targetAmountInputId) {
+  const rateEl = document.getElementById(`bs-calc-rate-${prefix}`);
+  if (rateEl) rateEl.value = Number(rateVal || 0).toFixed(2);
+  recalcBsToUsd(prefix, targetAmountInputId, true);
+}
+
+function recalcBsToUsd(prefix, targetAmountInputId, autoApply = true, showFeedback = false) {
+  const bsRaw = document.getElementById(`bs-calc-bs-${prefix}`)?.value || "";
+  const rateRaw = Number(document.getElementById(`bs-calc-rate-${prefix}`)?.value) || 0;
+  const bsTotal = parseFlexibleBsExpression(bsRaw);
+  const usdVal = bsTotal > 0 && rateRaw > 0 ? Number((bsTotal / rateRaw).toFixed(2)) : 0;
+
+  const resEl = document.getElementById(`bs-calc-result-${prefix}`);
+  const formulaEl = document.getElementById(`bs-calc-formula-${prefix}`);
+  if (resEl) resEl.textContent = `$${usdVal.toFixed(2)}`;
+  if (formulaEl) {
+    formulaEl.textContent = bsTotal > 0 && rateRaw > 0
+      ? `Bs. ${bsTotal.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ÷ ${rateRaw.toFixed(2)} = $${usdVal.toFixed(2)}`
+      : "Escribe el monto en Bs. y verifica la tasa...";
+  }
+
+  if (autoApply && usdVal > 0 && targetAmountInputId) {
+    const targetEl = document.getElementById(targetAmountInputId);
+    if (targetEl) targetEl.value = usdVal.toFixed(2);
+  }
+  if (showFeedback && usdVal > 0) {
+    showToast(`Monto $${usdVal.toFixed(2)} aplicado (Bs. ${bsTotal.toFixed(2)} ÷ ${rateRaw.toFixed(2)}).`, "success");
+  }
+  return { bsTotal, rate: rateRaw, usdVal };
+}
+
+function appendBsCalcNoteToConcept(prefix, conceptInputId) {
+  const bsTotal = parseFlexibleBsExpression(document.getElementById(`bs-calc-bs-${prefix}`)?.value || "");
+  const rate = Number(document.getElementById(`bs-calc-rate-${prefix}`)?.value) || 0;
+  if (bsTotal <= 0 || rate <= 0) {
+    showToast("Primero ingresa un monto en Bolívares y una tasa válida.", "warning");
+    return;
+  }
+  const conceptEl = document.getElementById(conceptInputId);
+  if (!conceptEl) return;
+  const tag = `(Bs. ${bsTotal.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} @ ${rate.toFixed(2)})`;
+  const cur = String(conceptEl.value || "").replace(/\s*\(Bs\.[^)]*\)\s*/g, " ").trim();
+  conceptEl.value = cur ? `${cur} ${tag}` : tag;
+  showToast("Referencia en Bolívares agregada al concepto.", "info");
+}
+
 function openNewFinanceMovementModal(tipo) {
   tempMovementPhoto = "";
   const isIngreso = tipo === "ingreso";
@@ -23431,10 +24741,17 @@ function openNewFinanceMovementModal(tipo) {
           </div>
         </div>
         <div class="form-field">
-          <label>Monto ($ USD) *</label>
-          <input type="number" step="0.5" min="0.1" id="mov-amount" placeholder="Ej: 25.00" required />
+          <label style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+            <span>Monto ($ USD) *</span>
+            <button type="button" class="btn btn--gold btn--xs bs-calc-toggle-btn" onclick="toggleBsUsdCalc('mov')" title="Abrir calculadora de Bolívares a Dólares con tasa manipulable">
+              <i class="fas fa-calculator"></i> Calc. Bs → $
+            </button>
+          </label>
+          <input type="number" step="0.01" min="0.01" id="mov-amount" placeholder="Ej: 25.00" style="font-family:'JetBrains Mono',monospace; font-weight:900;" required />
         </div>
       </div>
+
+      ${renderBsToUsdCalculatorWidget("mov", "mov-amount", "mov-concept")}
 
       <div class="form-field" style="margin-top:10px;">
         <label>Cuenta / Caja ${isIngreso ? "Destino" : "Origen"} *</label>
@@ -23551,8 +24868,10 @@ function filterClientsDirectoryLive(query) {
 function renderClientsDirectoryScreen() {
   const tasaBcv = Number(db.configuracion?.tasaBcv) || 45.80;
 
-  // Enriquecer clientes con sus órdenes y saldos reales
-  const enrichedClients = db.clientes.map((c) => {
+  // Enriquecer clientes reales con sus órdenes y saldos (excluye entidad oculta de migración para no contaminar el Directorio)
+  const enrichedClients = db.clientes
+    .filter((c) => !isMigrationHiddenClient(c))
+    .map((c) => {
     const clientOrders = db.ordenes.filter(
       (o) => o.cliente_id === c.id_cliente || o.documento_cliente === c.documento_identidad
     );
@@ -25018,8 +26337,11 @@ function openEditCompleteOrderModal(orderId) {
 
         <!-- 1. DATOS DEL CLIENTE / TALLER ALIADO -->
         <div class="form-section-box">
-          <div class="form-section-title">
-            <i class="fas fa-user-edit"></i> 1. Identificación del Cliente o Taller Aliado
+          <div class="form-section-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span><i class="fas fa-user-edit"></i> 1. Identificación del Cliente o Taller Aliado</span>
+            <button type="button" class="btn btn--ghost btn--xs migration-preset-btn" onclick="applyMigrationClientPreset('edit')" title="Quitar tu cédula y marcar esta orden como Migración Histórica (sin cédula)">
+              <i class="fas fa-clock-rotate-left"></i> Pasar a Migración (Sin Cédula)
+            </button>
           </div>
           <div class="form-grid-3">
             <div class="form-field">
@@ -25030,12 +26352,12 @@ function openEditCompleteOrderModal(orderId) {
               </datalist>
             </div>
             <div class="form-field">
-              <label>Cédula o RIF *</label>
-              <input type="text" id="edit-cli-doc" value="${order.documento_cliente || ''}" required />
+              <label>Cédula o RIF <span style="font-size:10px; font-weight:700; color:var(--text-muted);">(Opcional en Migración)</span></label>
+              <input type="text" id="edit-cli-doc" value="${order.documento_cliente || ''}" placeholder="Opcional (ej: SIN-CEDULA)" />
             </div>
             <div class="form-field">
-              <label>Teléfono / WhatsApp *</label>
-              <input type="text" id="edit-cli-phone" value="${order.telefono_cliente || ''}" required />
+              <label>Teléfono / WhatsApp <span style="font-size:10px; font-weight:700; color:var(--text-muted);">(Opcional)</span></label>
+              <input type="text" id="edit-cli-phone" value="${order.telefono_cliente || ''}" placeholder="Opcional" />
             </div>
           </div>
           <div class="form-grid-2" style="margin-top:10px;">
@@ -25050,6 +26372,12 @@ function openEditCompleteOrderModal(orderId) {
                 <option value="taller_aliado" ${String(order.tipo_cliente || '').toLowerCase().includes("aliado") ? "selected" : ""}>Taller Aliado Recurrente (Crédito)</option>
               </select>
             </div>
+          </div>
+          <div style="margin-top:10px; padding:8px 12px; border-radius:10px; background:rgba(2,132,199,0.08); border:1px solid rgba(2,132,199,0.3);">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; font-weight:800; color:#0284c7;">
+              <input type="checkbox" id="edit-ord-is-migration" ${isOrderMigrationEntity(order) ? "checked" : ""} style="width:16px; height:16px; accent-color:#0284c7;" />
+              <span><i class="fas fa-clock-rotate-left"></i> Entidad de Migración (Solo orden de taller · no figura en Directorio de Clientes ni suma como venta nueva)</span>
+            </label>
           </div>
         </div>
 
@@ -25515,8 +26843,8 @@ function saveEditedCompleteOrder(orderId) {
   const reopenReason = (document.getElementById("edit-ord-reopen-reason")?.value || "").trim();
 
   const cliName = (document.getElementById("edit-cli-name")?.value || "").trim();
-  const cliDoc = (document.getElementById("edit-cli-doc")?.value || "").trim();
-  const cliPhone = (document.getElementById("edit-cli-phone")?.value || "").trim();
+  const cliDocRaw = (document.getElementById("edit-cli-doc")?.value || "").trim().toUpperCase();
+  const cliPhone = (document.getElementById("edit-cli-phone")?.value || "").trim() || "Sin teléfono";
   const cliAddr = (document.getElementById("edit-cli-address")?.value || "").trim();
   const cliType = document.getElementById("edit-cli-type")?.value || "particular";
 
@@ -25526,10 +26854,17 @@ function saveEditedCompleteOrder(orderId) {
   const serial = (document.getElementById("edit-ord-serial")?.value || "").trim();
   const obs = (document.getElementById("edit-ord-obs")?.value || "").trim();
 
-  if (!troquel || !cliName || !cliDoc || !marca || !modelo) {
+  if (!troquel || !cliName || !marca || !modelo) {
     showToast("Por favor completa los campos obligatorios (*).", "error");
     return;
   }
+
+  const isEditMigChecked = Boolean(document.getElementById("edit-ord-is-migration")?.checked);
+  const isGenericMigEdit =
+    isEditMigChecked ||
+    normalizeTextPlain(cliName) === "migracion sistema anterior" ||
+    normalizeTextPlain(cliName) === "migracion historica";
+  const cliDoc = isGenericMigEdit ? "MIGRACION" : (cliDocRaw || `S/D-${troquel.replace(/^#/, "").trim()}`);
 
   // Actualizar campos de la orden
   const nowTs = Date.now();
@@ -25577,6 +26912,35 @@ function saveEditedCompleteOrder(orderId) {
       foto_adjunta_url: "",
       fecha_hora: getLocalIsoDateTime()
     });
+  }
+
+  // Si es Entidad de Migración, desvincular del Directorio de Clientes sin crear cliente ficticio
+  order.es_orden_migrada = Boolean(isGenericMigEdit);
+  if (isGenericMigEdit) {
+    order.cliente_id = MIGRATION_ENTITY_CLIENT_ID;
+  } else if (
+    normalizeTextPlain(order.nombre_cliente || "") !== normalizeTextPlain(cliName) ||
+    String(order.documento_cliente || "").toUpperCase() !== cliDoc ||
+    order.cliente_id === MIGRATION_ENTITY_CLIENT_ID
+  ) {
+    let targetCli = (db.clientes || []).find((c) => {
+      if (isMigrationHiddenClient(c)) return false;
+      if (cliDoc !== "SIN-CEDULA" && cliDoc !== "MIGRACION" && !cliDoc.startsWith("S/D-") && String(c.documento_identidad || "").toUpperCase() === cliDoc) return true;
+      return normalizeTextPlain(c.nombre_completo || c.nombre_cliente || "") === normalizeTextPlain(cliName);
+    });
+    if (!targetCli) {
+      targetCli = {
+        id_cliente: "CLI-" + Date.now().toString().slice(-6),
+        documento_identidad: cliDoc,
+        nombre_completo: cliName,
+        telefono: cliPhone,
+        direccion: cliAddr,
+        es_taller_aliado: String(cliType || "").toLowerCase().includes("aliado")
+      };
+      if (!Array.isArray(db.clientes)) db.clientes = [];
+      db.clientes.push(targetCli);
+    }
+    order.cliente_id = targetCli.id_cliente;
   }
 
   order.nombre_cliente = cliName;
@@ -27272,10 +28636,10 @@ function buildExecutiveReportsModel() {
   const flujoNetoOp = Number((totalIngresosOp - totalEgresosOp).toFixed(2));
   const totalSaldosIniciales = Number(saldosInicialesMovs.reduce((a, m) => a + (Number(m.monto) || 0), 0).toFixed(2));
 
-  // Órdenes del período (excluyendo anuladas)
+  // Órdenes del período (excluyendo anuladas; para ventas/rentabilidad excluye entidades ocultas de migración histórica)
   const validOrders = (db.ordenes || []).filter((o) => o && o.estado_actual !== "anulado");
   const periodOrders = validOrders
-    .filter((o) => isDateInReportRange(o.fecha_ingreso))
+    .filter((o) => !isOrderMigrationEntity(o) && isDateInReportRange(o.fecha_ingreso))
     .slice()
     .sort((a, b) => cleanDateISO(b.fecha_ingreso, false).localeCompare(cleanDateISO(a.fecha_ingreso, false)));
 
@@ -27341,7 +28705,17 @@ function buildExecutiveReportsModel() {
       return { order: o, days };
     })
     .sort((a, b) => b.days - a.days);
-  const totalCxC = Number(cxcOrders.reduce((a, x) => a + (Number(x.order.saldo_pendiente) || 0), 0).toFixed(2));
+  const cxcManuales = getActiveManualReceivables().map((c) => {
+    const iso = cleanDateISO(c.fecha_registro, false);
+    const days = iso ? Math.max(0, Math.floor((Date.now() - Date.parse(iso + "T12:00:00")) / 86400000)) : 0;
+    return { cxc: c, days };
+  });
+  const totalCxC = Number(
+    (
+      cxcOrders.reduce((a, x) => a + (Number(x.order.saldo_pendiente) || 0), 0) +
+      cxcManuales.reduce((a, x) => a + (Number(x.cxc.saldo_pendiente) || 0), 0)
+    ).toFixed(2)
+  );
   const cxcByClientMap = {};
   cxcOrders.forEach(({ order, days }) => {
     const key = order.cliente_id || order.documento_cliente || order.nombre_cliente || "Cliente";
@@ -27370,11 +28744,16 @@ function buildExecutiveReportsModel() {
   const cxpActivas = (db.cuentas_por_pagar || []).filter((c) => c.estado === "activa");
   const totalCxP = Number(cxpActivas.reduce((a, c) => a + (Number(c.saldo_pendiente) || 0), 0).toFixed(2));
 
-  // 6. Nómina, Producción, Horas y Asistencias por Persona
-  const payrollRows = (db.usuarios || []).map((u) => {
+  // 6. Nómina, Producción, Horas y Asistencias por Persona (unifica perfiles gemelos Taller + Gerencia sin duplicar)
+  const payrollRows = (db.usuarios || [])
+    .filter((u) => !getLinkedManagementPartnerForTech(u))
+    .map((u) => {
     const isExt = isExternalUser(u);
     const isPartner = isPartnerInManagementPayroll(u);
-    const userSubs = (db.subtareas || []).filter((s) => s.tecnico_id === u.id_usuario);
+    const scopeIds = isPartner ? getLinkedWorkshopUserIdsForPartner(u) : [u.id_usuario];
+    const scopeUsers = (db.usuarios || []).filter((x) => scopeIds.includes(x.id_usuario));
+    const scopeNames = new Set(scopeUsers.map((x) => x.nombre));
+    const userSubs = (db.subtareas || []).filter((s) => scopeIds.includes(s.tecnico_id));
     const subsInPeriod = userSubs.filter((s) => {
       const ord = (db.ordenes || []).find((o) => o.id_orden === s.orden_id);
       const refDate = s.fecha_terminado || s.fecha_fin || (ord ? ord.fecha_ingreso : "");
@@ -27386,12 +28765,12 @@ function buildExecutiveReportsModel() {
     const uniqueOrdersCount = new Set(doneInPeriod.map((s) => s.orden_id)).size;
 
     const vouchersPeriod = (db.vouchers_nomina || []).filter(
-      (v) => v.usuario_id === u.id_usuario && isDateInReportRange(v.fecha_liquidacion)
+      (v) => scopeIds.includes(v.usuario_id) && isDateInReportRange(v.fecha_liquidacion)
     );
     const pagadoVouchers = vouchersPeriod.reduce((a, v) => a + (Number(v.monto_pagado) || 0), 0);
 
     const advsPeriod = periodMovs.filter((m) => {
-      if (String(m.usuario_id || "") !== String(u.id_usuario)) return false;
+      if (!scopeIds.includes(String(m.usuario_id || ""))) return false;
       if (m.tipo !== "egreso") return false;
       const cat = normalizeTextPlain(m.categoria || "");
       return String(m.orden_id || "").toUpperCase() === "ADELANTO" || cat.includes("adelanto") || cat.includes("vale") || cat.includes("retiro");
@@ -27400,11 +28779,11 @@ function buildExecutiveReportsModel() {
 
     const unpaidAll = userSubs.filter((s) => (isExt || s.estado_subtarea === "terminado") && !s.comision_pagada);
     const brutoPendiente = unpaidAll.reduce((a, s) => a + (Number(s.comision_base_tecnico) || 0), 0) + (isPartner && isPartnerPayrollActive(u) ? getUserWeeklySalary(u) : 0);
-    const advPendiente = getPendingUserAdvances(u.id_usuario).total;
+    const advPendiente = getPendingUserAdvancesForIds(scopeIds).total;
     const netoPendiente = Math.max(0, brutoPendiente - advPendiente);
 
     const attPeriod = (db.asistencias || []).filter(
-      (a) => (a.usuario_id === u.id_usuario || a.nombre === u.nombre) && isDateInReportRange(a.fecha)
+      (a) => (scopeIds.includes(a.usuario_id) || scopeNames.has(a.nombre)) && isDateInReportRange(a.fecha)
     );
     const attCounts = { P: 0, T: 0, F: 0, J: 0, L: 0 };
     attPeriod.forEach((a) => {
@@ -27446,6 +28825,7 @@ function buildExecutiveReportsModel() {
     egresosByCat,
     balances,
     cxcOrders,
+    cxcManuales,
     cxcByClient,
     totalCxC,
     cxpActivas,
@@ -27743,9 +29123,9 @@ function renderReportsCenterScreen() {
           <span class="kpi-sub">≈ ${(m.totalCxC * m.tasaBcv).toLocaleString("es-VE", { maximumFractionDigits: 0 })} Bs. (BCV €)</span>
         </div>
         <div class="kpi-card">
-          <span class="kpi-label">Facturas con Saldo</span>
-          <div class="kpi-value" style="color:#d97706;">${m.cxcOrders.length}</div>
-          <span class="kpi-sub">${m.cxcByClient.length} cliente(s) / taller(es)</span>
+          <span class="kpi-label">Facturas / Cuentas con Saldo</span>
+          <div class="kpi-value" style="color:#d97706;">${m.cxcOrders.length + (m.cxcManuales ? m.cxcManuales.length : 0)}</div>
+          <span class="kpi-sub">${m.cxcOrders.length} factura(s) · ${m.cxcManuales ? m.cxcManuales.length : 0} préstamo/migrada(s)</span>
         </div>
       </div>
 
@@ -27804,6 +29184,36 @@ function renderReportsCenterScreen() {
                 <td>${escapeHtml(formatStageName(order.estado_actual))}</td>
                 <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:900; color:#dc2626;">$${Number(order.saldo_pendiente || 0).toFixed(2)}</td>
                 <td style="text-align:right; font-weight:800; color:${days >= 15 ? "#dc2626" : "var(--text-main)"};">${days}d</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>` : ""}
+      ${m.cxcManuales && m.cxcManuales.length ? `
+      <h3 style="font-size:14px; font-weight:900; margin:16px 0 8px;">Préstamos y Cuentas por Cobrar Migradas (Independientes)</h3>
+      <div class="data-table-wrapper">
+        <table class="renacer-table">
+          <thead>
+            <tr>
+              <th>Deudor</th>
+              <th>Tipo</th>
+              <th>Concepto</th>
+              <th>Fecha</th>
+              <th style="text-align:right;">Total ($)</th>
+              <th style="text-align:right;">Cobrado ($)</th>
+              <th style="text-align:right;">Saldo ($)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${m.cxcManuales.map(({ cxc }) => `
+              <tr>
+                <td><strong>${escapeHtml(cxc.deudor)}</strong></td>
+                <td>${escapeHtml(formatManualCxcTypeLabel(cxc.tipo).label)}</td>
+                <td>${escapeHtml(cxc.concepto)}</td>
+                <td>${formatDateHuman(cxc.fecha_registro, false)}</td>
+                <td style="text-align:right; font-family:'JetBrains Mono',monospace;">$${Number(cxc.monto_total || 0).toFixed(2)}</td>
+                <td style="text-align:right; font-family:'JetBrains Mono',monospace; color:#16a34a;">$${Number(cxc.monto_abonado || 0).toFixed(2)}</td>
+                <td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:900; color:#dc2626;">$${Number(cxc.saldo_pendiente || 0).toFixed(2)}</td>
               </tr>
             `).join("")}
           </tbody>
@@ -28054,6 +29464,20 @@ function exportActiveExecutiveReportCsv() {
         Number(order.monto_total || 0).toFixed(2),
         Number(order.monto_abonado || 0).toFixed(2),
         Number(order.saldo_pendiente || 0).toFixed(2),
+        days
+      ]);
+    });
+    (m.cxcManuales || []).forEach(({ cxc, days }) => {
+      rows.push([
+        cxc.id_cxc,
+        cleanDateISO(cxc.fecha_registro, false),
+        cxc.deudor,
+        formatManualCxcTypeLabel(cxc.tipo).label,
+        cxc.concepto,
+        "Independiente",
+        Number(cxc.monto_total || 0).toFixed(2),
+        Number(cxc.monto_abonado || 0).toFixed(2),
+        Number(cxc.saldo_pendiente || 0).toFixed(2),
         days
       ]);
     });
