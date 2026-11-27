@@ -7610,6 +7610,78 @@ html[data-theme="light"] .worker-inline-photo-chip {
   background: rgba(56, 189, 248, 0.12) !important;
 }
 
+/* v50: Botón destacado MI MESA DE TRABAJO para Enrique Andrade (Administración) */
+.sidebar-nav-btn--featured {
+  background: linear-gradient(135deg, #f5df00 0%, #eab308 100%) !important;
+  border: 2px solid #fef08a !important;
+  color: #182254 !important;
+  font-weight: 900 !important;
+  font-size: 13.5px !important;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 16px rgba(245, 223, 0, 0.38) !important;
+  margin-bottom: 6px;
+}
+.sidebar-nav-btn--featured:hover {
+  background: linear-gradient(135deg, #fef08a 0%, #f5df00 100%) !important;
+  color: #0f172a !important;
+  transform: translateX(3px);
+  box-shadow: 0 6px 20px rgba(245, 223, 0, 0.5) !important;
+}
+.sidebar-nav-btn--featured.active {
+  background: linear-gradient(135deg, #f5df00 0%, #facc15 100%) !important;
+  border: 2px solid #ffffff !important;
+  color: #182254 !important;
+  box-shadow: 0 0 0 3px rgba(245, 223, 0, 0.35), 0 6px 20px rgba(245, 223, 0, 0.45) !important;
+}
+.sidebar-nav-btn--featured .sidebar-badge-count {
+  background: #182254 !important;
+  color: #f5df00 !important;
+  font-weight: 900;
+}
+.bottom-nav-item--featured {
+  color: #f5df00 !important;
+  font-weight: 900 !important;
+}
+.bottom-nav-item--featured.active {
+  background: rgba(245, 223, 0, 0.2) !important;
+  border-radius: 12px;
+  color: #fef08a !important;
+}
+
+/* v50: Pill de anclaje por asignación parcial en 4. Servicio */
+.partial-assign-anchor-pill {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px dashed rgba(217, 119, 6, 0.55);
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+[data-theme="dark"] .partial-assign-anchor-pill {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(245, 158, 11, 0.16);
+}
+
+/* v50: Bloque de cuadre automático de vuelto */
+.payment-change-box {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(2, 132, 199, 0.06);
+  border: 1.5px solid rgba(2, 132, 199, 0.35);
+}
+[data-theme="dark"] .payment-change-box {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+
 
 
 
