@@ -68,7 +68,7 @@ let lastCloudWrittenTabsCount = 0;
 let photoMigrationInProgress = false;
 let autoPhotoMigrationStarted = false;
 
-const CURRENT_APP_VERSION = "2026.11.27.v49.3";
+const CURRENT_APP_VERSION = "2026.11.27.v50";
 
 /* ---------- Helpers Globales v49 (Saldos Iniciales, Adelantos Universales, Google Maps y Lista A->B) ---------- */
 function normalizeTextPlain(str) {
@@ -291,6 +291,42 @@ function isJavierRestrictedUser(user) {
     .toLowerCase()
     .trim();
   return user.rol === "jefe_taller" && norm.includes("javier andrade");
+}
+
+function isEnriqueAdminUser(user) {
+  if (!user || isExternalUser(user) || user.rol === "tecnico") return false;
+  if (user.id_usuario === "USR-ENRIQUE") return true;
+  const norm = String(user.nombre || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+  return (user.rol === "jefe_taller" || user.rol === "admin") && norm.includes("enrique andrade");
+}
+
+function getWorkerPanelScopeIds(workerId) {
+  const id = String(workerId || "").trim();
+  if (!id) return [];
+  const u = (db?.usuarios || []).find((x) => x.id_usuario === id);
+  if (!u) return [id];
+  if (isPartnerInManagementPayroll(u)) {
+    return getLinkedWorkshopUserIdsForPartner(u);
+  }
+  const linkedPartner = getLinkedManagementPartnerForTech(u);
+  if (linkedPartner) {
+    return getLinkedWorkshopUserIdsForPartner(linkedPartner);
+  }
+  return [id];
+}
+
+function canOrderAutoAdvanceToQuality(order, allOrderSubs) {
+  const subs = Array.isArray(allOrderSubs)
+    ? allOrderSubs
+    : (db?.subtareas || []).filter((s) => s.orden_id === (order && order.id_orden));
+  if (!subs.length) return false;
+  // v50: Si existe alguna tarea sin técnico asignado ("Por asignar después"), anclar orden en 4. Servicio
+  if (subs.some((s) => !s.tecnico_id)) return false;
+  return subs.every((s) => s.estado_subtarea === "terminado");
 }
 
 function isUserCatalogAdmin(user) {
@@ -6180,9 +6216,12 @@ function loginSuccess(user) {
     // Asistencia presencial: El inicio de sesión NO registra asistencia automática.
     // La asistencia se registra exclusivamente mediante escaneo de QR en el Kiosco del taller o marcado presencial.
 
-    // Seleccionar pestaña inicial según el rol y perfil específico (Javier Andrade restringido a 3 ventanas)
+    // Seleccionar pestaña inicial según el rol y perfil específico (Javier Andrade restringido a 3 ventanas; Enrique Admin a MI MESA DE TRABAJO)
     if (isJavierRestrictedUser(user)) {
       currentTab = "inventario";
+    } else if (isEnriqueAdminUser(user)) {
+      currentTab = "worker_panel";
+      selectedWorkerFilterId = null;
     } else if (user.rol === "tecnico") {
       currentTab = "worker_panel";
     } else {
@@ -6361,6 +6400,22 @@ function getTabsForRole(role) {
     ];
   }
 
+  // PERFIL SIMPLIFICADO ENRIQUE ANDRADE (ADMINISTRACIÓN) (v50):
+  // MI MESA DE TRABAJO destacada en oro + Seguimiento de Órdenes, Finanzas, Personal y Comisiones, Asistencia Semanal
+  if (isEnriqueAdminUser(currentUser)) {
+    const enrScopeIds = getWorkerPanelScopeIds(currentUser.id_usuario);
+    const myTasks = (db.subtareas || []).filter(
+      (s) => enrScopeIds.includes(s.tecnico_id) && s.estado_subtarea !== "terminado"
+    ).length;
+    return [
+      { id: "worker_panel", label: "MI MESA DE TRABAJO", shortLabel: "MI MESA", icon: "fa-hammer", badge: myTasks, featured: true },
+      { id: "pipeline", label: "Seguimiento de Órdenes", shortLabel: "Órdenes", icon: "fa-clipboard-list", badge: db.ordenes.length },
+      { id: "finances_ledger", label: "Finanzas", shortLabel: "Finanzas", icon: "fa-chart-line" },
+      { id: "commissions_hr", label: "Personal y Comisiones", shortLabel: "Personal", icon: "fa-user-check" },
+      { id: "attendance", label: "Asistencia Semanal", shortLabel: "Asistencia", icon: "fa-calendar-week" }
+    ];
+  }
+
   if (role === "tecnico") {
     const myTasks = db.subtareas.filter((s) => s.tecnico_id === currentUser.id_usuario && s.estado_subtarea !== "terminado").length;
     return [
@@ -6460,6 +6515,14 @@ function navigateTab(tabId) {
     }
     if (tabId === "default") tabId = "inventario";
   }
+  if (isEnriqueAdminUser(currentUser)) {
+    const allowedForEnrique = ["worker_panel", "pipeline", "finances_ledger", "commissions_hr", "attendance", "default"];
+    if (!allowedForEnrique.includes(tabId)) {
+      showToast("Tu perfil simplificado incluye Mi Mesa de Trabajo, Órdenes, Finanzas, Personal y Asistencia.", "info");
+      tabId = "worker_panel";
+    }
+    if (tabId === "default") tabId = "worker_panel";
+  }
   if (currentUser && currentUser.rol === "tecnico") {
     const allowedForTech = ["worker_panel", "worker_earnings", "attendance", "default"];
     if (!allowedForTech.includes(tabId)) {
@@ -6477,6 +6540,8 @@ function navigateTab(tabId) {
   if (tabId === "default") {
     tabId = isJavierRestrictedUser(currentUser)
       ? "inventario"
+      : isEnriqueAdminUser(currentUser)
+      ? "worker_panel"
       : (currentUser && currentUser.rol === "tecnico" ? "worker_panel" : "dashboard");
   }
   currentTab = tabId;
@@ -6533,6 +6598,14 @@ function renderApp() {
     const allowedJavier = ["inventario", "commissions_hr", "accounts_receivable"];
     if (!allowedJavier.includes(currentTab)) {
       currentTab = "inventario";
+    }
+  }
+
+  // Garantizar que Enrique Andrade (Administración) permanezca en sus 5 ventanas simplificadas (v50)
+  if (isEnriqueAdminUser(currentUser)) {
+    const allowedEnrique = ["worker_panel", "pipeline", "finances_ledger", "commissions_hr", "attendance"];
+    if (!allowedEnrique.includes(currentTab)) {
+      currentTab = "worker_panel";
     }
   }
 
@@ -6605,7 +6678,7 @@ function renderApp() {
     tabsBar.innerHTML = tabs
       .map(
         (t) => `
-        <button type="button" class="sidebar-nav-btn ${currentTab === t.id ? "active" : ""}" onclick="navigateTab('${t.id}')">
+        <button type="button" class="sidebar-nav-btn ${t.featured ? "sidebar-nav-btn--featured" : ""} ${currentTab === t.id ? "active" : ""}" onclick="navigateTab('${t.id}')">
           <div class="sidebar-nav-btn-content">
             <i class="fas ${t.icon}"></i>
             <span>${t.label}</span>
@@ -6632,6 +6705,29 @@ function renderApp() {
         <button type="button" class="bottom-nav-item ${currentTab === "accounts_receivable" ? "active" : ""}" onclick="navigateTab('accounts_receivable')">
           <i class="fas fa-file-invoice-dollar"></i>
           <span>Cobrar</span>
+        </button>
+      `;
+    } else if (isEnriqueAdminUser(currentUser)) {
+      mobileNav.innerHTML = `
+        <button type="button" class="bottom-nav-item bottom-nav-item--featured ${currentTab === "worker_panel" ? "active" : ""}" onclick="navigateTab('worker_panel')">
+          <i class="fas fa-hammer"></i>
+          <span>MI MESA</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "pipeline" ? "active" : ""}" onclick="navigateTab('pipeline')">
+          <i class="fas fa-clipboard-list"></i>
+          <span>Órdenes</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "finances_ledger" ? "active" : ""}" onclick="navigateTab('finances_ledger')">
+          <i class="fas fa-chart-line"></i>
+          <span>Finanzas</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "commissions_hr" ? "active" : ""}" onclick="navigateTab('commissions_hr')">
+          <i class="fas fa-user-check"></i>
+          <span>Personal</span>
+        </button>
+        <button type="button" class="bottom-nav-item ${currentTab === "attendance" ? "active" : ""}" onclick="navigateTab('attendance')">
+          <i class="fas fa-calendar-week"></i>
+          <span>Asistencia</span>
         </button>
       `;
     } else if (currentUser.rol === "tecnico") {
@@ -10550,6 +10646,13 @@ function renderOrderCardTelegramStyle(order) {
             </div>
             <div class="order-clean-assignees-list">
               ${assignmentsHtml}
+              ${(() => {
+                const unassignedCount = subtasks.filter((s) => !s.tecnico_id).length;
+                if (unassignedCount > 0 && (order.estado_actual === "servicio" || order.estado_actual === "asignacion_ejecucion" || order.estado_actual === "terminado")) {
+                  return `<div class="partial-assign-anchor-pill"><i class="fas fa-anchor"></i> ${unassignedCount} trabajo(s) por asignar · Anclada en 4. Servicio (no salta a Calidad)</div>`;
+                }
+                return "";
+              })()}
             </div>
           </div>
           `
@@ -14420,6 +14523,8 @@ function selectFinCondition(optionKey, montoTotal) {
 
   const defaultAbono = optionKey === "pago_total" ? montoTotal : Math.max(Number(tempFinConditionState.prevAbonado) || 0, Math.round(montoTotal * 0.5));
   const defaultSaldo = Math.max(0, montoTotal - defaultAbono);
+  const defaultDeltaAbono = Math.max(0, Number((defaultAbono - (Number(tempFinConditionState.prevAbonado) || 0)).toFixed(2)));
+  tempPaymentChangePhotos.fin = "";
 
   detailsBox.innerHTML = `
     <div class="form-section-title">
@@ -14433,10 +14538,10 @@ function selectFinCondition(optionKey, montoTotal) {
           id="fin-input-abono"
           value="${defaultAbono}"
           ${optionKey === "pago_total" ? "readonly" : ""}
-          min="0.5"
+          min="0.01"
           max="${montoTotal}"
-          step="0.5"
-          oninput="recalcPendingBalance(${montoTotal})"
+          step="0.01"
+          oninput="recalcPendingBalance(${montoTotal}); updatePaymentChangePreview('fin', 'fin-input-abono', 'fin-input-cuenta', ${Number(tempFinConditionState.prevAbonado) || 0});"
           style="font-weight:900; font-size:16px;"
         />
       </div>
@@ -14452,11 +14557,12 @@ function selectFinCondition(optionKey, montoTotal) {
       </div>
       <div class="form-field" style="grid-column:1/-1;">
         <label>Cuenta / Banco de Ingreso *</label>
-        <select id="fin-input-cuenta" style="font-weight:800;">
+        <select id="fin-input-cuenta" style="font-weight:800;" onchange="updatePaymentChangePreview('fin', 'fin-input-abono', 'fin-input-cuenta', ${Number(tempFinConditionState.prevAbonado) || 0})">
           ${bankOptionsHtml}
         </select>
       </div>
     </div>
+    ${buildPaymentChangeBoxHtml("fin", "fin-input-abono", "fin-input-cuenta", defaultDeltaAbono, Number(tempFinConditionState.prevAbonado) || 0)}
     ${proofUploadBlockHtml(false)}
   `;
 }
@@ -14514,8 +14620,9 @@ function confirmFinancialCondition() {
   }
 
   const nowStr = getLocalIsoDateTime();
+  let changeSummaryNote = "";
   if (diferenciaAbono > 0) {
-    db.finanzas_movimientos.unshift({
+    const mainMov = {
       id_mov: "MOV-" + nowTs,
       fecha: getLocalIsoDate(),
       tipo: "ingreso",
@@ -14528,7 +14635,19 @@ function confirmFinancialCondition() {
       orden_id: order.id_orden,
       codigo_troquel: order.codigo_troquel,
       registrado_por: currentUser ? currentUser.nombre : "Sistema"
+    };
+    db.finanzas_movimientos.unshift(mainMov);
+    const changeResult = applyPaymentChangeAccounting({
+      prefix: "fin",
+      order,
+      netAmount: diferenciaAbono,
+      receiveAccount: cuentaInput,
+      nowTs,
+      mainMov
     });
+    if (changeResult && changeResult.note) {
+      changeSummaryNote = " " + changeResult.note;
+    }
   }
 
   db.bitacora.push({
@@ -14539,9 +14658,9 @@ function confirmFinancialCondition() {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "finanzas",
-    mensaje: `Condición financiera registrada: ${order.tipo_condicion_pago.toUpperCase()}. Abonado: $${nuevoAbono.toFixed(2)} | Resto: $${order.saldo_pendiente.toFixed(2)}. ${
+    mensaje: `Condición financiera registrada: ${order.tipo_condicion_pago.toUpperCase()}. Abonado: $${nuevoAbono.toFixed(2)} | Resto: $${order.saldo_pendiente.toFixed(2)}.${changeSummaryNote} ${
       order.prioridad_alta ? "Marcada con PRIORIDAD ALTA." : ""
-    }`,
+    }`.trim(),
     foto_adjunta_url: order.comprobante_pago_foto || "",
     fecha_hora: nowStr
   });
@@ -14640,7 +14759,7 @@ function getAssignmentModalWorkers() {
 
 function buildAssignmentTechOptionsHtml(selectedId) {
   const { internalTechs, externalWorkshops } = getAssignmentModalWorkers();
-  let opts = `<option value="">-- Sin Asignar --</option>`;
+  let opts = `<option value="">-- Por asignar después (Mantiene en 4. Servicio) --</option>`;
   if (internalTechs.length) {
     opts += `<optgroup label="Técnicos Internos (Destajo Taller)">`;
     internalTechs.forEach((t) => {
@@ -15544,7 +15663,6 @@ async function confirmSubtaskAssignments(orderId, skipVerification = false) {
       if (!verifyRes.isConfirmed || !verifyRes.value) return;
 
       const { keepIds, addWorkIds } = verifyRes.value;
-      const firstAssigned = draftSubs.find((s) => s.tecnico_id && !s.es_outsourcing);
       draftSubs = draftSubs.filter((s) => keepIds.has(String(s.id_subtarea)));
 
       addWorkIds.forEach((did) => {
@@ -15559,8 +15677,8 @@ async function confirmSubtaskAssignments(orderId, skipVerification = false) {
           orden_id: order.id_orden,
           codigo_troquel: order.codigo_troquel,
           descripcion_servicio: w.nombre,
-          tecnico_id: extTech ? extTech.id_usuario : (firstAssigned ? firstAssigned.tecnico_id : null),
-          nombre_tecnico: extTech ? extTech.nombre : (firstAssigned ? firstAssigned.nombre_tecnico : "Sin asignar"),
+          tecnico_id: extTech ? extTech.id_usuario : null,
+          nombre_tecnico: extTech ? extTech.nombre : "Sin asignar",
           monto_servicio: 0,
           por_unidad: Boolean(w.por_unidad),
           unidad_label: w.unidad_label || "",
@@ -15658,6 +15776,7 @@ async function confirmSubtaskAssignments(orderId, skipVerification = false) {
   }
 
   const nowStr = cleanDateISO(new Date().toISOString(), true);
+  const unassignedCount = draftSubs.filter((s) => !s.tecnico_id).length;
 
   db.bitacora.push({
     id_mensaje: "MSG-" + Date.now(),
@@ -15669,7 +15788,7 @@ async function confirmSubtaskAssignments(orderId, skipVerification = false) {
     tipo_evento: "asignacion",
     mensaje: isAlreadyAdvanced
       ? `Matriz de subtareas actualizada por ${currentUser.nombre} (${draftSubs.length} trabajo/s, conservando etapa ${formatStageName(order.estado_actual)}).`
-      : `Matriz de asignación confirmada por ${currentUser.nombre} (${draftSubs.length} trabajo/s, ${assignedCount} asignado/s). Orden en etapa 4. Servicio.`,
+      : `Matriz de asignación confirmada por ${currentUser.nombre} (${draftSubs.length} trabajo/s, ${assignedCount} asignado/s${unassignedCount > 0 ? `, ${unassignedCount} por asignar después — orden anclada en 4. Servicio` : ""}). Orden en etapa 4. Servicio.`,
     foto_adjunta_url: "",
     fecha_hora: nowStr
   });
@@ -15677,7 +15796,12 @@ async function confirmSubtaskAssignments(orderId, skipVerification = false) {
   saveDatabase(`Matriz de destajo confirmada (#${order.codigo_troquel})`);
   closeModal();
   renderApp();
-  showToast(`Troquel #${order.codigo_troquel}: ${draftSubs.length} trabajo(s) guardados y visibles en el panel de los técnicos.`, "success");
+  showToast(
+    unassignedCount > 0
+      ? `Troquel #${order.codigo_troquel}: ${assignedCount} tarea(s) asignadas y ${unassignedCount} por asignar después. La orden quedará anclada en 4. Servicio hasta completar todas.`
+      : `Troquel #${order.codigo_troquel}: ${draftSubs.length} trabajo(s) guardados y visibles en el panel de los técnicos.`,
+    "success"
+  );
 }
 
 /* ============================================================================
@@ -16136,9 +16260,10 @@ function promptRejectQualityControl(orderId) {
             .map(
               (s) => `
               <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:8px; background:var(--bg-input); border:1px solid var(--border-subtle); cursor:pointer; font-size:12.5px;">
-                <span style="display:flex; align-items:center; gap:8px;">
+                <span style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                   <input type="checkbox" name="qc-reopen-sub" value="${escapeHtml(s.id_subtarea)}" checked style="width:16px; height:16px; accent-color:#dc2626;" />
                   <strong>${escapeHtml(formatSubtaskDisplayLabel(s))}</strong>
+                  ${s.comision_pagada ? `<span style="font-size:10px; padding:2px 6px; border-radius:99px; background:rgba(34,197,94,0.16); color:#16a34a; font-weight:800;">Ya liquidado · sin doble pago</span>` : ""}
                 </span>
                 <span style="font-size:11.5px; color:var(--renacer-gold); font-weight:800;">
                   <i class="fas fa-user-cog"></i> ${escapeHtml(s.nombre_tecnico || "Sin asignar")}
@@ -16371,6 +16496,25 @@ function approveAndDeliverOrder(orderId) {
   closeModal();
   renderApp();
   showToast(`Troquel #${order.codigo_troquel} aprobado en Calidad y ubicado en 6. En Entrega (Resto: $${Number(order.saldo_pendiente || 0).toFixed(2)}).`, "success");
+
+  // v50: Ofrecer envío inmediato de aviso WhatsApp "Trabajo Listo para Entrega" con datos de pago Mercantil (si hay saldo)
+  if (typeof Swal !== "undefined" && typeof Swal.fire === "function") {
+    const saldoFmt = Number(order.saldo_pendiente || 0).toFixed(2);
+    Swal.fire({
+      icon: "success",
+      title: `¡Troquel #${order.codigo_troquel} Listo en 6. En Entrega!`,
+      html: `<p style="margin:0; font-size:13.5px;">La pieza de <strong>${escapeHtml(order.nombre_cliente)}</strong> aprobó Control de Calidad${Number(order.saldo_pendiente || 0) > 0.01 ? ` (Saldo pendiente: <strong>$${saldoFmt}</strong>)` : " (<strong>100% cancelada</strong>)"}.</p><p style="margin:8px 0 0; font-size:13px;">¿Deseas abrir el mensaje de <strong>Trabajo Listo</strong> para enviarlo al cliente por WhatsApp?</p>`,
+      showCancelButton: true,
+      confirmButtonColor: "#16a34a",
+      cancelButtonColor: "#64748b",
+      confirmButtonText: '<i class="fab fa-whatsapp"></i> Enviar Aviso Trabajo Listo',
+      cancelButtonText: "Más tarde"
+    }).then((res) => {
+      if (res && res.isConfirmed) {
+        openWhatsAppBudgetTextModal(order.id_orden, "delivery_ready");
+      }
+    });
+  }
 }
 
 
@@ -16767,18 +16911,71 @@ function buildWhatsAppPdfApprovalMessage(order) {
   );
 }
 
+function buildWhatsAppDeliveryReadyMessage(order) {
+  const troquel = order.codigo_troquel;
+  const motor = `${order.datos_motor.tipo_pieza || "Pieza"} — ${order.datos_motor.marca || ""} ${order.datos_motor.modelo || ""}`.trim();
+  const clientServices = getOrderClientServices(order);
+  const itemsLines = clientServices.length
+    ? clientServices.map((s, i) => `  ${i + 1}. ${formatServiceDisplayLabel(s)}: *$${Number(s.monto || 0).toFixed(2)}*`).join("\n")
+    : "  1. Trabajo de rectificación culminado y verificado";
+
+  const totalNum = Number(order.monto_total || 0);
+  const abonadoNum = Number(order.monto_abonado || 0);
+  const saldoNum = Math.max(0, Number(order.saldo_pendiente || 0));
+  const tasaBcv = Number(db?.config?.tasaBcv) || 0;
+  const saldoBsStr = tasaBcv > 0
+    ? ` (≈ Bs. ${(saldoNum * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} a tasa BCV €)`
+    : "";
+
+  const paymentBlock =
+    saldoNum > 0.01
+      ? `*TOTAL FACTURA:* $${totalNum.toFixed(2)}\n` +
+        `*MONTO ABONADO:* $${abonadoNum.toFixed(2)}\n` +
+        `*SALDO PENDIENTE POR CANCELAR:* *$${saldoNum.toFixed(2)}*${saldoBsStr}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `*DATOS PARA PAGO (BANCO MERCANTIL):*\n` +
+        `• *Titular:* Jesús Andrade\n` +
+        `• *Cuenta Mercantil:* 0105-0265-9112-6500-8124\n` +
+        `• *Cédula:* 27.421.339\n` +
+        `• *Pago Móvil:* 0424-6999635\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `_Recuerde enviar su comprobante de pago por este medio. La pieza se entrega al estar cancelada en su totalidad (100%)._\n`
+      : `*TOTAL FACTURA:* $${totalNum.toFixed(2)}\n` +
+        `*ESTADO DE PAGO:* 100% CANCELADA (Sin saldo pendiente)\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `Puede pasar a retirar su pieza directamente por nuestras instalaciones.\n`;
+
+  return (
+    `*RECTIFICADORA RENACER (JOB 8:7)*\n` +
+    `*¡SU TRABAJO ESTÁ LISTO PARA RETIRAR!*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `Estimado(a) *${order.nombre_cliente}*, le informamos que su pieza ha superado nuestro *Control de Calidad* y ya se encuentra lista para entrega:\n\n` +
+    `*Nro. de Orden:* #${troquel}\n` +
+    `*Pieza / Motor:* ${motor}\n` +
+    `*Estado Actual:* 6. Lista para Entrega\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `*TRABAJOS REALIZADOS:*\n` +
+    `${itemsLines}\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    paymentBlock +
+    `_Presente su Número de Orden (#${troquel}) al momento de retirar. ¡Gracias por confiar en Rectificadora Renacer!_`
+  );
+}
+
+function getWhatsAppMessageByMode(order, mode) {
+  if (mode === "delivery_ready") return buildWhatsAppDeliveryReadyMessage(order);
+  if (mode === "pdf_approval") return buildWhatsAppPdfApprovalMessage(order);
+  if (mode === "terms_only") return buildWhatsAppTermsOnlyPlainText(order);
+  return buildWhatsAppBudgetPlainText(order);
+}
+
 function switchWhatsAppBudgetMode(orderId, mode) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
   activeWaBudgetMode = mode || "pdf_approval";
   const ta = document.getElementById("wa-budget-textarea");
   if (ta) {
-    ta.value =
-      activeWaBudgetMode === "pdf_approval"
-        ? buildWhatsAppPdfApprovalMessage(order)
-        : activeWaBudgetMode === "terms_only"
-        ? buildWhatsAppTermsOnlyPlainText(order)
-        : buildWhatsAppBudgetPlainText(order);
+    ta.value = getWhatsAppMessageByMode(order, activeWaBudgetMode);
   }
   document.querySelectorAll(".wa-mode-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-wa-mode") === activeWaBudgetMode);
@@ -16808,14 +17005,10 @@ function openWhatsAppBudgetTextModal(orderId, initialMode) {
     order.estado_actual === "aprobacion" ||
     order.estado_actual === "recepcion" ||
     order.estado_actual === "diagnostico";
+  const isReadyForDelivery = order.estado_actual === "entrega" || order.estado_actual === "entregado";
 
-  activeWaBudgetMode = initialMode || (isWaitingApproval ? "pdf_approval" : "full_budget");
-  const textMsg =
-    activeWaBudgetMode === "pdf_approval"
-      ? buildWhatsAppPdfApprovalMessage(order)
-      : activeWaBudgetMode === "terms_only"
-      ? buildWhatsAppTermsOnlyPlainText(order)
-      : buildWhatsAppBudgetPlainText(order);
+  activeWaBudgetMode = initialMode || (isReadyForDelivery ? "delivery_ready" : isWaitingApproval ? "pdf_approval" : "full_budget");
+  const textMsg = getWhatsAppMessageByMode(order, activeWaBudgetMode);
 
   const intlPhone = formatWhatsAppPhone(order.telefono_cliente);
   const waUrl = intlPhone ? `https://wa.me/${intlPhone}?text=${encodeURIComponent(textMsg)}` : "#";
@@ -16828,6 +17021,9 @@ function openWhatsAppBudgetTextModal(orderId, initialMode) {
     body: `
       <!-- Selector Rápido de Etapa / Mensaje -->
       <div class="wa-mode-tabs">
+        <button type="button" class="wa-mode-tab ${activeWaBudgetMode === "delivery_ready" ? "active" : ""}" data-wa-mode="delivery_ready" onclick="switchWhatsAppBudgetMode('${order.id_orden}', 'delivery_ready')">
+          <i class="fas fa-check-double"></i> Aviso Trabajo Listo (Entrega)
+        </button>
         <button type="button" class="wa-mode-tab ${activeWaBudgetMode === "pdf_approval" ? "active" : ""}" data-wa-mode="pdf_approval" onclick="switchWhatsAppBudgetMode('${order.id_orden}', 'pdf_approval')">
           <i class="fas fa-file-pdf"></i> Mensaje para PDF (Esperando Aprobación)
         </button>
@@ -17402,6 +17598,256 @@ function resetArFilters() {
 }
 
 let tempArCollectPhoto = "";
+let tempPaymentChangePhotos = { ar: "", fin: "" };
+
+function buildPaymentChangeBoxHtml(prefix, amountInputId, accountSelectId, defaultNetAmount = 0, prevAbonadoOffset = 0) {
+  const accounts = getConfiguredBankAccounts();
+  const defaultChangeAcc =
+    accounts.find((a) => a.id === "mercantil")?.id ||
+    accounts.find((a) => a.id !== "efectivo")?.id ||
+    accounts[0]?.id ||
+    "efectivo";
+  const accOpts = accounts
+    .map((b) => `<option value="${b.id}" ${b.id === defaultChangeAcc ? "selected" : ""}>${escapeHtml(b.nombre)} (${b.moneda})</option>`)
+    .join("");
+  const suggestedRec = defaultNetAmount > 0 ? Math.ceil(defaultNetAmount / 5) * 5 : "";
+
+  return `
+    <div class="payment-change-box">
+      <label style="display:flex; align-items:center; gap:9px; cursor:pointer; font-size:12.5px; font-weight:900; color:var(--text-main);">
+        <input
+          type="checkbox"
+          id="${prefix}-has-change-chk"
+          onchange="togglePaymentChangeBox('${prefix}', '${amountInputId}', '${accountSelectId}', ${prevAbonadoOffset})"
+          style="width:17px; height:17px; accent-color:#0284c7;"
+        />
+        <span><i class="fas fa-exchange-alt" style="color:#0284c7;"></i> ¿Recibiste un billete mayor y diste vuelto? (Cuadre automático de cajas)</span>
+      </label>
+
+      <div id="${prefix}-change-fields" class="hidden" style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border-color);">
+        <div class="form-grid-2">
+          <div class="form-field" style="margin-bottom:0;">
+            <label>Monto Recibido del Cliente ($) *</label>
+            <input
+              type="number"
+              id="${prefix}-received-amount"
+              value="${suggestedRec}"
+              min="0.01"
+              step="0.01"
+              placeholder="Ej: 20.00"
+              oninput="updatePaymentChangePreview('${prefix}', '${amountInputId}', '${accountSelectId}', ${prevAbonadoOffset})"
+              style="font-weight:900; font-size:15px;"
+            />
+          </div>
+          <div class="form-field" style="margin-bottom:0;">
+            <label>Cuenta de donde sale el vuelto *</label>
+            <select
+              id="${prefix}-change-account"
+              onchange="updatePaymentChangePreview('${prefix}', '${amountInputId}', '${accountSelectId}', ${prevAbonadoOffset})"
+              style="font-weight:800;"
+            >
+              ${accOpts}
+            </select>
+          </div>
+        </div>
+
+        <div id="${prefix}-change-live-preview" style="margin-top:8px; padding:8px 10px; border-radius:9px; background:var(--bg-card); border:1px solid var(--border-subtle); font-size:11.5px; line-height:1.45;">
+          Ingresa el billete/monto entregado por el cliente para calcular el vuelto y cuadrar las cuentas automáticamente.
+        </div>
+
+        <div style="margin-top:10px;">
+          <div style="font-size:11.5px; font-weight:800; color:var(--text-muted); margin-bottom:6px;">
+            <i class="fas fa-camera"></i> Foto del Vuelto Entregado (Opcional — billete / capture Pago Móvil)
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <label class="btn btn--ghost btn--xs" style="cursor:pointer; border-color:rgba(2,132,199,0.5); color:#0284c7;">
+              <i class="fas fa-camera"></i> Tomar Foto Vuelto
+              <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="handlePaymentChangePhotoUpload(event, '${prefix}')" />
+            </label>
+            <label class="btn btn--ghost btn--xs" style="cursor:pointer; border-color:rgba(56,189,248,0.5); color:#38bdf8;">
+              <i class="fas fa-images"></i> Galería / Capture
+              <input type="file" accept="image/*" style="display:none;" onchange="handlePaymentChangePhotoUpload(event, '${prefix}')" />
+            </label>
+          </div>
+          <div id="${prefix}-change-photo-preview" style="margin-top:6px;"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function togglePaymentChangeBox(prefix, amountInputId, accountSelectId, prevAbonadoOffset = 0) {
+  const chk = document.getElementById(`${prefix}-has-change-chk`);
+  const box = document.getElementById(`${prefix}-change-fields`);
+  if (!box) return;
+  const open = Boolean(chk && chk.checked);
+  box.classList.toggle("hidden", !open);
+  if (open) {
+    const recInp = document.getElementById(`${prefix}-received-amount`);
+    const amtRaw = Math.max(0, Number(document.getElementById(amountInputId)?.value) || 0);
+    const netAmt = Math.max(0, Number((amtRaw - prevAbonadoOffset).toFixed(2)));
+    if (recInp && (!recInp.value || Number(recInp.value) <= netAmt)) {
+      recInp.value = netAmt > 0 ? Math.ceil((netAmt + 0.01) / 5) * 5 : "";
+    }
+    updatePaymentChangePreview(prefix, amountInputId, accountSelectId, prevAbonadoOffset);
+  }
+}
+
+function updatePaymentChangePreview(prefix, amountInputId, accountSelectId, prevAbonadoOffset = 0) {
+  const prevEl = document.getElementById(`${prefix}-change-live-preview`);
+  if (!prevEl) return;
+  const chk = document.getElementById(`${prefix}-has-change-chk`);
+  if (chk && !chk.checked) return;
+
+  const amtRaw = Math.max(0, Number(document.getElementById(amountInputId)?.value) || 0);
+  const netAmt = Math.max(0, Number((amtRaw - prevAbonadoOffset).toFixed(2)));
+  const recAmt = Math.max(0, Number(document.getElementById(`${prefix}-received-amount`)?.value) || 0);
+  const recAcc = document.getElementById(accountSelectId)?.value || "efectivo";
+  const chgAcc = document.getElementById(`${prefix}-change-account`)?.value || recAcc;
+  const recAccName = findBankAccountById(recAcc)?.nombre || recAcc;
+  const chgAccName = findBankAccountById(chgAcc)?.nombre || chgAcc;
+  const tasaBcv = Number(db?.config?.tasaBcv) || 0;
+
+  const vuelto = Number((recAmt - netAmt).toFixed(2));
+  if (vuelto <= 0.009) {
+    prevEl.innerHTML = `<span style="color:#f59e0b; font-weight:800;"><i class="fas fa-info-circle"></i> El monto recibido ($${recAmt.toFixed(2)}) debe ser mayor al pago a registrar ($${netAmt.toFixed(2)}) para calcular vuelto.</span>`;
+    return;
+  }
+  const bsStr = tasaBcv > 0
+    ? ` (≈ Bs. ${(vuelto * tasaBcv).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+    : "";
+
+  if (chgAcc !== recAcc) {
+    prevEl.innerHTML = `
+      <div style="font-weight:900; color:#0284c7; margin-bottom:3px;">
+        <i class="fas fa-hand-holding-usd"></i> Vuelto a entregar: <span style="font-family:'JetBrains Mono',monospace;">$${vuelto.toFixed(2)}</span>${bsStr}
+      </div>
+      <div style="color:var(--text-muted);">
+        <strong>Cuadre automático entre cuentas:</strong> <strong>${escapeHtml(recAccName)}</strong> recibirá <strong>+$${recAmt.toFixed(2)}</strong> reales · <strong>${escapeHtml(chgAccName)}</strong> descontará <strong>-$${vuelto.toFixed(2)}</strong> (Transferencia automática) · <strong>Ingresos Operativos</strong> exactos en <strong>+$${netAmt.toFixed(2)}</strong>.
+      </div>
+    `;
+  } else {
+    prevEl.innerHTML = `
+      <div style="font-weight:900; color:#16a34a; margin-bottom:3px;">
+        <i class="fas fa-money-bill-wave"></i> Vuelto en la misma caja: <span style="font-family:'JetBrains Mono',monospace;">$${vuelto.toFixed(2)}</span>${bsStr}
+      </div>
+      <div style="color:var(--text-muted);">
+        <strong>${escapeHtml(recAccName)}</strong> entra <strong>+$${netAmt.toFixed(2)} netos</strong> ($${recAmt.toFixed(2)} recibido − $${vuelto.toFixed(2)} vuelto). Las fotos quedan archivadas como respaldo.
+      </div>
+    `;
+  }
+}
+
+async function handlePaymentChangePhotoUpload(event, prefix) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const localCompressed = await compressImageFastLocal(file, 720, 0.72);
+  const previewSrc =
+    typeof localCompressed === "string"
+      ? localCompressed
+      : (localCompressed && localCompressed.dataUrl) || "";
+  if (!previewSrc) return;
+  tempPaymentChangePhotos[prefix] = previewSrc;
+  const prev = document.getElementById(`${prefix}-change-photo-preview`);
+  if (prev) {
+    prev.innerHTML = `<img src="${previewSrc}" style="max-height:76px; border-radius:8px; border:1.5px solid #0284c7;" />`;
+  }
+  showToast("Foto del vuelto cargada.");
+  if (typeof uploadImageToGoogleDrive === "function") {
+    uploadImageToGoogleDrive(previewSrc, `Vuelto_${prefix}_${Date.now()}.jpg`)
+      .then((driveUrl) => {
+        if (driveUrl && tempPaymentChangePhotos[prefix] === previewSrc) {
+          tempPaymentChangePhotos[prefix] = driveUrl;
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+function applyPaymentChangeAccounting({ prefix, order, netAmount, receiveAccount, nowTs, mainMov }) {
+  const chk = document.getElementById(`${prefix}-has-change-chk`);
+  const changePhoto = tempPaymentChangePhotos[prefix] || "";
+  tempPaymentChangePhotos[prefix] = "";
+  if (!chk || !chk.checked) return null;
+
+  const receivedAmt = Math.max(0, Number(document.getElementById(`${prefix}-received-amount`)?.value) || 0);
+  const vueltoAmt = Number((receivedAmt - netAmount).toFixed(2));
+  if (vueltoAmt <= 0.009) return null;
+
+  const changeAccount = document.getElementById(`${prefix}-change-account`)?.value || receiveAccount;
+  const recAccName = findBankAccountById(receiveAccount)?.nombre || receiveAccount;
+  const chgAccName = findBankAccountById(changeAccount)?.nombre || changeAccount;
+  const todayIso = getLocalIsoDate();
+  const actorName = currentUser ? currentUser.nombre : "Sistema";
+
+  if (changeAccount !== receiveAccount) {
+    // Cuadre automático entre cuentas: par balanceado de Transferencia (es_transferencia: true)
+    // Efecto exacto: receiveAccount = +netAmount + vueltoAmt = +receivedAmt; changeAccount = -vueltoAmt; Ingresos Operativos = +netAmount!
+    const pairId = "TRF-VUELTO-" + nowTs;
+    const trfConcept = `Transferencia: ${chgAccName} → ${recAccName} · Vuelto #${order.codigo_troquel} ($${vueltoAmt.toFixed(2)} de $${receivedAmt.toFixed(2)})`;
+    if (mainMov) {
+      mainMov.concepto = `${mainMov.concepto} · Recibido $${receivedAmt.toFixed(2)} (Vuelto $${vueltoAmt.toFixed(2)} desde ${chgAccName})`;
+    }
+    db.finanzas_movimientos.unshift(
+      {
+        id_mov: "MOV-" + (nowTs + 1) + "-VO",
+        fecha: todayIso,
+        tipo: "egreso",
+        categoria: "Transferencia entre Cuentas",
+        concepto: trfConcept,
+        monto: vueltoAmt,
+        metodo: suggestMethodForBankAccount(changeAccount),
+        cuenta: changeAccount,
+        comprobante_foto: changePhoto,
+        orden_id: order.id_orden,
+        codigo_troquel: order.codigo_troquel,
+        es_transferencia: true,
+        transfer_pair_id: pairId,
+        registrado_por: actorName
+      },
+      {
+        id_mov: "MOV-" + (nowTs + 2) + "-VI",
+        fecha: todayIso,
+        tipo: "ingreso",
+        categoria: "Transferencia entre Cuentas",
+        concepto: trfConcept,
+        monto: vueltoAmt,
+        metodo: suggestMethodForBankAccount(receiveAccount),
+        cuenta: receiveAccount,
+        comprobante_foto: changePhoto,
+        orden_id: order.id_orden,
+        codigo_troquel: order.codigo_troquel,
+        es_transferencia: true,
+        transfer_pair_id: pairId,
+        registrado_por: actorName
+      }
+    );
+    return {
+      vueltoAmt,
+      receivedAmt,
+      changeAccount,
+      crossAccount: true,
+      note: `Recibido $${receivedAmt.toFixed(2)} en ${recAccName} · Vuelto $${vueltoAmt.toFixed(2)} desde ${chgAccName} (transferencia de cuadre automática).`
+    };
+  }
+
+  // Misma cuenta (ej. recibió $20 efectivo y dio $5 efectivo de la misma caja): ingreso neto sigue siendo $15 exactos
+  if (mainMov) {
+    mainMov.concepto = `${mainMov.concepto} · Recibido $${receivedAmt.toFixed(2)}, Vuelto $${vueltoAmt.toFixed(2)} en ${chgAccName}`;
+    if (changePhoto) {
+      const imgs = [mainMov.comprobante_foto, changePhoto].filter(Boolean);
+      mainMov.comprobante_fotos = imgs;
+      if (!mainMov.comprobante_foto) mainMov.comprobante_foto = changePhoto;
+    }
+  }
+  return {
+    vueltoAmt,
+    receivedAmt,
+    changeAccount,
+    crossAccount: false,
+    note: `Recibido $${receivedAmt.toFixed(2)}, vuelto $${vueltoAmt.toFixed(2)} entregado en ${chgAccName} (neto $${netAmount.toFixed(2)}).`
+  };
+}
 
 async function handleArCollectPhotoUpload(event) {
   const file = event.target.files && event.target.files[0];
@@ -17418,6 +17864,7 @@ function openCollectReceivableModal(orderId) {
   const order = db.ordenes.find((o) => o.id_orden === orderId);
   if (!order) return;
   tempArCollectPhoto = "";
+  tempPaymentChangePhotos.ar = "";
   const tasaBcv = Number(db.config?.tasaBcv) || 45.80;
   const saldoActual = Math.max(0, Number(order.saldo_pendiente) || 0);
 
@@ -17450,15 +17897,20 @@ function openCollectReceivableModal(orderId) {
 
       <div class="form-grid-2">
         <div class="form-field">
-          <label>Monto a Abonar / Cobrar ($) *</label>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+            <label style="margin-bottom:0;">Monto a Abonar / Cobrar ($) *</label>
+            <button type="button" class="btn btn--ghost bs-calc-toggle-btn" onclick="toggleBsUsdCalc('arcol')" title="Convertir bolívares a dólares">
+              <i class="fas fa-calculator"></i> Calc. Bs → $
+            </button>
+          </div>
           <input
             type="number"
             id="ar-collect-amount"
             value="${saldoActual}"
             min="0.01"
             max="${saldoActual}"
-            step="0.5"
-            oninput="updateArCollectPreview(${saldoActual}, ${tasaBcv})"
+            step="0.01"
+            oninput="updateArCollectPreview(${saldoActual}, ${tasaBcv}); updatePaymentChangePreview('ar', 'ar-collect-amount', 'ar-collect-account', 0);"
             style="font-weight:900; font-size:17px; color:#16a34a;"
           />
           <div id="ar-collect-live-preview" style="font-size:11px; color:#22c55e; font-weight:800; margin-top:3px;">
@@ -17467,11 +17919,15 @@ function openCollectReceivableModal(orderId) {
         </div>
         <div class="form-field">
           <label>Cuenta / Caja Destino *</label>
-          <select id="ar-collect-account" style="font-weight:800;">
+          <select id="ar-collect-account" style="font-weight:800;" onchange="updatePaymentChangePreview('ar', 'ar-collect-amount', 'ar-collect-account', 0)">
             ${bankOptions}
           </select>
         </div>
       </div>
+
+      ${renderBsToUsdCalculatorWidget("arcol", "ar-collect-amount", "")}
+
+      ${buildPaymentChangeBoxHtml("ar", "ar-collect-amount", "ar-collect-account", saldoActual, 0)}
 
       <div style="margin-top:12px; background:var(--bg-card); padding:12px; border-radius:12px; border:1.5px dashed var(--border-color);">
         <div style="font-size:12.5px; font-weight:900; margin-bottom:6px;">
@@ -17565,7 +18021,7 @@ function confirmCollectReceivable(orderId) {
   }
 
   const nowStr = getLocalIsoDateTime();
-  db.finanzas_movimientos.unshift({
+  const mainMov = {
     id_mov: "MOV-" + nowTs,
     fecha: getLocalIsoDate(),
     tipo: "ingreso",
@@ -17578,6 +18034,16 @@ function confirmCollectReceivable(orderId) {
     orden_id: order.id_orden,
     codigo_troquel: order.codigo_troquel,
     registrado_por: currentUser ? currentUser.nombre : "Sistema"
+  };
+  db.finanzas_movimientos.unshift(mainMov);
+
+  const changeResult = applyPaymentChangeAccounting({
+    prefix: "ar",
+    order,
+    netAmount: amount,
+    receiveAccount: cuenta,
+    nowTs,
+    mainMov
   });
 
   const bObj = findBankAccountById(cuenta);
@@ -17591,7 +18057,7 @@ function confirmCollectReceivable(orderId) {
     autor_nombre: currentUser.nombre,
     autor_rol: currentUser.rol_label,
     tipo_evento: "cobro_resto",
-    mensaje: `Pago recibido por $${amount.toFixed(2)} (${nombreCuenta}). Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
+    mensaje: `Pago recibido por $${amount.toFixed(2)} (${nombreCuenta}).${changeResult && changeResult.note ? " " + changeResult.note : ""} Nuevo Resto Pendiente: $${order.saldo_pendiente.toFixed(2)}.`,
     foto_adjunta_url: tempArCollectPhoto || "",
     fecha_hora: nowStr
   });
@@ -17600,7 +18066,11 @@ function confirmCollectReceivable(orderId) {
   saveDatabase(`Cobro de resto orden #${order.codigo_troquel}`);
   closeModal();
   renderApp();
-  showToast(`Pago de $${amount.toFixed(2)} registrado en ${nombreCuenta}. Resto actual: $${order.saldo_pendiente.toFixed(2)}.`);
+  showToast(
+    changeResult && changeResult.crossAccount
+      ? `Pago $${amount.toFixed(2)} registrado + cuadre automático de vuelto ($${changeResult.vueltoAmt.toFixed(2)}). Resto: $${order.saldo_pendiente.toFixed(2)}.`
+      : `Pago de $${amount.toFixed(2)} registrado en ${nombreCuenta}. Resto actual: $${order.saldo_pendiente.toFixed(2)}.`
+  );
 }
 
 function sendClientStatementWhatsApp(clientId) {
@@ -17672,7 +18142,8 @@ function getWorkerGroupSortTimestamp(group) {
 }
 
 function formatLiveWorkerTroquelTimer(orderId, workerId) {
-  const subs = (db.subtareas || []).filter((s) => s.orden_id === orderId && s.tecnico_id === workerId);
+  const scopeIds = getWorkerPanelScopeIds(workerId);
+  const subs = (db.subtareas || []).filter((s) => s.orden_id === orderId && scopeIds.includes(s.tecnico_id));
   let totalSec = 0;
   let activeElapsedAdded = false;
   subs.forEach((s) => {
@@ -17701,8 +18172,9 @@ function tickLiveSubtaskTimers() {
   troquelBadges.forEach((el) => {
     const ordId = el.getAttribute("data-live-troquel-order");
     const wId = el.getAttribute("data-live-troquel-worker");
+    const wScope = getWorkerPanelScopeIds(wId);
     const hasActive = (db.subtareas || []).some(
-      (s) => s.orden_id === ordId && s.tecnico_id === wId && s.estado_subtarea === "empezado"
+      (s) => s.orden_id === ordId && wScope.includes(s.tecnico_id) && s.estado_subtarea === "empezado"
     );
     if (hasActive) {
       el.innerHTML = `<i class="fas fa-stopwatch"></i> ${formatLiveWorkerTroquelTimer(ordId, wId)}`;
@@ -17712,16 +18184,23 @@ function tickLiveSubtaskTimers() {
 
 function renderWorkerPanelScreen() {
   const technicians = db.usuarios.filter((u) => u.rol === "tecnico");
+  const isEnriqueView = isEnriqueAdminUser(currentUser);
+  const enriqueOwnIds = isEnriqueView ? getWorkerPanelScopeIds(currentUser.id_usuario) : [];
+  const enriqueDefaultWorkerId = isEnriqueView
+    ? (enriqueOwnIds.find((id) => id !== currentUser.id_usuario) || currentUser.id_usuario)
+    : null;
+
   const activeWorkerId =
     currentUser.rol === "tecnico"
       ? currentUser.id_usuario
-      : selectedWorkerFilterId || (technicians[0] && technicians[0].id_usuario);
+      : selectedWorkerFilterId || enriqueDefaultWorkerId || (technicians[0] && technicians[0].id_usuario);
 
+  const activeScopeIds = getWorkerPanelScopeIds(activeWorkerId);
   const workerObj = db.usuarios.find((u) => u.id_usuario === activeWorkerId) || currentUser;
 
   // RESTRICCIÓN DE VISIBILIDAD: Solo órdenes que NO estén en 1 ni en 2
   const visibleSubtasks = db.subtareas.filter((s) => {
-    if (s.tecnico_id !== activeWorkerId) return false;
+    if (!activeScopeIds.includes(s.tecnico_id)) return false;
     const parentOrder = db.ordenes.find((o) => o.id_orden === s.orden_id);
     if (!parentOrder) return false;
     if (parentOrder.estado_actual === "diagnostico_presupuesto" || parentOrder.estado_actual === "esperando_aprobacion_abono" || parentOrder.estado_actual === "recepcion" || parentOrder.estado_actual === "diagnostico") {
@@ -17731,7 +18210,7 @@ function renderWorkerPanelScreen() {
   });
 
   const upcomingSubtasks = db.subtareas.filter((s) => {
-    if (s.tecnico_id !== activeWorkerId) return false;
+    if (!activeScopeIds.includes(s.tecnico_id)) return false;
     const parentOrder = db.ordenes.find((o) => o.id_orden === s.orden_id);
     if (!parentOrder) return false;
     return parentOrder.estado_actual === "diagnostico_presupuesto" || parentOrder.estado_actual === "esperando_aprobacion_abono" || parentOrder.estado_actual === "recepcion" || parentOrder.estado_actual === "diagnostico";
@@ -17746,7 +18225,7 @@ function renderWorkerPanelScreen() {
     .reduce((acc, s) => acc + (Number(s.comision_base_tecnico) || 0), 0);
 
   const workerSelectorBar =
-    currentUser.rol !== "tecnico"
+    currentUser.rol !== "tecnico" && !isEnriqueView
       ? `
       <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:14px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
         <span style="font-size:13px; font-weight:800;">
@@ -17832,7 +18311,7 @@ function renderWorkerPanelScreen() {
       .filter((s) => s.estado_subtarea === "terminado")
       .reduce((sum, s) => sum + (Number(s.comision_base_tecnico) || 0), 0);
 
-    const otherTasks = db.subtareas.filter((s) => s.orden_id === ord.id_orden && s.tecnico_id !== activeWorkerId);
+    const otherTasks = db.subtareas.filter((s) => s.orden_id === ord.id_orden && !activeScopeIds.includes(s.tecnico_id));
     const progressPercent = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
     const pendingSubtasks = mySubtasks.filter((s) => s.estado_subtarea !== "terminado");
@@ -18546,7 +19025,8 @@ function confirmSubtaskCompletion(subtaskId) {
     );
 
     const allOrderSubs = db.subtareas.filter((s) => s.orden_id === ord.id_orden);
-    const allDone = allOrderSubs.every((s) => s.estado_subtarea === "terminado");
+    const allDone = canOrderAutoAdvanceToQuality(ord, allOrderSubs);
+    const remainingOpenOrUnassigned = allOrderSubs.filter((s) => !s.tecnico_id || s.estado_subtarea !== "terminado").length;
     ord.tiempo_neto_minutos = allOrderSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
     ord.updated_at = nowTs;
 
@@ -18570,8 +19050,10 @@ function confirmSubtaskCompletion(subtaskId) {
       mensaje: `Tarea "${sub.descripcion_servicio}" FINALIZADA con fotografía obligatoria (Tiempo invertido: ${formatMinutes(sub.minutos_acumulados)}). ${
         allDone && !alreadyBeyondQc
           ? "NOTIFICACIÓN AL SUPERVISOR DE PLANTA: Todas las tareas de la pieza han sido completadas. La orden pasa a 5. Control de Calidad para revisión."
-          : ""
-      }`,
+          : (!alreadyBeyondQc && remainingOpenOrUnassigned > 0
+            ? `Comisión acreditada. La orden permanece anclada en 4. Servicio porque faltan ${remainingOpenOrUnassigned} trabajo(s) por asignar o terminar.`
+            : "")
+      }`.trim(),
       foto_adjunta_url: sub.foto_terminado_url,
       fecha_hora: getLocalIsoDateTime()
     });
@@ -18581,7 +19063,7 @@ function confirmSubtaskCompletion(subtaskId) {
   flushCloudPush(true, { reason: `Tarea finalizada ${sub.id_subtarea}`, actorRole: currentUser ? currentUser.rol : null });
   closeModal();
   renderApp();
-  showToast(`¡Excelente! Tarea finalizada con foto, enviada a Control de Calidad y comisión de $${Number(sub.comision_base_tecnico).toFixed(2)} sumada.`);
+  showToast(`¡Excelente! Tarea finalizada con foto y comisión de $${Number(sub.comision_base_tecnico).toFixed(2)} acreditada.`);
 }
 
 /* ============================================================================
@@ -18596,13 +19078,14 @@ function startWorkerTroquelWork(orderId, workerId) {
     return;
   }
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
+  const scopeIds = getWorkerPanelScopeIds(targetWorkerId);
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
   if (ord && ["entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual)) {
     showToast(`El Troquel #${ord.codigo_troquel} ya está en ${formatStageName(ord.estado_actual)} y no requiere reinicio.`, "warning");
     return;
   }
   const pendingSubs = (db.subtareas || []).filter(
-    (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
+    (s) => s.orden_id === orderId && scopeIds.includes(s.tecnico_id) && s.estado_subtarea !== "terminado"
   );
   if (!pendingSubs.length) return;
 
@@ -18639,8 +19122,9 @@ function startWorkerTroquelWork(orderId, workerId) {
 
 function openPauseWorkerTroquelModal(orderId, workerId) {
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
+  const scopeIds = getWorkerPanelScopeIds(targetWorkerId);
   const pendingSubs = (db.subtareas || []).filter(
-    (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
+    (s) => s.orden_id === orderId && scopeIds.includes(s.tecnico_id) && s.estado_subtarea !== "terminado"
   );
   if (!pendingSubs.length) return;
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
@@ -18679,8 +19163,9 @@ function openPauseWorkerTroquelModal(orderId, workerId) {
 
 function confirmPauseWorkerTroquelWithNote(orderId, workerId) {
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
+  const scopeIds = getWorkerPanelScopeIds(targetWorkerId);
   const pendingSubs = (db.subtareas || []).filter(
-    (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
+    (s) => s.orden_id === orderId && scopeIds.includes(s.tecnico_id) && s.estado_subtarea !== "terminado"
   );
   if (!pendingSubs.length) return;
   const note = (document.getElementById("pause-troquel-reason-input")?.value || "").trim();
@@ -18727,8 +19212,9 @@ function confirmPauseWorkerTroquelWithNote(orderId, workerId) {
 
 function openCompleteWorkerTroquelModal(orderId, workerId) {
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
+  const scopeIds = getWorkerPanelScopeIds(targetWorkerId);
   const pendingSubs = (db.subtareas || []).filter(
-    (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
+    (s) => s.orden_id === orderId && scopeIds.includes(s.tecnico_id) && s.estado_subtarea !== "terminado"
   );
   if (!pendingSubs.length) return;
   const ord = db.ordenes.find((o) => o.id_orden === orderId);
@@ -18828,8 +19314,9 @@ function openCompleteWorkerTroquelModal(orderId, workerId) {
 function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
   if (isDoubleActionGuard(`finish_troquel_${orderId}_${workerId || "me"}`, 2500)) return;
   const targetWorkerId = workerId || (currentUser ? currentUser.id_usuario : "");
+  const scopeIds = getWorkerPanelScopeIds(targetWorkerId);
   const pendingSubs = (db.subtareas || []).filter(
-    (s) => s.orden_id === orderId && s.tecnico_id === targetWorkerId && s.estado_subtarea !== "terminado"
+    (s) => s.orden_id === orderId && scopeIds.includes(s.tecnico_id) && s.estado_subtarea !== "terminado"
   );
   if (!pendingSubs.length) return;
 
@@ -18872,11 +19359,13 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
     );
 
     const allOrderSubs = db.subtareas.filter((s) => s.orden_id === ord.id_orden);
-    const allDone = allOrderSubs.every((s) => s.estado_subtarea === "terminado");
+    const allDone = canOrderAutoAdvanceToQuality(ord, allOrderSubs);
+    const remainingOpenOrUnassigned = allOrderSubs.filter((s) => !s.tecnico_id || s.estado_subtarea !== "terminado").length;
     ord.tiempo_neto_minutos = allOrderSubs.reduce((acc, s) => acc + (Number(s.minutos_acumulados) || 0), 0);
     ord.updated_at = nowTs;
 
-    // GUARDIA MONOTÓNICA (v46): Jamás retroceder una orden que Gerencia ya aprobó a 6. En Entrega o Archivada
+    // GUARDIA MONOTÓNICA (v46) + ANCLAJE PARCIAL (v50):
+    // Jamás retroceder 6. Entrega/Archivada y jamás saltar a Calidad si quedan tareas sin asignar o pendientes
     const alreadyBeyondQc = ["calidad", "control_calidad", "entrega", "entregado", "archivado", "anulado"].includes(ord.estado_actual);
     if (allDone && !alreadyBeyondQc) {
       ord.subestado_ejecucion = "terminado";
@@ -18899,7 +19388,9 @@ function confirmCompleteWorkerTroquelWithPhoto(orderId, workerId) {
       mensaje: `${prefixLabel} (${pendingSubs.length} tarea/s: ${summaryLabel}) con nueva foto general obligatoria (Tiempo total: ${formatMinutes(totalBatchMinutes)}).${noteSuffix} ${
         allDone && !alreadyBeyondQc
           ? "NOTIFICACIÓN AL SUPERVISOR: Todas las tareas de la pieza están listas. La orden pasa a 5. Control de Calidad."
-          : ""
+          : (!alreadyBeyondQc && remainingOpenOrUnassigned > 0
+            ? `Comisión acreditada. La orden permanece anclada en 4. Servicio porque faltan ${remainingOpenOrUnassigned} trabajo(s) por asignar o terminar.`
+            : "")
       }`.trim(),
       foto_adjunta_url: tempFinishSubtaskPhoto,
       fecha_hora: getLocalIsoDateTime()
@@ -25881,6 +26372,7 @@ function openAddCatalogServiceModal() {
             <option value="Lavado y Químico">Lavado y Químico</option>
             <option value="Calibración y Asientos">Calibración y Asientos</option>
             <option value="Soldadura Especial">Soldadura Especial</option>
+            <option value="Repuestos">Repuestos</option>
             <option value="Rectificación General">Rectificación General</option>
           </select>
         </div>
@@ -25960,6 +26452,7 @@ function openEditCatalogServiceModal(catId) {
             <option value="Lavado y Químico" ${s.categoria === "Lavado y Químico" ? "selected" : ""}>Lavado y Químico</option>
             <option value="Calibración y Asientos" ${s.categoria === "Calibración y Asientos" ? "selected" : ""}>Calibración y Asientos</option>
             <option value="Soldadura Especial" ${s.categoria === "Soldadura Especial" ? "selected" : ""}>Soldadura Especial</option>
+            <option value="Repuestos" ${s.categoria === "Repuestos" ? "selected" : ""}>Repuestos</option>
             <option value="Rectificación General" ${s.categoria === "Rectificación General" ? "selected" : ""}>Rectificación General</option>
           </select>
         </div>
@@ -26060,6 +26553,7 @@ function openAddDestajoWorkModal() {
             <option value="Lavado y Químico">Lavado y Químico</option>
             <option value="Calibración y Asientos">Calibración y Asientos</option>
             <option value="Soldadura Especial">Soldadura Especial</option>
+            <option value="Repuestos">Repuestos</option>
             <option value="Rectificación General">Rectificación General</option>
           </select>
         </div>
@@ -26149,6 +26643,7 @@ function openEditDestajoWorkModal(destajoId) {
             <option value="Lavado y Químico" ${w.categoria === "Lavado y Químico" ? "selected" : ""}>Lavado y Químico</option>
             <option value="Calibración y Asientos" ${w.categoria === "Calibración y Asientos" ? "selected" : ""}>Calibración y Asientos</option>
             <option value="Soldadura Especial" ${w.categoria === "Soldadura Especial" ? "selected" : ""}>Soldadura Especial</option>
+            <option value="Repuestos" ${w.categoria === "Repuestos" ? "selected" : ""}>Repuestos</option>
             <option value="Rectificación General" ${w.categoria === "Rectificación General" ? "selected" : ""}>Rectificación General</option>
           </select>
         </div>
@@ -28524,6 +29019,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (user && user.activo !== false && !isExternalUser(user)) {
       currentUser = user;
       if (isJavierRestrictedUser(user)) currentTab = "inventario";
+      else if (isEnriqueAdminUser(user)) currentTab = "worker_panel";
       else if (user.rol === "tecnico") currentTab = "worker_panel";
       document.getElementById("login-view")?.classList.add("hidden");
       document.getElementById("workspace")?.classList.remove("hidden");
